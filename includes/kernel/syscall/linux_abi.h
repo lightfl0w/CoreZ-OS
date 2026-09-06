@@ -91,12 +91,14 @@
 #define SYS_LINUX_set_thread_area 234
 #define SYS_LINUX_openat 257
 #define SYS_LINUX_mkdirat 258
+#define SYS_LINUX_symlink 88
 #define SYS_LINUX_mknod 133
 #define SYS_LINUX_mknodat 259
 #define SYS_LINUX_newfstatat 262
 #define SYS_LINUX_unlinkat 263
 #define SYS_LINUX_renameat 264
 #define SYS_LINUX_readlinkat 267
+#define SYS_LINUX_symlinkat 266
 #define SYS_LINUX_faccessat 269
 #define SYS_LINUX_dup3 292
 #define SYS_LINUX_pipe2 293

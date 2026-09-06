@@ -12,7 +12,8 @@
 
 #define FS_MAGIC 0x19590318
 
-enum file_types { FT_UNKNOWN, FT_REGULAR, FT_DIRECTORY, FT_CHARDEVICE };
+enum file_types { FT_UNKNOWN, FT_REGULAR, FT_DIRECTORY, FT_CHARDEVICE,
+                  FT_SYMLINK };
 
 enum oflags { O_RDONLY, O_WRONLY, O_RDWR, O_CREAT = 4 };
 
@@ -58,6 +59,7 @@ char *sys_getcwd(char *buf, uint32_t size);
 int32_t sys_chdir(const char *path);
 int32_t sys_stat(const char *path, struct stat *buf);
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev);
+int32_t sys_symlink(const char *target, const char *linkpath);
 int fs_is_chardev(const struct inode *ino);
 uint32_t fs_chardev_dev(const struct inode *ino);
 

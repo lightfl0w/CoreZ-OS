@@ -107,8 +107,9 @@ static int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
         d->d_ino = de.i_no;
         d->d_off = (int64_t)pos;
         d->d_reclen = reclen;
-        d->d_type = de.f_type == FT_DIRECTORY ? LINUX_DT_DIR
+        d->d_type = de.f_type == FT_DIRECTORY    ? LINUX_DT_DIR
                     : de.f_type == FT_CHARDEVICE ? LINUX_DT_CHR
+                    : de.f_type == FT_SYMLINK    ? LINUX_DT_LNK
                                                  : LINUX_DT_REG;
         memcpy(d->d_name, de.filename, nl + 1);
         written += reclen;
@@ -271,6 +272,8 @@ static uint32_t compat_mode_native(uint32_t filetype) {
         return LINUX_S_IFDIR | 0755u;
     if (filetype == FT_CHARDEVICE)
         return LINUX_S_IFCHR | 0666u;
+    if (filetype == FT_SYMLINK)
+        return LINUX_S_IFLNK | 0777u;
     return LINUX_S_IFREG | 0644u;
 }
 
@@ -659,6 +662,25 @@ static int64_t lc_mknod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
     return sys_mknod(kpath, (uint32_t)b, (uint32_t)c);
+}
+
+static int64_t lc_symlink(struct Registers *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    char ktarget[MAX_PATH_LEN];
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, ktarget, a) || !copy_user_str(r, kpath, b))
+        return -LINUX_EFAULT;
+    return sys_symlink(ktarget, kpath);
+}
+
+static int64_t lc_symlinkat(struct Registers *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)a;
+    char ktarget[MAX_PATH_LEN];
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, ktarget, b) || !copy_user_str(r, kpath, c))
+        return -LINUX_EFAULT;
+    return sys_symlink(ktarget, kpath);
 }
 
 static int64_t lc_mknodat(struct Registers *r, uint64_t a, uint64_t b,
@@ -1117,6 +1139,8 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_unlink] = lc_unlink,
     [SYS_LINUX_rename] = lc_rename,
     [SYS_LINUX_chmod] = lc_chmod,
+    [SYS_LINUX_symlink] = lc_symlink,
+    [SYS_LINUX_symlinkat] = lc_symlinkat,
     [SYS_LINUX_mknod] = lc_mknod,
     [SYS_LINUX_mknodat] = lc_mknodat,
     [SYS_LINUX_access] = lc_access,

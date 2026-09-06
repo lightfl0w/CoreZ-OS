@@ -59,25 +59,39 @@ def make_mbr(boot_bin):
     return bytes(mbr)
 
 
-def build_dirent_block(entries, block=BLOCK):
-    out = bytearray(block)
-    pos = 0
+def build_dirent_blocks(entries, block=BLOCK):
+    out = bytearray()
     n = len(entries)
     for i, (ino, ftype, name) in enumerate(entries):
         nl = len(name)
-        base = 8 + nl
+        reclen = (8 + nl + 3) & ~3
+        if len(out) % block + reclen > block:
+            out += bytearray(block - len(out) % block)
         if i == n - 1:
-            reclen = block - pos
-        else:
-            reclen = (base + 3) & ~3
-        struct.pack_into("<IHBB", out, pos, ino, reclen, nl, ftype)
-        out[pos + 8:pos + 8 + nl] = name.encode()
-        pos += reclen
+            reclen = block - len(out) % block
+        out += struct.pack("<IHBB", ino, reclen, nl, ftype)
+        out += name.encode()
+        out += bytearray((-len(out)) % 4)
+    out += bytearray(block - len(out) % block)
     return bytes(out)
 
 
 DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
              ("console", 5, 1)]
+
+
+SYMLINKS = [("catlink", "/cat.elf"),
+            ("longlink", "/cat.elf" + "/sub/dir/padding/xyz" * 3)]
+
+
+def put_symlink(table, ino, target, block):
+    off = (ino - 1) * INODE_SIZE
+    struct.pack_into("<H", table, off + 0, 0xA1FF)
+    struct.pack_into("<I", table, off + 4, len(target))
+    if len(target) < 60:
+        table[off + 40:off + 40 + len(target)] = target.encode()
+    else:
+        struct.pack_into("<I", table, off + 40, block)
 
 
 def put_inode(table, ino, payload_len, blocks, is_dir, rdev=0):
@@ -112,13 +126,39 @@ def build(build_dir, out, smoke=False):
         pre["autoexec"] = b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
         names.append("autoexec")
 
+    ino_map = {}
     next_ino = 3
     dir_entries = [(2, 2, "."), (2, 2, "..")]
-    var_blocks = []          
-    var_indirect = []        
+    for name in names:
+        ino_map[name] = next_ino
+        dir_entries.append((next_ino, 1, name))
+        next_ino += 1
+
+    link_ino = next_ino
+    next_ino += len(SYMLINKS)
+    link_blk_list = []
+    for i, (_, tgt) in enumerate(SYMLINKS):
+        dir_entries.append((link_ino + i, 7, SYMLINKS[i][0]))
+        link_blk_list.append(0)
+
+    dev_ino = next_ino
+    next_ino += 1 + len(DEV_NODES)
+    dev_entries = [(dev_ino, 2, "."), (dev_ino, 2, "..")]
+    for i, (name, maj, mnr) in enumerate(DEV_NODES):
+        dev_entries.append((dev_ino + 1 + i, 3, name))
+    dir_entries.append((dev_ino, 2, "dev"))
+
+    used_inodes = next_ino - 1
+
     root_block = DATA_START
-    cur_block = DATA_START + 1
-    file_ptrs = {}          
+    root_dir = build_dirent_blocks(dir_entries)
+    n_root_blks = len(root_dir) // BLOCK
+    dev_dir = build_dirent_blocks(dev_entries)
+
+    cur_block = DATA_START + n_root_blks
+    file_ptrs = {}
+    var_blocks = []
+    var_indirect = []
     for name in names:
         payload = pre[name]
         nblk = (len(payload) + BLOCK - 1) // BLOCK
@@ -137,28 +177,20 @@ def build(build_dir, out, smoke=False):
             var_indirect.append((indirect_blk, blocks[12:]))
         file_ptrs[name] = ptrs
         var_blocks.append((blocks, payload))
-        dir_entries.append((next_ino, 1, name))
-        next_ino += 1
 
-    dev_ino = next_ino
-    next_ino += 1 + len(DEV_NODES)
+    for i, (_, tgt) in enumerate(SYMLINKS):
+        if len(tgt) >= 60:
+            link_blk_list[i] = cur_block
+            cur_block += 1
+
     dev_dir_block = cur_block
     cur_block += 1
-    dev_entries = [(dev_ino, 2, "."), (dev_ino, 2, "..")]
-    for i, (name, maj, mnr) in enumerate(DEV_NODES):
-        dev_entries.append((dev_ino + 1 + i, 3, name))
-    dir_entries.append((dev_ino, 2, "dev"))
-    root_dir = build_dirent_block(dir_entries)
-    used_inodes = next_ino - 1
-
-    ino_map = {}
-    di = 3
-    for name in names:
-        ino_map[name] = di
-        di += 1
 
     itable = bytearray(ITABLE_BLOCKS * BLOCK)
-    put_inode(itable, 2, len(root_dir), [root_block], True)
+    put_inode(itable, 2, len(root_dir),
+              [root_block + i for i in range(n_root_blks)], True)
+    for i, (_, tgt) in enumerate(SYMLINKS):
+        put_symlink(itable, link_ino + i, tgt, link_blk_list[i])
     put_inode(itable, dev_ino, BLOCK, [dev_dir_block], True)
     for i, (_, maj, mnr) in enumerate(DEV_NODES):
         put_inode(itable, dev_ino + 1 + i, 0, [], False,
@@ -168,13 +200,14 @@ def build(build_dir, out, smoke=False):
                   file_ptrs[name], False)
 
     used_blocks = set(range(0, DATA_START))
-    used_blocks.add(root_block)
-    used_blocks.add(dev_dir_block)
+    for i in range(n_root_blks):
+        used_blocks.add(root_block + i)
     for blocks, _ in var_blocks:
-        for b in blocks:
-            used_blocks.add(b)
+        used_blocks.update(blocks)
     for iblk, _ in var_indirect:
         used_blocks.add(iblk)
+    used_blocks.update(b for b in link_blk_list if b)
+    used_blocks.add(dev_dir_block)
     total_blocks = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
     free_blocks = total_blocks - len(used_blocks)
 
@@ -226,7 +259,11 @@ def build(build_dir, out, smoke=False):
         f.seek(base * SECTOR + root_block * BLOCK)
         f.write(root_dir)
         f.seek(base * SECTOR + dev_dir_block * BLOCK)
-        f.write(build_dirent_block(dev_entries))
+        f.write(dev_dir)
+        for i, (_, tgt) in enumerate(SYMLINKS):
+            if link_blk_list[i]:
+                f.seek(base * SECTOR + link_blk_list[i] * BLOCK)
+                f.write(tgt.encode())
         for iblk, data in var_indirect:
             idx = bytearray(BLOCK)
             for j, b in enumerate(data):

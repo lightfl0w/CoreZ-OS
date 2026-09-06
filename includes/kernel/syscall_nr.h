@@ -78,7 +78,8 @@ enum syscall_nr {
     SYS_SETSOCKOPT,
     SYS_SOCK_FCNTL,
     SYS_SELECT,
-    SYS_MKNOD
+    SYS_MKNOD,
+    SYS_SYMLINK
 };
 
 #endif

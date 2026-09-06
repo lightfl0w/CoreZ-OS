@@ -80,6 +80,26 @@ int main(int argc, char **argv) {
     int wr = waitpid(pid, &ws, 0);
     printf("[abi] waitpid r=%d raw=0x%x status=%d\n", wr, (unsigned)ws,
            WEXITSTATUS(ws));
+    int sl = symlink("/cat.elf", "/sltest");
+    char lb[128];
+    ssize_t lr = readlink("/sltest", lb, sizeof(lb) - 1);
+    if (lr >= 0) lb[lr] = 0;
+    printf("[abi] symlink r=%d readlink=\'%s\' n=%d\n", sl,
+           lr >= 0 ? lb : "?", (int)lr);
+    int lf = sl == 0 ? open("/sltest", O_RDONLY) : -1;
+    char mb[4] = {0};
+    int mr = lf >= 0 ? (int)read(lf, mb, 4) : -1;
+    printf("[abi] link-open r=%d elf=%d\n", mr, mb[0] == 0x7f && mb[1] == 'E');
+    if (lf >= 0) close(lf);
+    int sl2 = symlink("/cat.elf" "/sub/dir/padding/xyz/sub/dir/padding/xyz/"
+                      "sub/dir/padding/xyz",
+                      "/slslow");
+    char lb2[128];
+    ssize_t lr2 = readlink("/slslow", lb2, sizeof(lb2) - 1);
+    printf("[abi] slow-symlink r=%d readlink n=%d fast=\'%.*s\'\n", sl2,
+           (int)lr2, lr2 > 8 ? 8 : (int)lr2, lb2);
+    printf("[abi] link-unlink r=%d errno=%d\n", unlink("/sltest"), errno);
+    printf("[abi] img-symlink fd=%d\n", open("/catlink", O_RDONLY));
     int mk = mknod("/dev/apitest", S_IFCHR | 0666, makedev(1, 5));
     printf("[abi] mknod r=%d errno=%d\n", mk, errno);
     int zf = mk == 0 ? open("/dev/apitest", O_RDONLY) : -1;

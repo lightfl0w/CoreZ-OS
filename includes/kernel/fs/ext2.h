@@ -10,6 +10,7 @@ struct partition;
 #define EXT2_S_IFREG 0x8000u
 #define EXT2_S_IFDIR 0x4000u
 #define EXT2_DT_DIR 2u
+#define EXT2_DT_LNK 7u
 #define EXT2_INODE_SIZE 128u
 
 struct EXT2_SURPER {
@@ -42,6 +43,8 @@ struct EXT2_DIRENT {
 int ext2_init(void);
 struct partition *ext2_partition(void);
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir);
+int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow);
+int ext2_read_link_target(uint32_t ino, char *buf, uint32_t cap);
 int ext2_read_inode(uint32_t ino, struct inode *out);
 int ext2_read_from_inode(const struct inode *ino, uint32_t off, void *buf,
                          uint32_t count);
@@ -56,6 +59,8 @@ int ext2_write_to_inode(struct inode *ino, uint32_t off, const void *buf,
 void ext2_truncate_inode(struct inode *ino);
 int ext2_add_entry(struct inode *dino, uint32_t ino, const char *name,
                    int is_dir);
+int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
+                       uint8_t dtype);
 int ext2_remove_entry(struct inode *dino, const char *name);
 
 #endif
