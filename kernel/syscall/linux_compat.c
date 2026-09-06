@@ -319,9 +319,9 @@ LC_GETID(lc_geteuid, euid)
 LC_GETID(lc_getegid, egid)
 static int64_t lc_setuid(struct Registers *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
-    (void)r; (void)c; (void)d; (void)e; (void)f;
+    (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
     struct task_struct *cur = current;
-    uint32_t v = (uint32_t)b;
+    uint32_t v = (uint32_t)a;
     if (cur->euid == 0) {
         cur->uid = cur->euid = cur->suid = v;
         return 0;
@@ -334,9 +334,9 @@ static int64_t lc_setuid(struct Registers *r, uint64_t a, uint64_t b,
 }
 static int64_t lc_setgid(struct Registers *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
-    (void)r; (void)c; (void)d; (void)e; (void)f;
+    (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
     struct task_struct *cur = current;
-    uint32_t v = (uint32_t)b;
+    uint32_t v = (uint32_t)a;
     if (cur->egid == 0) {
         cur->gid = cur->egid = cur->sgid = v;
         return 0;
@@ -784,7 +784,7 @@ static int32_t compat_openat(int32_t dirfd, const char *kpath,
     }
     int32_t fd = open_file(kpath, (uint8_t)compat_flags_linux2native(lflags));
     if (fd < 0)
-        return -LINUX_ENOENT;
+        return -(current->errno > 0 ? current->errno : LINUX_ENOENT);
     if (lflags & LINUX_O_TRUNC)
         compat_ftruncate(fd, 0);
     if (lflags & LINUX_O_APPEND)
@@ -1677,5 +1677,5 @@ uint32_t linux_compat_handler(struct Registers *r) {
     }
 
     lc_seterrno(cur, ret < 0 ? (int32_t)-ret : 0);
-    return ret < 0 ? (uint32_t)-1 : (uint32_t)ret;
+    return (uint64_t)ret;
 }

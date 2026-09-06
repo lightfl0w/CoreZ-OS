@@ -216,6 +216,10 @@ int32_t sys_chmod(const char *path, uint32_t mode) {
     if (ext2_read_inode(ino_no, &obj)) {
         return -1;
     }
+    if (current->euid != 0 && current->euid != obj.i_uid) {
+        current->errno = 1;
+        return -1;
+    }
     obj.i_mode = (obj.i_mode & 0xF000u) | (mode & 0x0FFFu);
     return ext2_write_inode(ino_no, &obj) ? -1 : 0;
 }

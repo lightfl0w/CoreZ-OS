@@ -247,6 +247,10 @@ int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
     struct inode obj;
     if (ext2_read_inode(ino_no, &obj))
         return -1;
+    if (current->euid != 0) {
+        current->errno = 1;
+        return -1;
+    }
     if (uid != (uint32_t)-1)
         obj.i_uid = (uint16_t)uid;
     if (gid != (uint32_t)-1)

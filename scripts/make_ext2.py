@@ -110,7 +110,7 @@ def put_inode(table, ino, payload_len, blocks, is_dir, rdev=0, uid=0, gid=0,
               mode=None):
     off = (ino - 1) * INODE_SIZE
     m = mode if mode is not None else (0x41ED if is_dir else
-                                       (0x21B6 if rdev else 0x81A4))
+                                       (0x21B6 if rdev else 0x81ED))
     struct.pack_into("<H", table, off + 0, m)
     struct.pack_into("<H", table, off + 2, uid)
     struct.pack_into("<H", table, off + 24, gid)
@@ -161,7 +161,7 @@ def build(build_dir, out, smoke=False):
 
     dev_ino = next_ino
     next_ino += 1 + len(DEV_NODES)
-    dev_entries = [(dev_ino, 2, "."), (dev_ino, 2, "..")]
+    dev_entries = [(dev_ino, 2, "."), (2, 2, "..")]
     for i, (name, maj, mnr) in enumerate(DEV_NODES):
         dev_entries.append((dev_ino + 1 + i, 3, name))
     dir_entries.append((dev_ino, 2, "dev"))
@@ -172,7 +172,7 @@ def build(build_dir, out, smoke=False):
         dir_entries.append((next_ino, 2, name))
         next_ino += 1
     etc_ino = dir_inos["etc"]
-    etc_entries = [(etc_ino, 2, "."), (etc_ino, 2, "..")]
+    etc_entries = [(etc_ino, 2, "."), (2, 2, "..")]
     file_uids = {}
     for name, payload, mode, uid, gid in ETC_FILES:
         file_uids[name] = (next_ino, payload, mode, uid, gid)
