@@ -191,13 +191,14 @@ void *mmap(void *addr, uint32_t len, int prot, int flags, int fd,
     a.flags = (uint32_t)flags;
     a.fd = (uint32_t)fd;
     a.offset = offset;
-    return (void *)syscall1(SYS_MMAP, (uint32_t)&a);
+    return (void *)(intptr_t)(int32_t)syscall1(SYS_MMAP, (uint32_t)&a);
 }
 
 void *mmap2(void *addr, uint32_t len, int prot, int flags, int fd,
             uint32_t offset) {
-    return (void *)syscall6(SYS_MMAP2, (uint32_t)addr, len, (uint32_t)prot,
-                            (uint32_t)flags, (uint32_t)fd, offset);
+    return (void *)(intptr_t)(int32_t)syscall6(
+        SYS_MMAP2, (uint32_t)addr, len, (uint32_t)prot, (uint32_t)flags,
+        (uint32_t)fd, offset);
 }
 
 int32_t munmap(void *addr, uint32_t len) {

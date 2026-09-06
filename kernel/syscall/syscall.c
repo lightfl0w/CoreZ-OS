@@ -433,7 +433,8 @@ static int64_t nsys_mmap(struct Registers *r) {
     if (!ok_read(r, r->ebx, sizeof(struct mmap_args))) {
         return (uint32_t)-1;
     }
-    return sys_mmap((const struct mmap_args *)r->ebx);
+    uint32_t ret = sys_mmap((const struct mmap_args *)r->ebx);
+    return ret > (uint32_t)-4096 ? (uint32_t)-1 : ret;
 }
 
 static int64_t nsys_munmap(struct Registers *r) {
@@ -441,8 +442,10 @@ static int64_t nsys_munmap(struct Registers *r) {
 }
 
 static int64_t nsys_mmap2(struct Registers *r) {
-    return sys_mmap2((uint32_t)r->ebx, (uint32_t)r->ecx, (uint32_t)r->edx,
-                     (uint32_t)r->esi, (uint32_t)r->edi, (uint32_t)r->r10);
+    uint32_t ret = sys_mmap2((uint32_t)r->ebx, (uint32_t)r->ecx,
+                             (uint32_t)r->edx, (uint32_t)r->esi,
+                             (uint32_t)r->edi, (uint32_t)r->r10);
+    return ret > (uint32_t)-4096 ? (uint32_t)-1 : ret;
 }
 
 static int64_t nsys_mprotect(struct Registers *r) {

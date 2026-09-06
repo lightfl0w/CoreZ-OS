@@ -386,14 +386,6 @@ static int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
     return (int32_t)read_file(fd, buf, count);
 }
 
-static uint32_t compat_brk_alloc(struct task_struct *cur, uint32_t len) {
-    uint32_t curbrk = sys_brk(0);
-    uint32_t want = curbrk + ((len + 0xFFF) & ~0xFFF);
-    if (sys_brk(want) != want)
-        return (uint32_t)-1;
-    return curbrk;
-}
-
 static int32_t compat_set_thread_area(uint32_t base) {
     if (base == 0 || !user_range_writable(base, sizeof(int32_t)))
         return -LINUX_EFAULT;
@@ -503,14 +495,15 @@ static int64_t lc_brk(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
 static int64_t lc_mmap(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    uint32_t rr = a ? (uint32_t)a : compat_brk_alloc(current, (uint32_t)b);
-    return rr == (uint32_t)-1 ? -LINUX_EPERM : (int64_t)rr;
+    struct mmap_args m = {(uint32_t)a, (uint32_t)b, (uint32_t)c, (uint32_t)d,
+                          (uint32_t)e, (uint32_t)(f & ~(uint32_t)(PAGE_SIZE - 1u))};
+    return (int64_t)sys_mmap(&m);
 }
 
 static int64_t lc_munmap(struct Registers *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    return 0;
+    return sys_munmap((uint32_t)a, (uint32_t)b);
 }
 
 static int64_t lc_set_thread_area(struct Registers *r, uint64_t a, uint64_t b,
