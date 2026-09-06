@@ -107,7 +107,9 @@ static int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
         d->d_ino = de.i_no;
         d->d_off = (int64_t)pos;
         d->d_reclen = reclen;
-        d->d_type = (de.f_type == FT_DIRECTORY) ? LINUX_DT_DIR : LINUX_DT_REG;
+        d->d_type = de.f_type == FT_DIRECTORY ? LINUX_DT_DIR
+                    : de.f_type == FT_CHARDEVICE ? LINUX_DT_CHR
+                                                 : LINUX_DT_REG;
         memcpy(d->d_name, de.filename, nl + 1);
         written += reclen;
         emitted = pos;
@@ -267,6 +269,8 @@ static int32_t compat_flags_linux2native(uint32_t lflags) {
 static uint32_t compat_mode_native(uint32_t filetype) {
     if (filetype == FT_DIRECTORY)
         return LINUX_S_IFDIR | 0755u;
+    if (filetype == FT_CHARDEVICE)
+        return LINUX_S_IFCHR | 0666u;
     return LINUX_S_IFREG | 0644u;
 }
 
@@ -647,6 +651,23 @@ static int64_t lc_chmod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
     return sys_chmod(kpath, b);
+}
+
+static int64_t lc_mknod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+                        uint64_t d, uint64_t e, uint64_t f) {
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, kpath, a))
+        return -LINUX_EFAULT;
+    return sys_mknod(kpath, (uint32_t)b, (uint32_t)c);
+}
+
+static int64_t lc_mknodat(struct Registers *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)a;
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, kpath, b))
+        return -LINUX_EFAULT;
+    return sys_mknod(kpath, (uint32_t)c, (uint32_t)d);
 }
 
 static int64_t lc_access(struct Registers *r, uint64_t a, uint64_t b,
@@ -1096,6 +1117,8 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_unlink] = lc_unlink,
     [SYS_LINUX_rename] = lc_rename,
     [SYS_LINUX_chmod] = lc_chmod,
+    [SYS_LINUX_mknod] = lc_mknod,
+    [SYS_LINUX_mknodat] = lc_mknodat,
     [SYS_LINUX_access] = lc_access,
     [SYS_LINUX_kill] = lc_kill,
     [SYS_LINUX_futex] = lc_futex,

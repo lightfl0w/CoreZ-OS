@@ -33,7 +33,7 @@ FILES = [
     "canary_test.elf",
     "font_subset.ttf", "nr_shell.elf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf"
+    "musl_abi_test.elf", "dev_demo.elf"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf"}
 
@@ -76,15 +76,21 @@ def build_dirent_block(entries, block=BLOCK):
     return bytes(out)
 
 
-def put_inode(table, ino, payload_len, blocks, is_dir):
+DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
+             ("console", 5, 1)]
+
+
+def put_inode(table, ino, payload_len, blocks, is_dir, rdev=0):
     off = (ino - 1) * INODE_SIZE
-    mode = 0x41ED if is_dir else 0x81A4
+    mode = 0x41ED if is_dir else (0x21B6 if rdev else 0x81A4)
     struct.pack_into("<H", table, off + 0, mode)
     struct.pack_into("<I", table, off + 4, payload_len)
-    struct.pack_into("<H", table, off + 26, 2) 
+    struct.pack_into("<H", table, off + 26, 2)
     for i in range(15):
         b = blocks[i] if i < len(blocks) else 0
         struct.pack_into("<I", table, off + 40 + 4 * i, b)
+    if rdev:
+        struct.pack_into("<I", table, off + 40, rdev)
 
 
 def build(build_dir, out, smoke=False):
@@ -103,7 +109,7 @@ def build(build_dir, out, smoke=False):
             pre[name] = src.read_bytes()
     names = [n for n in names if n in pre]
     if smoke:
-        pre["autoexec"] = b"musl_abi_test.elf\nfork_demo.elf\n"
+        pre["autoexec"] = b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
         names.append("autoexec")
 
     next_ino = 3
@@ -134,6 +140,14 @@ def build(build_dir, out, smoke=False):
         dir_entries.append((next_ino, 1, name))
         next_ino += 1
 
+    dev_ino = next_ino
+    next_ino += 1 + len(DEV_NODES)
+    dev_dir_block = cur_block
+    cur_block += 1
+    dev_entries = [(dev_ino, 2, "."), (dev_ino, 2, "..")]
+    for i, (name, maj, mnr) in enumerate(DEV_NODES):
+        dev_entries.append((dev_ino + 1 + i, 3, name))
+    dir_entries.append((dev_ino, 2, "dev"))
     root_dir = build_dirent_block(dir_entries)
     used_inodes = next_ino - 1
 
@@ -145,12 +159,17 @@ def build(build_dir, out, smoke=False):
 
     itable = bytearray(ITABLE_BLOCKS * BLOCK)
     put_inode(itable, 2, len(root_dir), [root_block], True)
+    put_inode(itable, dev_ino, BLOCK, [dev_dir_block], True)
+    for i, (_, maj, mnr) in enumerate(DEV_NODES):
+        put_inode(itable, dev_ino + 1 + i, 0, [], False,
+                  rdev=(maj << 8) | mnr)
     for name in names:
         put_inode(itable, ino_map[name], len(pre[name]),
                   file_ptrs[name], False)
 
     used_blocks = set(range(0, DATA_START))
     used_blocks.add(root_block)
+    used_blocks.add(dev_dir_block)
     for blocks, _ in var_blocks:
         for b in blocks:
             used_blocks.add(b)
@@ -206,6 +225,8 @@ def build(build_dir, out, smoke=False):
         f.write(bytes(itable))
         f.seek(base * SECTOR + root_block * BLOCK)
         f.write(root_dir)
+        f.seek(base * SECTOR + dev_dir_block * BLOCK)
+        f.write(build_dirent_block(dev_entries))
         for iblk, data in var_indirect:
             idx = bytearray(BLOCK)
             for j, b in enumerate(data):

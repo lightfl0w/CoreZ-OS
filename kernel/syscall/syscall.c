@@ -528,6 +528,13 @@ static int64_t nsys_chmod(struct Registers *r) {
     }
     return (uint32_t)sys_chmod((const char *)r->ebx, (uint32_t)r->ecx);
 }
+static int64_t nsys_mknod(struct Registers *r) {
+    if (!ok_read(r, r->ebx, 1)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)sys_mknod((const char *)r->ebx, (uint32_t)r->ecx,
+                               (uint32_t)r->edx);
+}
 
 static int64_t nsys_clock_gettime(struct Registers *r) {
     if (!ok_write(r, r->ecx, sizeof(struct timespec))) {
@@ -735,6 +742,7 @@ static const nsys_fn nsys_table[] = {
         nsys_getpeername,
     [SYS_GETSOCKOPT] = nsys_getsockopt, [SYS_SETSOCKOPT] = nsys_setsockopt,
     [SYS_SOCK_FCNTL] = nsys_sock_fcntl, [SYS_SELECT] = nsys_select,
+    [SYS_MKNOD] = nsys_mknod,
 };
 
 uint64_t syscall_handler(struct Registers *r) {

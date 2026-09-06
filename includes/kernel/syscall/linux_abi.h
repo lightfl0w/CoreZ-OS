@@ -91,6 +91,7 @@
 #define SYS_LINUX_set_thread_area 234
 #define SYS_LINUX_openat 257
 #define SYS_LINUX_mkdirat 258
+#define SYS_LINUX_mknod 133
 #define SYS_LINUX_mknodat 259
 #define SYS_LINUX_newfstatat 262
 #define SYS_LINUX_unlinkat 263

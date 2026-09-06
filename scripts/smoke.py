@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 IMG = ROOT / "build" / "test_hd.img"
 LOG = Path("/tmp/nit_smoke.log")
-MARKS = ["[abi] ALL PASS", "child: fork returned"]
+MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS"]
 TIMEOUT = 120
 
 

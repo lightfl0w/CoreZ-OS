@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -79,6 +80,15 @@ int main(int argc, char **argv) {
     int wr = waitpid(pid, &ws, 0);
     printf("[abi] waitpid r=%d raw=0x%x status=%d\n", wr, (unsigned)ws,
            WEXITSTATUS(ws));
+    int mk = mknod("/dev/apitest", S_IFCHR | 0666, makedev(1, 5));
+    printf("[abi] mknod r=%d errno=%d\n", mk, errno);
+    int zf = mk == 0 ? open("/dev/apitest", O_RDONLY) : -1;
+    char ab[4] = {1, 1, 1, 1};
+    int rn = zf >= 0 ? (int)read(zf, ab, 4) : -1;
+    printf("[abi] mknod-dev read r=%d zero=%d\n", rn,
+           ab[0] == 0 && ab[3] == 0);
+    if (zf >= 0) close(zf);
+    printf("[abi] unlink r=%d errno=%d\n", unlink("/dev/apitest"), errno);
     printf("[abi] ALL PASS\n");
     return 0;
 }

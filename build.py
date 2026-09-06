@@ -534,6 +534,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("signal_demo", "signal_demo.c", "_start", []),
         ("mmap_demo",   "mmap_demo.c",   "_start", []),
         ("mmap2_demo",  "mmap2_demo.c",  "_start", []),
+        ("dev_demo",    "dev_demo.c",    "_start", []),
         ("futex_demo",  "futex_demo.c",  "_start", []),
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
         ("clone_demo",  "clone_demo.c",  "_start", []),
