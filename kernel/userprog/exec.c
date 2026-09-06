@@ -621,6 +621,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         uint64_t *pde = pde_ptr(sp);
         uint64_t *pte = pte_ptr(sp);
         if (pde == NULL || pte == NULL || !(*pte & 1)) {
+
             if (get_a_page(sp) == 0) {
                 kprintf("[exec] get_a_page for user stack failed\n");
                 return -1;

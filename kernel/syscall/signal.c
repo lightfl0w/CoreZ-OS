@@ -9,6 +9,8 @@
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
 #include "kernel/userprog/wait_exit.h"
+#include "arch/x86/interrupt/interrupt.h"
+#include "kernel/sched/thread.h"
 static const uint8_t sig_default[NSIG] = {
     [SIGHUP] = SIG_ACT_TERM,  [SIGINT] = SIG_ACT_TERM,
     [SIGQUIT] = SIG_ACT_TERM, [SIGILL] = SIG_ACT_TERM,
@@ -316,6 +318,9 @@ int sys_kill(int pid, int sig) {
         return 0;
     }
     t->signal_pending |= (1u << sig);
+    if (t->status == TASK_WAITING) {
+        thread_ready(t);
+    }
     return 0;
 }
 uint64_t sys_sigreturn(struct Registers *r) {
@@ -386,3 +391,22 @@ uint64_t sys_sigreturn(struct Registers *r) {
     cur->signal_mask &= ~((1u << SIGKILL) | (1u << SIGSTOP));
     return sf->eax;
 }
+
+void itimer_tick(void) {
+    uint32_t now = tick;
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        struct task_struct *t = &task_table[i];
+        if (!t->slot_used || t->status == TASK_DIED || t->itimer_expire == 0) {
+            continue;
+        }
+        if (now < t->itimer_expire) {
+            continue;
+        }
+        t->signal_pending |= (1u << SIGALRM);
+        t->itimer_expire = t->itimer_interval ? now + t->itimer_interval : 0;
+        if (t->status == TASK_WAITING) {
+            thread_ready(t);
+        }
+    }
+}
+

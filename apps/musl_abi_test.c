@@ -8,6 +8,25 @@
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/statfs.h>
+#include <time.h>
+
+static char altbuf[8192];
+static stack_t oldss;
+static volatile int usr1_flag;
+static volatile int alarm_flag;
+
+static void usr1_handler(int sig) {
+    (void)sig;
+    usr1_flag = 1;
+}
+static void alrm_handler(int sig) {
+    (void)sig;
+    alarm_flag = 1;
+}
 
 int main(int argc, char **argv) {
     printf("[abi] start argc=%d argv0=%s argv1=%s\n", argc,
@@ -109,6 +128,63 @@ int main(int argc, char **argv) {
            ab[0] == 0 && ab[3] == 0);
     if (zf >= 0) close(zf);
     printf("[abi] unlink r=%d errno=%d\n", unlink("/dev/apitest"), errno);
+    int sp2 = fork();
+    if (sp2 == 0) {
+        int s2 = setsid();
+        if (s2 < 0)
+            _exit(2);
+        _exit((int)getsid(0) == (int)getpid() ? 9 : 3);
+    }
+    int st1 = 0;
+    waitpid(sp2, &st1, 0);
+    printf("[abi] setsid-child exit=%d\n", WEXITSTATUS(st1));
+    struct statfs sf;
+    int sr = statfs("/", &sf);
+    printf("[abi] statfs r=%d magic=%lx bsize=%lu blocks=%lu\n", sr,
+           (unsigned long)sf.f_type, (unsigned long)sf.f_bsize,
+           (unsigned long)sf.f_blocks);
+    struct rusage ru;
+    int gr = getrusage(RUSAGE_SELF, &ru);
+    printf("[abi] getrusage r=%d utime=%ld.%06ld\n", gr,
+           (long)ru.ru_utime.tv_sec, (long)ru.ru_utime.tv_usec);
+    stack_t sa2 = {.ss_sp = altbuf, .ss_size = sizeof(altbuf), .ss_flags = 0};
+    int sg = sigaltstack(&sa2, &oldss);
+    printf("[abi] sigaltstack r=%d errno=%d oldflags=%d\n", sg, errno,
+           oldss.ss_flags);
+    struct sigaction us1 = {.sa_handler = usr1_handler};
+    sigaction(SIGUSR1, &us1, 0);
+    struct sigaction alm = {.sa_handler = alrm_handler};
+    sigaction(SIGALRM, &alm, 0);
+    sigset_t sm;
+    sigemptyset(&sm);
+    sigaddset(&sm, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &sm, 0);
+    raise(SIGUSR1);
+    int wm = fork();
+    printf("[abi] waitid-fork pid=%d\n", wm);
+    if (wm == 0)
+        _exit(42);
+    siginfo_t wi;
+    memset(&wi, 0, sizeof(wi));
+    int wr2 = waitid(P_PID, wm, &wi, WEXITED);
+    printf("[abi] waitid r=%d pid=%d code=%d status=%d\n", wr2, wi.si_pid,
+           wi.si_code, wi.si_status);
+    struct itimerval it = {.it_value = {.tv_sec = 0, .tv_usec = 50000}};
+    int st2 = setitimer(ITIMER_REAL, &it, 0);
+    struct itimerval itg;
+    getitimer(ITIMER_REAL, &itg);
+    printf("[abi] setitimer r=%d getitimer=%ld us\n", st2,
+           (long)(itg.it_value.tv_sec * 1000000 + itg.it_value.tv_usec));
+    for (int q = 0; q < 40 && !alarm_flag; q++) {
+        struct timespec ts50 = {.tv_sec = 0, .tv_nsec = 50000000};
+        nanosleep(&ts50, 0);
+    }
+    printf("[abi] alarm-fired=%d\n", alarm_flag);
+    sigset_t empty;
+    sigemptyset(&empty);
+    int ss2 = sigsuspend(&empty);
+    printf("[abi] sigsuspend r=%d errno=%d handler=%d\n", ss2, errno,
+           usr1_flag);
     printf("[abi] ALL PASS\n");
     return 0;
 }

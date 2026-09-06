@@ -153,10 +153,7 @@ static int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
     uint32_t want = pgid ? pgid : pid;
     if (want >= MAX_TASKS)
         return -LINUX_EINVAL;
-    struct task_struct *g = pid2thread((int32_t)want);
-    if (g == NULL)
-        return -LINUX_EPERM;
-    t->pid = want;
+    t->pgid = want;
     return 0;
 }
 
@@ -166,9 +163,235 @@ static int32_t compat_getpgid(uint32_t pid) {
     struct task_struct *t = pid2thread((int32_t)pid);
     if (t == NULL)
         return -LINUX_ESRCH;
-    return (int32_t)t->pid;
+    return (int32_t)(t->pgid ? t->pgid : t->pid);
 }
 
+static int user_ptr_ok(struct Registers *r, uint64_t addr, uint32_t len,
+                       int writable);
+static int copy_user_str(struct Registers *r, char *dst, uint64_t user_ptr);
+static void ticks_to_timeval(struct LINUX_TIMEVAL *tv, uint32_t ticks) {
+    uint64_t us = (uint64_t)ticks * (1000000ull / PIT_HZ);
+    tv->tv_sec = (int64_t)(us / 1000000ull);
+    tv->tv_usec = (int64_t)(us % 1000000ull);
+}
+static uint32_t timeval_to_ticks(const struct LINUX_TIMEVAL *tv) {
+    uint64_t us = (uint64_t)tv->tv_sec * 1000000ull +
+                  (uint64_t)tv->tv_usec;
+    uint64_t tick_us = 1000000ull / PIT_HZ;
+    return (uint32_t)((us + tick_us - 1) / tick_us);
+}
+static int32_t compat_setitimer(uint32_t which, uint64_t new_val,
+                                uint64_t old_val) {
+    if (which != LINUX_ITIMER_REAL)
+        return -LINUX_EINVAL;
+    struct task_struct *cur = current;
+    if (old_val) {
+        struct LINUX_ITIMERVAL o;
+        memset(&o, 0, sizeof(o));
+        if (cur->itimer_expire) {
+            uint32_t rem = cur->itimer_expire > tick
+                               ? cur->itimer_expire - tick
+                               : 0;
+            ticks_to_timeval(&o.it_value, rem);
+            ticks_to_timeval(&o.it_interval,
+                             (uint32_t)cur->itimer_interval);
+        }
+        memcpy((void *)(uintptr_t)old_val, &o, sizeof(o));
+    }
+    if (new_val) {
+        struct LINUX_ITIMERVAL n;
+        memcpy(&n, (const void *)(uintptr_t)new_val, sizeof(n));
+        cur->itimer_interval = timeval_to_ticks(&n.it_interval);
+        uint32_t v = timeval_to_ticks(&n.it_value);
+        cur->itimer_expire = v ? tick + v : 0;
+        if (cur->itimer_interval && !v)
+            cur->itimer_expire = 0;
+    } else {
+        cur->itimer_expire = 0;
+        cur->itimer_interval = 0;
+    }
+    return 0;
+}
+static int32_t compat_getitimer(uint32_t which, uint64_t cur_val) {
+    if (which != LINUX_ITIMER_REAL || !cur_val)
+        return which != LINUX_ITIMER_REAL ? -LINUX_EINVAL : 0;
+    struct task_struct *cur = current;
+    struct LINUX_ITIMERVAL o;
+    memset(&o, 0, sizeof(o));
+    if (cur->itimer_expire) {
+        uint32_t rem = cur->itimer_expire > tick ? cur->itimer_expire - tick
+                                                 : 0;
+        ticks_to_timeval(&o.it_value, rem);
+        ticks_to_timeval(&o.it_interval, (uint32_t)cur->itimer_interval);
+    }
+    memcpy((void *)(uintptr_t)cur_val, &o, sizeof(o));
+    return 0;
+}
+static int32_t compat_statfs_fill(uint64_t buf) {
+    struct LINUX_STATFS sf;
+    uint32_t bsize, blocks, bfree, files, ffree;
+    ext2_statfs_info(&bsize, &blocks, &bfree, &files, &ffree);
+    memset(&sf, 0, sizeof(sf));
+    sf.f_type = (int64_t)LINUX_EXT2_SUPER_MAGIC;
+    sf.f_bsize = bsize;
+    sf.f_blocks = blocks;
+    sf.f_bfree = bfree;
+    sf.f_bavail = bfree;
+    sf.f_files = files;
+    sf.f_ffree = ffree;
+    sf.f_namelen = 255;
+    sf.f_frsize = bsize;
+    memcpy((void *)(uintptr_t)buf, &sf, sizeof(sf));
+    return 0;
+}
+static int64_t lc_setitimer(struct Registers *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_ITIMERVAL), 0))
+        return -LINUX_EFAULT;
+    if (c && !user_ptr_ok(r, c, sizeof(struct LINUX_ITIMERVAL), 1))
+        return -LINUX_EFAULT;
+    return compat_setitimer((uint32_t)a, b, c);
+}
+static int64_t lc_getitimer(struct Registers *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_ITIMERVAL), 1))
+        return -LINUX_EFAULT;
+    return compat_getitimer((uint32_t)a, b);
+}
+static int64_t lc_statfs(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, kpath, a))
+        return -LINUX_EFAULT;
+    if (ext2_lookup(kpath, &(uint32_t){0}, &(int){0}))
+        return -LINUX_ENOENT;
+    if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
+        return -LINUX_EFAULT;
+    return compat_statfs_fill(b);
+}
+static int64_t lc_fstatfs(struct Registers *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)a;
+    if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
+        return -LINUX_EFAULT;
+    return compat_statfs_fill(b);
+}
+static int64_t lc_getrusage(struct Registers *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)a;
+    if (!user_ptr_ok(r, b, sizeof(struct LINUX_RUSAGE), 1))
+        return -LINUX_EFAULT;
+    struct LINUX_RUSAGE ru;
+    memset(&ru, 0, sizeof(ru));
+    if ((int32_t)a == LINUX_RUSAGE_SELF)
+        ticks_to_timeval(&ru.ru_utime, current->elapsed_ticks);
+    memcpy((void *)(uintptr_t)b, &ru, sizeof(ru));
+    return 0;
+}
+static int64_t lc_getsid(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    struct task_struct *t = a ? pid2thread((int32_t)a) : current;
+    if (t == NULL)
+        return -LINUX_ESRCH;
+    return (int64_t)(t->sid ? t->sid : t->pid);
+}
+static int64_t lc_umask(struct Registers *r, uint64_t a, uint64_t b,
+                        uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    struct task_struct *cur = current;
+    uint32_t old = cur->umask;
+    cur->umask = (uint32_t)a & 0o7777u;
+    return (int64_t)old;
+}
+static int64_t lc_tkill(struct Registers *r, uint64_t a, uint64_t b,
+                        uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    return sys_kill((int)a, (int)b) < 0 ? -LINUX_EINVAL : 0;
+}
+static int64_t lc_tgkill(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    (void)a;
+    return sys_kill((int)b, (int)c) < 0 ? -LINUX_EINVAL : 0;
+}
+static int64_t lc_setsid(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    (void)a;
+    struct task_struct *cur = current;
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        struct task_struct *t = &task_table[i];
+        if (t == cur || !t->slot_used || t->status == TASK_DIED)
+            continue;
+        if (t->pgid == cur->pid)
+            return -LINUX_EPERM;
+    }
+    cur->sid = cur->pid;
+    cur->pgid = cur->pid;
+    return (int64_t)cur->pid;
+}
+static int64_t lc_waitid(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    if (c && !user_ptr_ok(r, c, sizeof(struct LINUX_SIGINFO), 1))
+        return -LINUX_EFAULT;
+    int rc = sys_waitid((int)a, (int32_t)b, (struct LINUX_SIGINFO *)(uintptr_t)c,
+                        (uint32_t)d);
+    return rc == 0 ? 0 : -LINUX_ECHILD;
+}
+static int64_t lc_sigaltstack(struct Registers *r, uint64_t a, uint64_t b,
+                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r;
+    struct task_struct *cur = current;
+    if (b) {
+        struct LINUX_STACK_T o;
+        o.ss_sp = cur->sigalt_sp;
+        o.ss_flags = cur->sigalt_sp ? 0 : LINUX_SS_DISABLE;
+        o.ss_pad = 0;
+        o.ss_size = cur->sigalt_size;
+        memcpy((void *)(uintptr_t)b, &o, sizeof(o));
+    }
+    if (a) {
+        if (!user_ptr_ok(r, a, sizeof(struct LINUX_STACK_T), 0))
+            return -LINUX_EFAULT;
+        struct LINUX_STACK_T n;
+        memcpy(&n, (const void *)(uintptr_t)a, sizeof(n));
+        if (n.ss_flags & ~LINUX_SS_DISABLE)
+            return -LINUX_EINVAL;
+        if (n.ss_flags & LINUX_SS_DISABLE) {
+            cur->sigalt_sp = 0;
+            cur->sigalt_size = 0;
+            cur->sigalt_flags = LINUX_SS_DISABLE;
+        } else {
+            if (n.ss_size < LINUX_MINSIGSTKSZ)
+                return -LINUX_ENOMEM;
+            cur->sigalt_sp = n.ss_sp;
+            cur->sigalt_size = (uint32_t)n.ss_size;
+            cur->sigalt_flags = 0;
+        }
+    }
+    return 0;
+}
+static int64_t lc_sigsuspend(struct Registers *r, uint64_t a, uint64_t b,
+                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    if (!user_ptr_ok(r, a, 4, 0))
+        return -LINUX_EFAULT;
+    uint32_t mask;
+    memcpy(&mask, (const void *)(uintptr_t)a, 4);
+    struct task_struct *cur = current;
+    uint32_t old = cur->signal_mask;
+    cur->signal_mask = (mask << 1) & ~((1u << SIGKILL) | (1u << SIGSTOP));
+    for (;;) {
+        if (cur->signal_pending & ~cur->signal_mask)
+            break;
+        thread_block_with_status(TASK_WAITING);
+    }
+    check_pending_signals(r);
+    cur->signal_mask = old;
+    return -LINUX_EINTR;
+}
 static int32_t compat_readv(int32_t fd, struct LINUX_IOVEC *iov,
                             int32_t iovcnt) {
     if (iovcnt < 0 || iovcnt > 16)
@@ -503,7 +726,8 @@ static int64_t lc_mmap(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     struct mmap_args m = {(uint32_t)a, (uint32_t)b, (uint32_t)c, (uint32_t)d,
-                          (uint32_t)e, (uint32_t)(f & ~(uint32_t)(PAGE_SIZE - 1u))};
+                          (uint32_t)e,
+                          (uint32_t)(f & ~(uint32_t)(PAGE_SIZE - 1u))};
     return (int64_t)sys_mmap(&m);
 }
 
@@ -795,7 +1019,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
     struct sigaction nat;
     memset(&nat, 0, sizeof(nat));
     nat.sa_handler = (void (*)(int))(uintptr_t)lsa.sa_handler;
-    nat.sa_mask = (uint32_t)lsa.sa_mask;
+    nat.sa_mask = (uint32_t)(lsa.sa_mask << 1);
     nat.sa_flags = (uint32_t)lsa.sa_flags;
     nat.sa_restorer = (void *)(uintptr_t)lsa.sa_restorer;
     struct sigaction oldnat;
@@ -809,6 +1033,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
         struct LINUX_SIGACTION oldl;
         memset(&oldl, 0, sizeof(oldl));
         oldl.sa_handler = (uint64_t)(uintptr_t)oldnat.sa_handler;
+        oldl.sa_mask = (uint64_t)oldnat.sa_mask >> 1;
         oldl.sa_flags = oldnat.sa_flags;
         oldl.sa_restorer = (uint64_t)(uintptr_t)oldnat.sa_restorer;
         oldl.sa_mask = oldnat.sa_mask;
@@ -830,6 +1055,7 @@ static int64_t lc_rt_sigprocmask(struct Registers *r, uint64_t a, uint64_t b,
         memset(in, 0, sizeof(in));
         memcpy(in, (const void *)(uintptr_t)b, 8);
         memcpy(&kset, in, sizeof(kset));
+        kset <<= 1;
     }
     sigset_t oset = 0;
     int32_t rr =
@@ -838,8 +1064,9 @@ static int64_t lc_rt_sigprocmask(struct Registers *r, uint64_t a, uint64_t b,
         return rr;
     if (c) {
         uint8_t out[8];
+        sigset_t mout = (sigset_t)oset >> 1;
         memset(out, 0, sizeof(out));
-        memcpy(out, &oset, sizeof(oset));
+        memcpy(out, &mout, sizeof(mout));
         memcpy((void *)(uintptr_t)c, out, 8);
     }
     return 0;
@@ -1163,6 +1390,19 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_ftruncate] = lc_ftruncate,
     [SYS_LINUX_rt_sigreturn] = lc_rt_sigreturn,
     [SYS_LINUX_setpgid] = lc_setpgid,
+    [SYS_LINUX_setsid] = lc_setsid,
+    [SYS_LINUX_sigaltstack] = lc_sigaltstack,
+    [SYS_LINUX_rt_sigsuspend] = lc_sigsuspend,
+    [SYS_LINUX_getitimer] = lc_getitimer,
+    [SYS_LINUX_setitimer] = lc_setitimer,
+    [SYS_LINUX_getrusage] = lc_getrusage,
+    [SYS_LINUX_statfs] = lc_statfs,
+    [SYS_LINUX_fstatfs] = lc_fstatfs,
+    [SYS_LINUX_waitid] = lc_waitid,
+    [SYS_LINUX_tkill] = lc_tkill,
+    [SYS_LINUX_umask] = lc_umask,
+    [SYS_LINUX_tgkill] = lc_tgkill,
+    [SYS_LINUX_getsid] = lc_getsid,
     [SYS_LINUX_getpgid] = lc_getpgid,
     [SYS_LINUX_arch_prctl] = lc_arch_prctl,
     [SYS_LINUX_sched_yield] = lc_sched_yield,
@@ -1204,6 +1444,8 @@ uint32_t linux_compat_handler(struct Registers *r) {
                                  r->rbp);
     } else if (nr < LC_TABLE_SIZE && LC_TABLE[nr]) {
         ret = LC_TABLE[nr](r, r->rdi, r->rsi, r->rdx, r->r10, r->r8, r->r9);
+    } else if (nr < COMPAT_SYSCALL_BASE) {
+        kprintf("[compat] ENOSYS nr=%d rip=%x\n", (int)nr, (uint32_t)r->rip);
     }
 
     lc_seterrno(cur, ret < 0 ? (int32_t)-ret : 0);

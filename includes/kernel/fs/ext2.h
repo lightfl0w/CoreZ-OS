@@ -63,4 +63,9 @@ int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
                        uint8_t dtype);
 int ext2_remove_entry(struct inode *dino, const char *name);
 
+#ifndef __ASSEMBLER__
+void ext2_statfs_info(uint32_t *bsize, uint32_t *blocks, uint32_t *bfree,
+                      uint32_t *files, uint32_t *ffree);
+#endif
+
 #endif

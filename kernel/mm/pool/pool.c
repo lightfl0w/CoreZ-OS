@@ -126,6 +126,7 @@ void mm_init(void) {
             }
         }
     }
+    mark_used(0x200000, 0x400000 - 0x200000);
     mark_used(0x400000, 0x460000 - 0x400000);
     mark_used(PER_CPU_BASE, NR_CPU * PAGE_SIZE);
     kernel_vaddr.vaddr_start = KERNEL_VADDR_START;
@@ -288,12 +289,13 @@ void page_table_dump(uint32_t vaddr) {
             (uint32_t)(e3 & 0x000ffffffffff000ull));
 }
 
-static void page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
+static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
     uint64_t *pte = pte_make(cur_pml4(), (uint64_t)vaddr);
     if (pte == 0)
-        return;
+        return -1;
     *pte = (uint64_t)phy_addr | pte_wx(PTE_P | PTE_U, 1, 0);
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+    return 0;
 }
 
 static void page_table_add_no_cache(uint32_t vaddr, uint32_t phy_addr) {
@@ -339,7 +341,13 @@ void *get_a_page(uint32_t vaddr) {
         lock_release(&mem_lock);
         return 0;
     }
-    page_table_add_raw(vaddr, phy);
+    if (page_table_add_raw(vaddr, phy) != 0) {
+
+        bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bit_idx, 0);
+        pfree(&kernel_pool, phy);
+        lock_release(&mem_lock);
+        return 0;
+    }
     memset((void *)vaddr, 0, PAGE_SIZE);
     lock_release(&mem_lock);
     return (void *)vaddr;

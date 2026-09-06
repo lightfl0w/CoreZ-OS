@@ -10,6 +10,7 @@
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/signal.h"
 #include "kernel/userprog/process.h"
 #include "lib/str/str.h"
 volatile uint32_t tick = 0;
@@ -74,6 +75,13 @@ void isr_handler(struct Registers *r) {
     if ((r->cs & 3) == 3) {
         int sig = exception_to_signal((int)n);
         if (sig > 0) {
+            if (sig == SIGSEGV) {
+                uint64_t cr2u;
+                __asm__ volatile("mov %%cr2, %0" : "=r"(cr2u));
+                kprintf("[user-segv] rip=%x cr2=%x err=%x name=%s\n",
+                        (uint32_t)r->rip, (uint32_t)cr2u,
+                        (uint32_t)r->err_code, current->name);
+            }
             current->signal_pending |= (1u << sig);
             check_pending_signals(r);
             return;
@@ -96,7 +104,6 @@ void isr_handler(struct Registers *r) {
             kprintf("[pf] kernel touched unmapped user addr 0x%x, killing "
                     "pid %d (%s) eip=0x%x\n",
                     fa, current->pid, current->name, (uint32_t)r->eip);
-            set_text_color(7);
             signal_terminate(current, SIGSEGV);
             return;
         }
@@ -167,6 +174,7 @@ void irq_handler(struct Registers *r) {
     if (irq == 0) {
         irq_eoi(irq);
         tick++;
+        itimer_tick();
         thread_timer_wake();
         if (current != 0) {
             check_pending_signals(r);

@@ -66,6 +66,14 @@ struct task_struct {
     uint32_t tls_selector;
     uint8_t tls_msr;
     int32_t errno;
+    uint32_t pgid;
+    uint32_t umask;
+    uint32_t sid;
+    uint64_t itimer_expire;
+    uint64_t itimer_interval;
+    uint64_t sigalt_sp;
+    uint32_t sigalt_size;
+    uint32_t sigalt_flags;
     uint32_t compat;
     uint32_t stack_magic;
     uint64_t fd_cloexec;

@@ -714,6 +714,46 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             group="musl-lib",
             description="configure+make+install native musl 1.2.6",
         ))
+        TOYBOX_DIR = ROOT / "third_modules" / "toybox"
+        TOYBOX_BIN = TOYBOX_DIR / "toybox"
+        musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
+        if musl_gcc.exists():
+            toybox_cfg = Task(
+                name="toybox-config",
+                cmd=[sh, "-c",
+                     f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                     f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
+                     f"make oldconfig >/dev/null 2>&1; true"],
+                out=TOYBOX_DIR / ".config",
+                deps=[TOYBOX_DIR / "Makefile"],
+                optional=True, group="toybox",
+                description="toybox defconfig",
+            )
+            tasks.append(toybox_cfg)
+            tasks.append(Task(
+                name="toybox-abitag",
+                cmd=[str(musl_gcc), "-c", str(TOYBOX_DIR / "abitag.c"),
+                     "-o", str(TOYBOX_DIR / "abitag.o")],
+                out=TOYBOX_DIR / "abitag.o",
+                deps=[TOYBOX_DIR / "abitag.c"],
+                optional=True, group="toybox",
+                description="toybox GNU ABI-tag note",
+            ))
+            toybox_build = Task(
+                name="toybox-build",
+                cmd=[sh, "-c",
+                     f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                     f"CC={shlex.quote(str(musl_gcc))} "
+                     f"CFLAGS=-static\ -Os make -j4 "
+                     f"> toybox.log 2>&1 || "
+                     f"(tail -20 toybox.log; false)"],
+                out=TOYBOX_BIN,
+                deps=[TOYBOX_DIR / ".config"],
+                optional=True, group="toybox",
+                description="build toybox (static musl)",
+            )
+            tasks.append(toybox_build)
+
         musl_demo_c = task_cc("musl_demo.o", APPS_DIR / "musl_demo.c",
                               BUILD_DIR / "musl_demo.o", tools, MUSL_DEMO_CFLAGS)
         musl_demo_c.optional = True

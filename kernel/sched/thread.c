@@ -92,6 +92,14 @@ static void init_task_struct_basic(struct task_struct *t, int32_t parent_pid) {
     t->tls_selector = 0;
     t->tls_msr = 0;
     t->errno = 0;
+    t->pgid = 0;
+    t->umask = 0o022;
+    t->sid = 0;
+    t->itimer_expire = 0;
+    t->itimer_interval = 0;
+    t->sigalt_sp = 0;
+    t->sigalt_size = 0;
+    t->sigalt_flags = 0;
     t->compat = 0;
     init_signal_state(t);
 

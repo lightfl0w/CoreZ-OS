@@ -855,3 +855,12 @@ static int ext2_lookup_depth(const char *path, uint32_t *ino, int *ftype,
         *ftype = cdir ? FT_DIRECTORY : FT_REGULAR;
     }
 }
+
+void ext2_statfs_info(uint32_t *bsize, uint32_t *blocks, uint32_t *bfree,
+                      uint32_t *files, uint32_t *ffree) {
+    if (bsize) *bsize = bs;
+    if (blocks) *blocks = total_blocks;
+    if (bfree) *bfree = free_blocks;
+    if (files) *files = inodes_per_group;
+    if (ffree) *ffree = free_inodes;
+}

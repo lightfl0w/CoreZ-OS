@@ -33,7 +33,7 @@ FILES = [
     "canary_test.elf",
     "font_subset.ttf", "nr_shell.elf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf"
+    "musl_abi_test.elf", "dev_demo.elf", "toybox"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf"}
 
@@ -123,7 +123,8 @@ def build(build_dir, out, smoke=False):
             pre[name] = src.read_bytes()
     names = [n for n in names if n in pre]
     if smoke:
-        pre["autoexec"] = b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
+        pre["autoexec"] = (b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
+                   b"toybox echo TOYBOX_ECHO_OK\ntoybox ls /\n")
         names.append("autoexec")
 
     ino_map = {}
@@ -168,13 +169,28 @@ def build(build_dir, out, smoke=False):
             cur_block += nblk
             ptrs[0:nblk] = blocks
         else:
-            indirect_blk = cur_block
-            cur_block += 1
             blocks = list(range(cur_block, cur_block + nblk))
             cur_block += nblk
             ptrs[0:12] = blocks[0:12]
-            ptrs[12] = indirect_blk
-            var_indirect.append((indirect_blk, blocks[12:]))
+            n_single = min(nblk - 12, 256)
+            n_double = nblk - 12 - n_single
+            if n_single:
+                sing = cur_block
+                cur_block += 1
+                ptrs[12] = sing
+                var_indirect.append((sing, blocks[12:12 + n_single]))
+            if n_double:
+                dbl = cur_block
+                cur_block += 1
+                n_sub = (n_double + 255) // 256
+                subs = list(range(cur_block, cur_block + n_sub))
+                cur_block += n_sub
+                ptrs[13] = dbl
+                var_indirect.append((dbl, subs))
+                for k, sb in enumerate(subs):
+                    lo = 12 + n_single + k * 256
+                    var_indirect.append(
+                        (sb, blocks[lo:lo + 256]))
         file_ptrs[name] = ptrs
         var_blocks.append((blocks, payload))
 

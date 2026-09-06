@@ -77,7 +77,9 @@
 #define SYS_LINUX_getppid 110
 #define SYS_LINUX_setpgid 109
 #define SYS_LINUX_getpgid 121
-#define SYS_LINUX_setsid 106
+#define SYS_LINUX_setsid 112
+#define SYS_LINUX_umask 95
+#define SYS_LINUX_tkill 200
 #define SYS_LINUX_times 153
 #define SYS_LINUX_arch_prctl 158
 #define SYS_LINUX_sysinfo 179
@@ -88,7 +90,7 @@
 #define SYS_LINUX_clock_getres 228
 #define SYS_LINUX_clock_nanosleep 230
 #define SYS_LINUX_exit_group 231
-#define SYS_LINUX_set_thread_area 234
+#define SYS_LINUX_set_thread_area 205
 #define SYS_LINUX_openat 257
 #define SYS_LINUX_mkdirat 258
 #define SYS_LINUX_symlink 88
@@ -308,6 +310,108 @@ struct LINUX_TIMESPEC {
 struct LINUX_TIMEVAL {
     int64_t tv_sec;
     int64_t tv_usec;
+};
+
+#define SYS_LINUX_getsid 124
+#define SYS_LINUX_sigaltstack 131
+#define SYS_LINUX_getitimer 36
+#define SYS_LINUX_setitimer 38
+#define SYS_LINUX_getrusage 98
+#define SYS_LINUX_rt_sigsuspend 130
+#define SYS_LINUX_tgkill 234
+#define SYS_LINUX_statfs 137
+#define SYS_LINUX_fstatfs 138
+#define SYS_LINUX_waitid 247
+
+#define LINUX_MINSIGSTKSZ 2048
+#define LINUX_SS_ONSTACK 1
+#define LINUX_SS_DISABLE 2
+
+#define LINUX_ITIMER_REAL 0
+#define LINUX_ITIMER_VIRTUAL 1
+#define LINUX_ITIMER_PROF 2
+
+#define LINUX_RUSAGE_SELF 0
+#define LINUX_RUSAGE_CHILDREN -1
+
+#define LINUX_P_ALL 0
+#define LINUX_P_PID 1
+#define LINUX_P_PGID 2
+
+#define LINUX_WNOHANG 1u
+#define LINUX_WUNTRACED 2u
+#define LINUX_WSTOPPED 2u
+#define LINUX_WEXITED 4u
+#define LINUX_WCONTINUED 8u
+#define LINUX_WNOWAIT 0x1000000u
+
+#define LINUX_CLD_EXITED 1
+#define LINUX_CLD_KILLED 2
+#define LINUX_CLD_DUMPED 3
+#define LINUX_CLD_TRAPPED 4
+#define LINUX_CLD_STOPPED 5
+#define LINUX_CLD_CONTINUED 6
+
+#define LINUX_EXT2_SUPER_MAGIC 0xEF53u
+
+struct LINUX_SIGINFO {
+    int32_t si_signo;
+    int32_t si_errno;
+    int32_t si_code;
+    int32_t si_pad0;
+    int32_t si_pid;
+    int32_t si_uid;
+    int32_t si_status;
+    int32_t si_pad1;
+    int64_t si_utime;
+    int64_t si_stime;
+    uint8_t si_pad[80];
+};
+
+struct LINUX_STACK_T {
+    uint64_t ss_sp;
+    int32_t ss_flags;
+    int32_t ss_pad;
+    uint64_t ss_size;
+};
+
+struct LINUX_ITIMERVAL {
+    struct LINUX_TIMEVAL it_interval;
+    struct LINUX_TIMEVAL it_value;
+};
+
+struct LINUX_RUSAGE {
+    struct LINUX_TIMEVAL ru_utime;
+    struct LINUX_TIMEVAL ru_stime;
+    int64_t ru_maxrss;
+    int64_t ru_ixrss;
+    int64_t ru_idrss;
+    int64_t ru_isrss;
+    int64_t ru_minflt;
+    int64_t ru_majflt;
+    int64_t ru_nswap;
+    int64_t ru_inblock;
+    int64_t ru_oublock;
+    int64_t ru_msgsnd;
+    int64_t ru_msgrcv;
+    int64_t ru_nsignals;
+    int64_t ru_nvcsw;
+    int64_t ru_nivcsw;
+};
+
+struct LINUX_STATFS {
+    int64_t f_type;
+    int64_t f_bsize;
+    int64_t f_blocks;
+    int64_t f_bfree;
+    int64_t f_bavail;
+    int64_t f_files;
+    int64_t f_ffree;
+    int64_t f_fsid[2];
+    int64_t f_namelen;
+    int64_t f_frsize;
+    int64_t f_flags;
+    int64_t f_spare[4];
 };
 
 struct LINUX_STAT {

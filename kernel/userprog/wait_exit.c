@@ -1,4 +1,6 @@
 #include "kernel/userprog/wait_exit.h"
+#include "kernel/signal.h"
+#include "kernel/syscall/linux_abi.h"
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
 #include "kernel/mm/bitmap/bitmap.h"
@@ -155,4 +157,62 @@ void proc_exit(struct task_struct *cur, int status) {
 }
 void sys_exit(int32_t status) {
     proc_exit(current, status);
+}
+
+static int waitid_match(struct task_struct *t, int idtype, int32_t id) {
+    if (idtype == LINUX_P_PID) {
+        return t->pid == (uint32_t)id;
+    }
+    if (idtype == LINUX_P_PGID) {
+        return (t->pgid ? t->pgid : t->pid) == (uint32_t)id;
+    }
+    return 1;
+}
+int sys_waitid(int idtype, int32_t id, struct LINUX_SIGINFO *info,
+               uint32_t options) {
+    struct task_struct *parent = current;
+    for (;;) {
+        int any_child = 0;
+        struct list_elem *e = thread_all_list.head.next;
+        while (e != &thread_all_list.tail) {
+            struct task_struct *t =
+                list_entry(e, struct task_struct, all_list_tag);
+            struct list_elem *next = e->next;
+            if (t->parent_pid != (int32_t)parent->pid ||
+                t->status == TASK_DIED) {
+                e = next;
+                continue;
+            }
+            any_child = 1;
+            if (waitid_match(t, idtype, id) && t->status == TASK_HANGING) {
+                if (info != NULL) {
+                    int sig = t->exit_status >= 128 ? t->exit_status - 128 : 0;
+                    info->si_signo = SIGCHLD;
+                    info->si_errno = 0;
+                    info->si_code =
+                        sig ? LINUX_CLD_KILLED : LINUX_CLD_EXITED;
+                    info->si_pid = (int32_t)t->pid;
+                    info->si_uid = 0;
+                    info->si_status = sig ? sig : t->exit_status;
+                    info->si_utime = t->elapsed_ticks;
+                    info->si_stime = 0;
+                }
+                if (!(options & LINUX_WNOWAIT)) {
+                    thread_exit(t, 0);
+                }
+                return 0;
+            }
+            e = next;
+        }
+        if (!any_child) {
+            return -1;
+        }
+        if (options & LINUX_WNOHANG) {
+            if (info != NULL) {
+                info->si_signo = 0;
+            }
+            return 0;
+        }
+        thread_block_with_status(TASK_WAITING);
+    }
 }
