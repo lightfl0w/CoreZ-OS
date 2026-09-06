@@ -78,6 +78,7 @@ int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 uint64_t sys_sigreturn(struct Registers *r);
 
 void check_pending_signals(struct Registers *r);
+void itimer_tick(void);
 
 void signal_terminate(struct task_struct *t, int sig);
 

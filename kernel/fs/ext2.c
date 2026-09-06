@@ -16,13 +16,14 @@ static int ext2_write_to_inode_impl(struct inode *ino, uint32_t off,
 static void ext2_truncate_inode_impl(struct inode *ino);
 static uint32_t ext2_new_inode_impl(uint32_t mode, struct inode *out);
 static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
-                               const char *name, int is_dir);
+                               const char *name, uint8_t dtype);
 static int ext2_remove_entry_impl(struct inode *dino, const char *name);
 static int ext2_read_from_inode_impl(const struct inode *ino, uint32_t off,
                                      void *buf, uint32_t count);
 static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
                               struct dir_entry *out);
-static int ext2_lookup_impl(const char *path, uint32_t *ino, int *is_dir);
+static int ext2_lookup_depth(const char *path, uint32_t *ino, int *ftype,
+                             int follow, int depth);
 static struct disk *disk = NULL;
 static struct partition *part = NULL;
 static uint32_t start = 0;
@@ -483,13 +484,18 @@ static uint32_t ext2_new_inode_impl(uint32_t mode, struct inode *out) {
 
 int ext2_add_entry(struct inode *dino, uint32_t ino, const char *name,
                    int is_dir) {
+    return ext2_add_entry_dt(dino, ino, name,
+                             is_dir ? (uint8_t)EXT2_DT_DIR : 1u);
+}
+int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
+                      uint8_t dtype) {
     lock_acquire(&ext2_lock);
-    int rc = ext2_add_entry_impl(dino, ino, name, is_dir);
+    int rc = ext2_add_entry_impl(dino, ino, name, dtype);
     lock_release(&ext2_lock);
     return rc;
 }
 static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
-                               const char *name, int is_dir) {
+                               const char *name, uint8_t dtype) {
     uint32_t nl = (uint32_t)strlen(name);
     if (nl == 0 || nl >= 255u) {
         return -1;
@@ -532,7 +538,7 @@ static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
             de->inode = ino;
             de->rec_len = (uint16_t)slot_rec;
             de->name_len = (uint8_t)nl;
-            de->file_type = is_dir ? (uint8_t)EXT2_DT_DIR : 1u;
+            de->file_type = dtype;
             memcpy(de->name, name, nl);
             ext2_write_block(addr, blk);
             free_kernel_page((uint32_t)blk);
@@ -551,7 +557,7 @@ static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
     de->inode = ino;
     de->rec_len = (uint16_t)bs;
     de->name_len = (uint8_t)nl;
-    de->file_type = is_dir ? (uint8_t)EXT2_DT_DIR : 1u;
+    de->file_type = dtype;
     memcpy(de->name, name, nl);
     ext2_write_block(naddr, blk);
     dino->i_size += bs;
@@ -689,8 +695,10 @@ static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
                 memset(out->filename, 0, MAX_FILE_NAME_LEN);
                 memcpy(out->filename, de->name, nl);
                 out->i_no = de->inode;
-                out->f_type =
-                    (de->file_type == EXT2_DT_DIR) ? FT_DIRECTORY : FT_REGULAR;
+                out->f_type = de->file_type == EXT2_DT_DIR  ? FT_DIRECTORY
+                              : de->file_type == 2u         ? FT_CHARDEVICE
+                              : de->file_type == 7u         ? FT_SYMLINK
+                                                            : FT_REGULAR;
                 *pos = abs + rec_len;
                 free_kernel_page((uint32_t)blk);
                 return 0;
@@ -704,72 +712,155 @@ static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
 }
 
 static int ext2_find_in_dir(const struct inode *dino, const char *name,
-                            uint32_t *child, int *is_dir) {
+                            uint32_t *child, int *ftype) {
     uint32_t pos = 0;
     struct dir_entry de;
     while (ext2_dir_next(dino, &pos, &de) == 0) {
         if (strcmp(de.filename, name) == 0) {
             *child = de.i_no;
-            *is_dir = (de.f_type == FT_DIRECTORY);
+            *ftype = (int)de.f_type;
             return 0;
         }
     }
     return -1;
 }
 
+static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
+    struct inode node;
+    if (ext2_read_inode_impl(ino, &node) ||
+        (node.i_mode & 0xF000u) != 0xA000u) {
+        return -1;
+    }
+    uint32_t len = node.i_size < cap - 1 ? node.i_size : cap - 1;
+    if (node.i_size < 60u) {
+        memcpy(buf, &node.i_block[0], len);
+    } else if (ext2_read_from_inode_impl(&node, 0, buf, len) != (int)len) {
+        return -1;
+    }
+    buf[len] = 0;
+    return (int)len;
+}
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir) {
+    int ft = 0;
     lock_acquire(&ext2_lock);
-    int rc = ext2_lookup_impl(path, ino, is_dir);
+    int rc = ext2_lookup_depth(path, ino, &ft, 1, 8);
+    lock_release(&ext2_lock);
+    *is_dir = (ft == FT_DIRECTORY);
+    return rc;
+}
+int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow) {
+    lock_acquire(&ext2_lock);
+    int rc = ext2_lookup_depth(path, ino, ftype, follow, 8);
     lock_release(&ext2_lock);
     return rc;
 }
-static int ext2_lookup_impl(const char *path, uint32_t *ino, int *is_dir) {
+int ext2_read_link_target(uint32_t ino, char *buf, uint32_t cap) {
+    lock_acquire(&ext2_lock);
+    int rc = ext2_read_target(ino, buf, cap);
+    lock_release(&ext2_lock);
+    return rc;
+}
+static int ext2_lookup_depth(const char *path, uint32_t *ino, int *ftype,
+                             int follow, int depth) {
     if (disk == NULL || path == NULL || path[0] != '/') {
         return -1;
     }
-    *ino = 2;
-    *is_dir = 1;
-    const char *p = path;
-    while (*p == '/') {
-        p++;
-    }
-    if (*p == 0) {
-        return 0;
-    }
-    struct inode cur;
-    if (ext2_read_inode(2, &cur)) {
+    char cur[MAX_PATH_LEN];
+    uint32_t clen = (uint32_t)strlen(path);
+    if (clen >= MAX_PATH_LEN) {
         return -1;
     }
+    memcpy(cur, path, clen + 1);
     for (;;) {
-        char comp[MAX_FILE_NAME_LEN];
-        uint32_t ci = 0;
-        while (*p && *p != '/' && ci < MAX_FILE_NAME_LEN - 1) {
-            comp[ci++] = *p++;
-        }
-        comp[ci] = 0;
-        if (ci == 0) {
-            break;
-        }
-
-        uint32_t child = 0;
-        int cd = 0;
-        if (ext2_find_in_dir(&cur, comp, &child, &cd)) {
+        if (--depth < 0) {
             return -1;
         }
-        *ino = child;
-        *is_dir = cd;
+        uint32_t cino = 2;
+        int cdir = 1;
+        *ino = 2;
+        *ftype = FT_DIRECTORY;
+        const char *p = cur;
         while (*p == '/') {
             p++;
         }
         if (*p == 0) {
             return 0;
         }
-        if (!cd) {
+        struct inode node;
+        if (ext2_read_inode_impl(2, &node)) {
             return -1;
         }
-        if (ext2_read_inode(child, &cur)) {
-            return -1;
+        for (;;) {
+            const char *cstart = p;
+            char comp[MAX_FILE_NAME_LEN];
+            uint32_t ci = 0;
+            while (*p && *p != '/' && ci < MAX_FILE_NAME_LEN - 1) {
+                comp[ci++] = *p++;
+            }
+            comp[ci] = 0;
+            if (ci == 0) {
+                break;
+            }
+            uint32_t child = 0;
+            int ft = 0;
+            if (ext2_find_in_dir(&node, comp, &child, &ft)) {
+                return -1;
+            }
+            if (ft == FT_SYMLINK) {
+                char tgt[MAX_PATH_LEN];
+                if (!follow || ext2_read_target(child, tgt, MAX_PATH_LEN) < 0) {
+                    *ino = child;
+                    *ftype = ft;
+                    cdir = 0;
+                    return 0;
+                }
+                char np[MAX_PATH_LEN];
+                uint32_t plen = (uint32_t)(cstart - cur);
+                uint32_t tlen = (uint32_t)strlen(tgt);
+                if (tgt[0] == '/') {
+                    plen = 0;
+                } else {
+                    while (plen > 1 && cur[plen - 1] == '/') {
+                        plen--;
+                    }
+                }
+                if (plen + tlen + 2 > MAX_PATH_LEN) {
+                    return -1;
+                }
+                memcpy(np, cur, plen);
+                if (plen > 1 || (plen == 1 && cur[0] != '/')) {
+                    np[plen++] = '/';
+                } else if (plen == 0) {
+                    np[plen++] = '/';
+                }
+                memcpy(np + plen, tgt, tlen + 1);
+                memcpy(cur, np, plen + tlen + 1);
+                break;
+            }
+            cino = child;
+            cdir = (ft == FT_DIRECTORY);
+            while (*p == '/') {
+                p++;
+            }
+            if (*p == 0) {
+                *ino = cino;
+                *ftype = ft;
+                return 0;
+            }
+            if (!cdir || ext2_read_inode_impl(child, &node)) {
+                return -1;
+            }
         }
+        *ino = cino;
+        *ftype = cdir ? FT_DIRECTORY : FT_REGULAR;
     }
-    return -1;
+}
+
+void ext2_statfs_info(uint32_t *bsize, uint32_t *blocks, uint32_t *bfree,
+                      uint32_t *files, uint32_t *ffree) {
+    if (bsize) *bsize = bs;
+    if (blocks) *blocks = total_blocks;
+    if (bfree) *bfree = free_blocks;
+    if (files) *files = inodes_per_group;
+    if (ffree) *ffree = free_inodes;
 }

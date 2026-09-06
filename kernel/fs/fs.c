@@ -112,8 +112,8 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
         return -1;
     }
     uint32_t tino = 0;
-    int tdir = 0;
-    if (ext2_lookup(pathname, &tino, &tdir) == 0) {
+    int tft = 0;
+    if (ext2_lookup_ftype(pathname, &tino, &tft, 0) == 0) {
         return -1;
     }
     struct inode par;
@@ -132,7 +132,12 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
             return -1;
         }
     }
-    if (ext2_add_entry(&par, ino, base, is_dir)) {
+    uint32_t fmt = mode & 0xF000u;
+    uint8_t dt = fmt == 0x4000u ? EXT2_DT_DIR
+                : fmt == 0xA000u ? EXT2_DT_LNK
+                : fmt == 0x2000u ? 2u
+                                 : 1u;
+    if (ext2_add_entry_dt(&par, ino, base, dt)) {
         ext2_free_best_effort(&newi);
         return -1;
     }
@@ -143,15 +148,69 @@ static void ext2_free_best_effort(struct inode *ino) {
     ext2_write_inode(ino->i_no, ino);
     ext2_free_inode(ino->i_no);
 }
+int fs_is_chardev(const struct inode *ino) {
+    return ino != NULL && (ino->i_mode & 0xF000u) == 0x2000u;
+}
+uint32_t fs_chardev_dev(const struct inode *ino) {
+    return ino->i_block[0];
+}
+int32_t sys_symlink(const char *target, const char *linkpath) {
+    if (target == NULL || linkpath == NULL) {
+        return -1;
+    }
+    uint32_t tlen = (uint32_t)strlen(target);
+    if (tlen == 0 || tlen >= MAX_PATH_LEN) {
+        return -1;
+    }
+    uint32_t ino = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(linkpath, &ino, &ft, 0) == 0) {
+        return -1;
+    }
+    ino = (uint32_t)ext2_create_common(linkpath, 0xA1FFu, 0);
+    if ((int32_t)ino <= 0) {
+        return -1;
+    }
+    struct inode node;
+    if (ext2_read_inode(ino, &node)) {
+        return -1;
+    }
+    if (tlen < 60u) {
+        memset(node.i_block, 0, sizeof(node.i_block));
+        memcpy(&node.i_block[0], target, tlen);
+        node.i_size = tlen;
+    } else if (ext2_write_to_inode(&node, 0, target, tlen) != (int)tlen) {
+        ext2_free_best_effort(&node);
+        return -1;
+    }
+    return ext2_write_inode(ino, &node) ? -1 : 0;
+}
+int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev) {
+    if (path == NULL || (mode & 0xF000u) != 0x2000u) {
+        return -1;
+    }
+    uint32_t ino = 0;
+    int is_dir = 0;
+    if (ext2_lookup(path, &ino, &is_dir) == 0) {
+        return -1;
+    }
+    ino = (uint32_t)ext2_create_common(path, mode, 0);
+    if ((int32_t)ino <= 0) {
+        return -1;
+    }
+    struct inode node;
+    if (ext2_read_inode(ino, &node)) {
+        return -1;
+    }
+    node.i_block[0] = dev;
+    return ext2_write_inode(ino, &node) ? -1 : 0;
+}
 int open_file(const char *pathname, uint8_t flags) {
     if (pathname == NULL || pathname[strlen(pathname) - 1] == '/') {
         return -1;
     }
     if (proc_match(pathname)) {
         return proc_open(pathname, flags);
-    }
-    if (!strcmp(pathname, "/dev/console") || !strcmp(pathname, "/dev/tty")) {
-        return tty_open();
     }
     uint32_t ino = 0;
     int is_dir = 0;
@@ -180,6 +239,12 @@ int open_file(const char *pathname, uint8_t flags) {
     if (file->fd_inode == NULL) {
         file_table_free_slot(gfd);
         return -1;
+    }
+    if (fs_is_chardev(file->fd_inode) &&
+        (fs_chardev_dev(file->fd_inode) >> 8) == 5u) {
+        inode_close(file->fd_inode);
+        file_table_free_slot(gfd);
+        return fd_install(0);
     }
     file->ref_cnt = 1;
     int fd = fd_install(gfd);
@@ -336,7 +401,7 @@ int32_t sys_mkdir(const char *pathname) {
         return -1;
     }
     int r = ext2_create_common(pathname, 0x4000u, 1);
-    return r ? 0 : -1;
+    return r > 0 ? 0 : -1;
 }
 struct dir *sys_opendir(const char *name) {
     uint32_t ino = 0;
@@ -482,8 +547,10 @@ int32_t sys_stat(const char *path, struct stat *buf) {
         return -1;
     }
     buf->st_size = obj->i_size;
+    buf->st_filetype = fs_is_chardev(obj) ? FT_CHARDEVICE
+                       : is_dir           ? FT_DIRECTORY
+                                          : FT_REGULAR;
     inode_close(obj);
-    buf->st_filetype = is_dir ? FT_DIRECTORY : FT_REGULAR;
     buf->st_ino = ino;
     return 0;
 }

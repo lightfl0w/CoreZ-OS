@@ -144,11 +144,24 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     return (int32_t)written;
 }
 int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
-    (void)path;
-    (void)buf;
-    (void)bufsiz;
-    current->errno = 2;
-    return -1;
+    if (path == NULL || buf == NULL || bufsiz == 0) {
+        return -1;
+    }
+    uint32_t ino = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(path, &ino, &ft, 0) || ft != FT_SYMLINK) {
+        current->errno = 22;
+        return -1;
+    }
+    char kbuf[MAX_PATH_LEN];
+    int len = ext2_read_link_target(ino, kbuf, MAX_PATH_LEN);
+    if (len < 0) {
+        current->errno = 22;
+        return -1;
+    }
+    uint32_t n = (uint32_t)len < bufsiz ? (uint32_t)len : bufsiz;
+    memcpy(buf, kbuf, n);
+    return (int32_t)n;
 }
 int32_t sys_access(const char *path, int32_t mode) {
     if (path == NULL) {
