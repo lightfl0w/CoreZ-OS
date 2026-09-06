@@ -59,6 +59,12 @@ pid_t sys_clone(struct Registers *r) {
     child->compat = parent->compat;
     child->pgid = parent->pgid ? parent->pgid : parent->pid;
     child->sid = parent->sid;
+    child->uid = parent->uid;
+    child->gid = parent->gid;
+    child->euid = parent->euid;
+    child->egid = parent->egid;
+    child->suid = parent->suid;
+    child->sgid = parent->sgid;
     if (child_user_stack == 0) {
         for (uint32_t v = USER_STACK_BOTTOM - PAGE_SIZE; v > USER_VADDR_START;
              v -= PAGE_SIZE) {

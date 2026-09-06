@@ -79,6 +79,18 @@ def build_dirent_blocks(entries, block=BLOCK):
 DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
              ("console", 5, 1)]
 
+EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
+              ("tmp", 0x41ED | 0o777)]
+
+ETC_FILES = [
+    ("passwd",
+     b"root:x:0:0:root:/:/toybox\nuser:x:1000:1000:user:/home/user:/toybox\n",
+     0x81A4 & ~0o777 | 0o644, 0, 0),
+    ("group", b"root:x:0:\nuser:x:1000:\n", 0x81A4 & ~0o777 | 0o644, 0, 0),
+    ("shadow", b"root::0:0:99999:7:::\nuser::0:0:99999:7:::\n",
+     0x81A4 & ~0o777 | 0o600, 0, 0),
+]
+
 
 SYMLINKS = [("catlink", "/cat.elf"),
             ("longlink", "/cat.elf" + "/sub/dir/padding/xyz" * 3)]
@@ -94,10 +106,14 @@ def put_symlink(table, ino, target, block):
         struct.pack_into("<I", table, off + 40, block)
 
 
-def put_inode(table, ino, payload_len, blocks, is_dir, rdev=0):
+def put_inode(table, ino, payload_len, blocks, is_dir, rdev=0, uid=0, gid=0,
+              mode=None):
     off = (ino - 1) * INODE_SIZE
-    mode = 0x41ED if is_dir else (0x21B6 if rdev else 0x81A4)
-    struct.pack_into("<H", table, off + 0, mode)
+    m = mode if mode is not None else (0x41ED if is_dir else
+                                       (0x21B6 if rdev else 0x81A4))
+    struct.pack_into("<H", table, off + 0, m)
+    struct.pack_into("<H", table, off + 2, uid)
+    struct.pack_into("<H", table, off + 24, gid)
     struct.pack_into("<I", table, off + 4, payload_len)
     struct.pack_into("<H", table, off + 26, 2)
     for i in range(15):
@@ -124,7 +140,8 @@ def build(build_dir, out, smoke=False):
     names = [n for n in names if n in pre]
     if smoke:
         pre["autoexec"] = (b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
-                   b"toybox echo TOYBOX_ECHO_OK\ntoybox ls /\n")
+                   b"toybox echo TOYBOX_ECHO_OK\n"
+                   b"toybox id\ntoybox ls -l /etc/passwd\ntoybox ls /\n")
         names.append("autoexec")
 
     ino_map = {}
@@ -148,6 +165,19 @@ def build(build_dir, out, smoke=False):
     for i, (name, maj, mnr) in enumerate(DEV_NODES):
         dev_entries.append((dev_ino + 1 + i, 3, name))
     dir_entries.append((dev_ino, 2, "dev"))
+
+    dir_inos = {}
+    for name, _ in EXTRA_DIRS:
+        dir_inos[name] = next_ino
+        dir_entries.append((next_ino, 2, name))
+        next_ino += 1
+    etc_ino = dir_inos["etc"]
+    etc_entries = [(etc_ino, 2, "."), (etc_ino, 2, "..")]
+    file_uids = {}
+    for name, payload, mode, uid, gid in ETC_FILES:
+        file_uids[name] = (next_ino, payload, mode, uid, gid)
+        etc_entries.append((next_ino, 1, name))
+        next_ino += 1
 
     used_inodes = next_ino - 1
 
@@ -199,18 +229,38 @@ def build(build_dir, out, smoke=False):
             link_blk_list[i] = cur_block
             cur_block += 1
 
+    dir_blk_list = {}
+    for name, _ in EXTRA_DIRS:
+        dir_blk_list[name] = cur_block
+        cur_block += 1
+    etc_dir_block = cur_block
+    cur_block += 1
+    etc_file_payloads = []
+    for name, payload, mode, uid, gid in ETC_FILES:
+        nblk = (len(payload) + BLOCK - 1) // BLOCK
+        blks = list(range(cur_block, cur_block + nblk))
+        cur_block += nblk
+        etc_file_payloads.append((blks, payload))
     dev_dir_block = cur_block
     cur_block += 1
 
     itable = bytearray(ITABLE_BLOCKS * BLOCK)
     put_inode(itable, 2, len(root_dir),
               [root_block + i for i in range(n_root_blks)], True)
+    for name, dmode in EXTRA_DIRS:
+        put_inode(itable, dir_inos[name], BLOCK, [dir_blk_list[name]], True,
+                  mode=dmode)
+    put_inode(itable, etc_ino, BLOCK, [etc_dir_block], True, mode=0o40755)
     for i, (_, tgt) in enumerate(SYMLINKS):
         put_symlink(itable, link_ino + i, tgt, link_blk_list[i])
     put_inode(itable, dev_ino, BLOCK, [dev_dir_block], True)
     for i, (_, maj, mnr) in enumerate(DEV_NODES):
         put_inode(itable, dev_ino + 1 + i, 0, [], False,
                   rdev=(maj << 8) | mnr)
+    for idx2, (name, payload, mode, uid, gid) in enumerate(ETC_FILES):
+        blks = etc_file_payloads[idx2][0]
+        put_inode(itable, file_uids[name][0], len(payload), blks, False,
+                  mode=mode, uid=uid, gid=gid)
     for name in names:
         put_inode(itable, ino_map[name], len(pre[name]),
                   file_ptrs[name], False)
@@ -224,6 +274,10 @@ def build(build_dir, out, smoke=False):
         used_blocks.add(iblk)
     used_blocks.update(b for b in link_blk_list if b)
     used_blocks.add(dev_dir_block)
+    used_blocks.add(etc_dir_block)
+    used_blocks.update(dir_blk_list.values())
+    for blks, _ in etc_file_payloads:
+        used_blocks.update(blks)
     total_blocks = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
     free_blocks = total_blocks - len(used_blocks)
 
@@ -276,6 +330,15 @@ def build(build_dir, out, smoke=False):
         f.write(root_dir)
         f.seek(base * SECTOR + dev_dir_block * BLOCK)
         f.write(dev_dir)
+        for name, _ in EXTRA_DIRS:
+            ino = dir_inos[name]
+            f.seek(base * SECTOR + dir_blk_list[name] * BLOCK)
+            f.write(build_dirent_blocks([(ino, 2, "."), (ino, 2, "..")]))
+        f.seek(base * SECTOR + etc_dir_block * BLOCK)
+        f.write(build_dirent_blocks(etc_entries))
+        for (blks, payload) in etc_file_payloads:
+            f.seek(base * SECTOR + blks[0] * BLOCK)
+            f.write(payload)
         for i, (_, tgt) in enumerate(SYMLINKS):
             if link_blk_list[i]:
                 f.seek(base * SECTOR + link_blk_list[i] * BLOCK)

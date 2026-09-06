@@ -140,6 +140,12 @@ pid_t sys_fork(struct Registers *r) {
     child->compat = parent->compat;
     child->pgid = parent->pgid ? parent->pgid : parent->pid;
     child->sid = parent->sid;
+    child->uid = parent->uid;
+    child->gid = parent->gid;
+    child->euid = parent->euid;
+    child->egid = parent->egid;
+    child->suid = parent->suid;
+    child->sgid = parent->sgid;
     for (int i = 0; i < NSIG; i++) {
         child->sigactions[i] = parent->sigactions[i];
     }

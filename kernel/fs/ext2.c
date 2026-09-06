@@ -44,6 +44,11 @@ static int ext2_read_block(uint32_t blk, void *buf) {
     if (disk == NULL) {
         return -1;
     }
+    if (blk >= total_blocks && total_blocks != 0) {
+        kprintf("[ext2] read out-of-range block %d (total %d)\n", blk,
+                total_blocks);
+        return -1;
+    }
     BLOCK.read_sectors(disk, start + blk * sect_per_block, buf,
                        sect_per_block);
     return 0;
@@ -134,7 +139,9 @@ static int ext2_read_inode_impl(uint32_t ino, struct inode *out) {
     memset(out, 0, sizeof(struct inode));
     out->i_no = ino;
     out->i_mode = (uint32_t)(*(uint16_t *)(p + 0));
+    out->i_uid = *(uint16_t *)(p + 2);
     out->i_size = *(uint32_t *)(p + 4);
+    out->i_gid = *(uint16_t *)(p + 24);
     uint32_t bi = 0;
     for (bi = 0; bi < 15; bi++) {
         out->i_block[bi] = *(uint32_t *)(p + 40 + 4 * bi);
@@ -271,6 +278,8 @@ static int ext2_write_inode_impl(uint32_t ino, const struct inode *in) {
     ext2_read_block(blk, buf);
     uint8_t *p = buf + off;
     *(uint16_t *)(p + 0) = (uint16_t)in->i_mode;
+    *(uint16_t *)(p + 2) = (uint16_t)in->i_uid;
+    *(uint16_t *)(p + 24) = (uint16_t)in->i_gid;
     *(uint32_t *)(p + 4) = in->i_size;
     for (uint32_t bi = 0; bi < 15; bi++) {
         *(uint32_t *)(p + 40 + 4 * bi) = in->i_block[bi];

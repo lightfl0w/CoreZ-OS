@@ -93,6 +93,12 @@ static void init_task_struct_basic(struct task_struct *t, int32_t parent_pid) {
     t->tls_msr = 0;
     t->errno = 0;
     t->pgid = 0;
+    t->uid = 0;
+    t->gid = 0;
+    t->euid = 0;
+    t->egid = 0;
+    t->suid = 0;
+    t->sgid = 0;
     t->umask = 0o022;
     t->sid = 0;
     t->itimer_expire = 0;

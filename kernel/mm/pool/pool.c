@@ -92,9 +92,11 @@ void mm_init(void) {
     {
         extern char _kernel_phys_start;
         extern char _kernel_phys_end;
-        mark_used((uint32_t)(uintptr_t)&_kernel_phys_start,
-                  (uint32_t)((uintptr_t)&_kernel_phys_end -
-                             (uintptr_t)&_kernel_phys_start));
+        uint32_t koff = (uint32_t)(uintptr_t)&_kernel_phys_start - 0x200000u;
+        uint32_t kspan =
+            (uint32_t)((uintptr_t)&_kernel_phys_end -
+                       (uintptr_t)&_kernel_phys_start);
+        mark_used(kernel_kphys + koff, kspan);
     }
 
     {

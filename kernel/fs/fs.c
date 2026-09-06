@@ -125,6 +125,9 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     if (ino == 0) {
         return -1;
     }
+    newi.i_uid = current->euid;
+    newi.i_gid = current->egid;
+    ext2_write_inode(ino, &newi);
     if (is_dir) {
         if (ext2_add_entry(&newi, ino, ".", 1) ||
             ext2_add_entry(&newi, pino, "..", 1)) {
@@ -184,6 +187,49 @@ int32_t sys_symlink(const char *target, const char *linkpath) {
         return -1;
     }
     return ext2_write_inode(ino, &node) ? -1 : 0;
+}
+static int fs_stat_node(uint32_t ino_no, uint32_t *size, uint32_t *mode,
+                        uint32_t *uid, uint32_t *gid) {
+    struct inode obj;
+    if (ext2_read_inode(ino_no, &obj))
+        return -1;
+    if (size) *size = obj.i_size;
+    if (mode) *mode = obj.i_mode;
+    if (uid) *uid = obj.i_uid;
+    if (gid) *gid = obj.i_gid;
+    return 0;
+}
+int fs_stat_full(const char *path, uint32_t *ino_out, uint32_t *size,
+                 uint32_t *mode, uint32_t *uid, uint32_t *gid) {
+    uint32_t ino_no = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(path, &ino_no, &ft, 1))
+        return -1;
+    if (fs_stat_node(ino_no, size, mode, uid, gid))
+        return -1;
+    if (mode) {
+        *mode = (*mode & ~0xF000u) |
+                (ft == FT_DIRECTORY    ? 0x4000u
+                 : ft == FT_CHARDEVICE ? 0x2000u
+                 : ft == FT_SYMLINK    ? 0xA000u
+                                       : 0x8000u);
+    }
+    if (ino_out) *ino_out = ino_no;
+    return 0;
+}
+int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
+    uint32_t ino_no = 0;
+    int ft = 0;
+    if (path == NULL || ext2_lookup_ftype(path, &ino_no, &ft, 1))
+        return -1;
+    struct inode obj;
+    if (ext2_read_inode(ino_no, &obj))
+        return -1;
+    if (uid != (uint32_t)-1)
+        obj.i_uid = (uint16_t)uid;
+    if (gid != (uint32_t)-1)
+        obj.i_gid = (uint16_t)gid;
+    return ext2_write_inode(ino_no, &obj) ? -1 : 0;
 }
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev) {
     if (path == NULL || (mode & 0xF000u) != 0x2000u) {

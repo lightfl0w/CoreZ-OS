@@ -535,6 +535,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("mmap_demo",   "mmap_demo.c",   "_start", []),
         ("mmap2_demo",  "mmap2_demo.c",  "_start", []),
         ("dev_demo",    "dev_demo.c",    "_start", []),
+        ("dev_demo",    "dev_demo.c",    "_start", []),
         ("futex_demo",  "futex_demo.c",  "_start", []),
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
         ("clone_demo",  "clone_demo.c",  "_start", []),
@@ -713,6 +714,53 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             optional=True,
             group="musl-lib",
             description="configure+make+install native musl 1.2.6",
+        ))
+
+        TOYBOX_DIR = ROOT / "third_modules" / "toybox"
+        _musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
+        _toybox_pre = f"test -x {shlex.quote(str(_musl_gcc))} || exit 0; "
+        tasks.append(Task(
+            name="toybox-config",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                 f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
+                 f"make oldconfig >/dev/null 2>&1; true"],
+            out=TOYBOX_DIR / ".config",
+            deps=[TOYBOX_DIR / "Makefile"],
+            optional=True, group="toybox",
+            description="toybox defconfig",
+        ))
+        tasks.append(Task(
+            name="toybox-abitag",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"{shlex.quote(str(_musl_gcc))} -c "
+                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.c'))} -o "
+                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.o'))}"],
+            out=TOYBOX_DIR / "abitag.o",
+            deps=[TOYBOX_DIR / "abitag.c"],
+            optional=True, group="toybox",
+            description="toybox GNU ABI-tag note",
+        ))
+        _toybox_ld = shlex.quote("-static " +
+                                 str(TOYBOX_DIR / "abitag.o") +
+                                 " -Wl,-Ttext-segment=0x8048000")
+        tasks.append(Task(
+            name="toybox-build",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                 f"CC={shlex.quote(str(_musl_gcc))} "
+                 f"CFLAGS={shlex.quote('-static -Os')} "
+                 f"LDFLAGS={_toybox_ld} "
+                 f"make -j4 > toybox.log 2>&1 || "
+                 f"(tail -20 toybox.log; false) && "
+                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))}"],
+            out=BUILD_DIR / "toybox",
+            deps=[TOYBOX_DIR / ".config", TOYBOX_DIR / "toybox"],
+            optional=True, group="toybox",
+            description="build toybox (static musl)",
         ))
         TOYBOX_DIR = ROOT / "third_modules" / "toybox"
         TOYBOX_BIN = TOYBOX_DIR / "toybox"
@@ -946,6 +994,13 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
                 update(i, t.description)
     s += 1
 
+    console.step_header(s, total_steps, "Building toybox")
+    toybox_tasks = [t for t in plan.tasks if t.group == "toybox"]
+    with console.progress(len(toybox_tasks), "toybox", Ansi.BR_BLU) as update:
+        for i, t in enumerate(toybox_tasks, 1):
+            run_task(t)
+            update(i, t.description)
+    s += 1
     console.step_header(s, total_steps, "Generating font subset")
     font_py = [t for t in plan.tasks if t.group == "python" and "font" in t.name]
     with console.progress(len(font_py), "font", Ansi.BR_MAG) as update:
