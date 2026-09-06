@@ -185,6 +185,13 @@ int main(int argc, char **argv) {
     int ss2 = sigsuspend(&empty);
     printf("[abi] sigsuspend r=%d errno=%d handler=%d\n", ss2, errno,
            usr1_flag);
+    int su = setuid(1000);
+    int shfd = open("/etc/shadow", O_RDONLY);
+    int pwfd = open("/etc/passwd", O_RDONLY);
+    printf("[abi] perm: setuid=%d shadow-errno=%d passwd-ok=%d uid=%d\n",
+           su, shfd < 0 ? errno : 0, pwfd >= 0, (int)getuid());
+    if (shfd >= 0) close(shfd);
+    if (pwfd >= 0) close(pwfd);
     printf("[abi] ALL PASS\n");
     return 0;
 }

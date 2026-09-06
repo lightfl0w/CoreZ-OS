@@ -12,6 +12,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
+#include "kernel/fs/file.h"
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 #define PF_X 0x1
@@ -295,6 +296,17 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
     uint32_t image_end = 0;
     unsigned char ident[16];
     int32_t fd = open_file(pathname, O_RDONLY);
+    {
+        uint32_t gfd = fd_local2global((uint32_t)fd);
+        struct file *xf = file_get(gfd);
+        if (xf == NULL || xf->fd_inode == NULL ||
+            fs_check_perm(xf->fd_inode, 1u)) {
+            if (fd >= 0)
+                close_file(fd);
+            current->errno = 13;
+            return -1;
+        }
+    }
     if (fd == -1) {
         return -1;
     }

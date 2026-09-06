@@ -120,6 +120,10 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     if (ext2_read_inode(pino, &par)) {
         return -1;
     }
+    if (fs_check_perm(&par, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
     struct inode newi;
     uint32_t ino = ext2_new_inode(mode, &newi);
     if (ino == 0) {
@@ -150,6 +154,24 @@ static void ext2_free_best_effort(struct inode *ino) {
     ext2_truncate_inode(ino);
     ext2_write_inode(ino->i_no, ino);
     ext2_free_inode(ino->i_no);
+}
+int fs_check_perm(const struct inode *ino, uint32_t bits) {
+    struct task_struct *cur = current;
+    if (cur->euid == 0) {
+        if ((bits & 1u) && !(ino->i_mode & 0111u))
+            return -1;
+        return 0;
+    }
+    uint32_t shift;
+    if (cur->euid == ino->i_uid)
+        shift = 6;
+    else if (cur->egid == ino->i_gid)
+        shift = 3;
+    else
+        shift = 0;
+    if (((ino->i_mode >> shift) & 7u & bits) != bits)
+        return -1;
+    return 0;
 }
 int fs_is_chardev(const struct inode *ino) {
     return ino != NULL && (ino->i_mode & 0xF000u) == 0x2000u;
@@ -283,6 +305,16 @@ int open_file(const char *pathname, uint8_t flags) {
     file->fd_flag = flags;
     file->fd_inode = inode_open(cur_part, ino);
     if (file->fd_inode == NULL) {
+        file_table_free_slot(gfd);
+        return -1;
+    }
+    uint32_t low = flags & 3u;
+    uint32_t need = (low == O_WRONLY) ? 2u : 4u;
+    if (low == O_RDWR)
+        need |= 2u;
+    if (fs_check_perm(file->fd_inode, need)) {
+        current->errno = 13;
+        inode_close(file->fd_inode);
         file_table_free_slot(gfd);
         return -1;
     }
@@ -427,6 +459,10 @@ static int remove_entry_common(const char *pathname, int want_dir,
     if (ext2_read_inode(pino, &par) || ext2_read_inode(ino, &obj)) {
         return -1;
     }
+    if (fs_check_perm(&par, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
     if (check_empty && !ext2_dir_is_empty(&obj)) {
         return -1;
     }
@@ -459,6 +495,14 @@ struct dir *sys_opendir(const char *name) {
         return NULL;
     }
     if (!is_dir) {
+        return NULL;
+    }
+    struct inode obj;
+    if (ext2_read_inode(ino, &obj)) {
+        return NULL;
+    }
+    if (fs_check_perm(&obj, 4u)) {
+        current->errno = 13;
         return NULL;
     }
     return dir_open(cur_part, ino);
@@ -565,6 +609,14 @@ int32_t sys_chdir(const char *path) {
     uint32_t ino = 0;
     int is_dir = 0;
     if (ext2_lookup(path, &ino, &is_dir) || !is_dir) {
+        return -1;
+    }
+    struct inode obj;
+    if (ext2_read_inode(ino, &obj)) {
+        return -1;
+    }
+    if (fs_check_perm(&obj, 1u)) {
+        current->errno = 13;
         return -1;
     }
     current->cwd_inode_nr = ino;

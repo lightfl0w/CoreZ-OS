@@ -167,13 +167,22 @@ int32_t sys_access(const char *path, int32_t mode) {
     if (path == NULL) {
         return -1;
     }
-    (void)mode;
-    if (proc_access(path) == 0) {
+    if (proc_match(path)) {
         return 0;
     }
-    int inode_no = search_file(path);
-    if (inode_no == -1) {
+    uint32_t ino_no = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(path, &ino_no, &ft, 1)) {
         current->errno = 2;
+        return -1;
+    }
+    struct inode obj;
+    if (ext2_read_inode(ino_no, &obj)) {
+        return -1;
+    }
+    uint32_t bits = (uint32_t)mode & 7u;
+    if (fs_check_perm(&obj, bits)) {
+        current->errno = 13;
         return -1;
     }
     return 0;

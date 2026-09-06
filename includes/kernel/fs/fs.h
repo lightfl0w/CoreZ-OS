@@ -63,6 +63,7 @@ int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid);
 int fs_stat_full(const char *path, uint32_t *ino_no, uint32_t *size,
                  uint32_t *mode, uint32_t *uid, uint32_t *gid);
 int32_t sys_symlink(const char *target, const char *linkpath);
+int fs_check_perm(const struct inode *ino, uint32_t bits);
 int fs_is_chardev(const struct inode *ino);
 uint32_t fs_chardev_dev(const struct inode *ino);
 
