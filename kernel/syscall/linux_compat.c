@@ -3,6 +3,7 @@
 #include "drivers/char/console/io.h"
 #include "drivers/char/keyboard.h"
 #include "drivers/char/tty.h"
+#include "drivers/net/socket.h"
 #include "kernel/asmFunc.h"
 #include "kernel/fs/dir.h"
 #include "kernel/fs/ext2.h"
@@ -120,27 +121,70 @@ static int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
     return (int32_t)written;
 }
 
+static int compat_fd_is_tty(int32_t fd) {
+    if (fd >= 0 && fd <= 2)
+        return 1;
+    if (fd < 0)
+        return 0;
+    struct file *f = file_get(fd_local2global((uint32_t)fd));
+    return f != NULL && f->fd_inode != NULL && fs_is_chardev(f->fd_inode) &&
+           (fs_chardev_dev(f->fd_inode) >> 8) == 5u;
+}
+
+static void compat_tcgets(uint8_t *p) {
+    uint32_t fl = 0;
+    TTY.ioctl(TTY_IOCTL_TCGETS, (uint64_t)(uintptr_t)&fl);
+    memset(p, 0, 60);
+    uint32_t *w = (uint32_t *)p;
+    w[0] = 0x500;
+    w[1] = 0x5;
+    w[2] = 0xb0;
+    w[3] = LINUX_ISIG | (fl & TTY_ICANON ? LINUX_ICANON : 0) |
+           (fl & TTY_IECHO ? LINUX_ECHO : 0);
+    p[16] = 0;
+    p[16 + 1 + LINUX_VTIME] = 0;
+    p[16 + 1 + LINUX_VMIN] = 1;
+}
+
+static int32_t compat_tcsets(uint32_t cmd, uint64_t arg) {
+    (void)cmd;
+    if (!arg || !access_ok((const void *)(uintptr_t)arg, 49, 0))
+        return -LINUX_EFAULT;
+    const uint8_t *p = (const uint8_t *)(uintptr_t)arg;
+    uint32_t lflag;
+    memcpy(&lflag, p + 12, sizeof(lflag));
+    uint32_t fl = (lflag & LINUX_ICANON ? TTY_ICANON : 0) |
+                  (lflag & LINUX_ECHO ? TTY_IECHO : 0);
+    TTY.ioctl(TTY_IOCTL_TCSETS, (uint64_t)(uintptr_t)&fl);
+    return 0;
+}
+
 static int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
-    if (fd >= 0 && fd <= 2) {
-        uint32_t native = 0;
+    if (fd >= 0 && compat_fd_is_tty(fd)) {
         switch (cmd) {
         case LINUX_TCGETS:
-            native = TTY_IOCTL_TCGETS;
-            break;
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 60, 1))
+                return -LINUX_EFAULT;
+            compat_tcgets((uint8_t *)(uintptr_t)arg);
+            return 0;
         case LINUX_TCSETS:
-            native = TTY_IOCTL_TCSETS;
-            break;
+        case LINUX_TCSETSW:
+        case LINUX_TCSETSF:
+            return compat_tcsets(cmd, arg);
         case LINUX_TIOCGWINSZ:
-            native = TTY_IOCTL_TIOCGWINSZ;
-            break;
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 8, 1))
+                return -LINUX_EFAULT;
+            return TTY.ioctl(TTY_IOCTL_TIOCGWINSZ, arg) < 0 ? -LINUX_ENOTTY
+                                                            : 0;
         case LINUX_FIONREAD:
-            native = TTY_IOCTL_FIONREAD;
-            break;
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 1))
+                return -LINUX_EFAULT;
+            return TTY.ioctl(TTY_IOCTL_FIONREAD, arg) < 0 ? -LINUX_ENOTTY : 0;
+        case LINUX_TCFLSH:
+            return 0;
         default:
             return -LINUX_ENOTTY;
         }
-        int32_t rc = TTY.ioctl(native, arg);
-        return rc < 0 ? -LINUX_ENOTTY : rc;
     }
     return -LINUX_ENOTTY;
 }
@@ -510,6 +554,14 @@ static int64_t lc_fchmodat(struct Registers *r, uint64_t a, uint64_t b,
 static int64_t lc_getid_field_dispatch(struct Registers *r, uint64_t a,
                                        uint64_t b, uint64_t c, uint64_t d,
                                        uint64_t e, uint64_t f);
+static int64_t lc_socket(struct Registers *r, uint64_t a, uint64_t b,
+                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r; (void)d; (void)e; (void)f;
+    int domain = (int)a;
+    if (domain != 2)
+        return -LINUX_EAFNOSUPPORT;
+    return net_socket(domain, (int)b, (int)c);
+}
 static int64_t lc_tkill(struct Registers *r, uint64_t a, uint64_t b,
                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
@@ -767,7 +819,7 @@ static int32_t compat_openat(int32_t dirfd, const char *kpath,
     struct stat pst;
     uint32_t ino = 0;
     int is_dir = 0;
-    if (kpath[0] == '/' && ext2_lookup(kpath, &ino, &is_dir) == 0 && is_dir) {
+    if (ext2_lookup(kpath, &ino, &is_dir) == 0 && is_dir) {
         if (lflags & (LINUX_O_CREAT | LINUX_O_TRUNC | LINUX_O_APPEND))
             return -LINUX_EISDIR;
         int32_t fd = compat_dir_fd(kpath);
@@ -940,7 +992,8 @@ static int64_t lc_mmap(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     struct mmap_args m = {(uint32_t)a, (uint32_t)b, (uint32_t)c, (uint32_t)d,
                           (uint32_t)e,
                           (uint32_t)(f & ~(uint32_t)(PAGE_SIZE - 1u))};
-    return (int64_t)sys_mmap(&m);
+    int64_t ret = (int32_t)sys_mmap(&m);
+    return ret;
 }
 
 static int64_t lc_munmap(struct Registers *r, uint64_t a, uint64_t b,
@@ -1224,8 +1277,9 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
         return -LINUX_EINVAL;
     struct LINUX_SIGACTION lsa;
     memset(&lsa, 0, sizeof(lsa));
-    if (b && !user_ptr_ok(r, b, sizeof(lsa), 0))
+    if (b && !user_ptr_ok(r, b, sizeof(lsa), 0)) {
         return -LINUX_EFAULT;
+    }
     if (b)
         memcpy(&lsa, (const void *)(uintptr_t)b, sizeof(lsa));
     struct sigaction nat;
@@ -1234,13 +1288,15 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
     nat.sa_mask = (uint32_t)(lsa.sa_mask << 1);
     nat.sa_flags = (uint32_t)lsa.sa_flags;
     nat.sa_restorer = (void *)(uintptr_t)lsa.sa_restorer;
+    if (d != 8)
+        return -LINUX_EINVAL;
     struct sigaction oldnat;
     memset(&oldnat, 0, sizeof(oldnat));
     int rr = sys_sigaction(sig, b ? &nat : NULL, &oldnat);
     if (rr < 0)
         return rr;
-    if (d) {
-        if (!user_ptr_ok(r, d, sizeof(struct LINUX_SIGACTION), 1))
+    if (c) {
+        if (!user_ptr_ok(r, c, sizeof(struct LINUX_SIGACTION), 1))
             return -LINUX_EFAULT;
         struct LINUX_SIGACTION oldl;
         memset(&oldl, 0, sizeof(oldl));
@@ -1248,8 +1304,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
         oldl.sa_mask = (uint64_t)oldnat.sa_mask >> 1;
         oldl.sa_flags = oldnat.sa_flags;
         oldl.sa_restorer = (uint64_t)(uintptr_t)oldnat.sa_restorer;
-        oldl.sa_mask = oldnat.sa_mask;
-        memcpy((void *)(uintptr_t)d, &oldl, sizeof(oldl));
+        memcpy((void *)(uintptr_t)c, &oldl, sizeof(oldl));
     }
     return 0;
 }
@@ -1627,6 +1682,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_statfs] = lc_statfs,
     [SYS_LINUX_fstatfs] = lc_fstatfs,
     [SYS_LINUX_waitid] = lc_waitid,
+    [SYS_LINUX_socket] = lc_socket,
     [SYS_LINUX_tkill] = lc_tkill,
     [SYS_LINUX_umask] = lc_umask,
     [SYS_LINUX_tgkill] = lc_tgkill,
@@ -1654,7 +1710,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_getrandom] = lc_getrandom,
 };
 
-uint32_t linux_compat_handler(struct Registers *r) {
+int64_t linux_compat_handler(struct Registers *r) {
     struct task_struct *cur = current;
     uint32_t nr = r->eax;
     int64_t ret = -LINUX_ENOSYS;
@@ -1672,10 +1728,8 @@ uint32_t linux_compat_handler(struct Registers *r) {
                                  r->rbp);
     } else if (nr < LC_TABLE_SIZE && LC_TABLE[nr]) {
         ret = LC_TABLE[nr](r, r->rdi, r->rsi, r->rdx, r->r10, r->r8, r->r9);
-    } else if (nr < COMPAT_SYSCALL_BASE) {
-        kprintf("[compat] ENOSYS nr=%d rip=%x\n", (int)nr, (uint32_t)r->rip);
     }
 
     lc_seterrno(cur, ret < 0 ? (int32_t)-ret : 0);
-    return (uint64_t)ret;
+    return ret;
 }

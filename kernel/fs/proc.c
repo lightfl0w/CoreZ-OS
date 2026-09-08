@@ -6,7 +6,7 @@
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 
-enum { PROC_NONE, PROC_DIR, PROC_MEMINFO };
+enum { PROC_NONE, PROC_DIR, PROC_MEMINFO, PROC_STAT, PROC_STATUS };
 
 int proc_match(const char *path) {
     if (path == NULL) {
@@ -18,6 +18,18 @@ int proc_match(const char *path) {
     return strncmp(path, "/proc/", 6) == 0;
 }
 
+static uint32_t proc_pid;
+static uint32_t proc_pid_valid;
+
+static uint32_t proc_task_of(uint32_t pid) {
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        if (task_table[i].slot_used && task_table[i].status != TASK_DIED &&
+            task_table[i].pid == pid)
+            return i;
+    }
+    return MAX_TASKS;
+}
+
 static int proc_node_of(const char *path) {
     if (strcmp(path, "/proc") == 0) {
         return PROC_DIR;
@@ -25,6 +37,29 @@ static int proc_node_of(const char *path) {
     if (strcmp(path, "/proc/meminfo") == 0) {
         return PROC_MEMINFO;
     }
+    proc_pid_valid = 0;
+    const char *p = path + 6;
+    uint32_t pid = 0;
+    if (strncmp(p, "self", 4) == 0 && current) {
+        pid = current->pid;
+        p += 4;
+    } else {
+        if (*p < '0' || *p > '9')
+            return PROC_NONE;
+        while (*p >= '0' && *p <= '9')
+            pid = pid * 10u + (uint32_t)(*p++ - '0');
+    }
+    if (*p != '/')
+        return PROC_NONE;
+    p++;
+    if (proc_task_of(pid) == MAX_TASKS)
+        return PROC_NONE;
+    proc_pid = pid;
+    proc_pid_valid = 1;
+    if (strcmp(p, "stat") == 0)
+        return PROC_STAT;
+    if (strcmp(p, "status") == 0)
+        return PROC_STATUS;
     return PROC_NONE;
 }
 
@@ -46,12 +81,38 @@ static uint32_t meminfo_build(char *dst, uint32_t cap) {
                    total_kb, free_kb, used_kb);
 }
 
+static uint32_t procstat_build(char *dst, uint32_t cap, uint32_t slot) {
+    struct task_struct *t = &task_table[slot];
+    char state = t->status == TASK_RUNNING ? 'R'
+                 : (t->status == TASK_HANGING || t->status == TASK_DIED)
+                     ? 'Z'
+                     : (t->status == TASK_STOPPED ? 'T' : 'S');
+    return sprintf(dst, "%d (%s) %c %d %d %d 0 0 0 0 0 0 0 0 %d 0 0 0\n",
+                   t->pid, t->name, state,
+                   t->parent_pid > 0 ? t->parent_pid : 1,
+                   t->pgid ? t->pgid : t->pid, t->sid ? t->sid : t->pid,
+                   t->elapsed_ticks);
+}
+static uint32_t procstatus_build(char *dst, uint32_t cap, uint32_t slot) {
+    struct task_struct *t = &task_table[slot];
+    return sprintf(dst,
+                   "Name:\t%s\nPid:\t%d\nPPid:\t%d\nUid:\t%d %d %d\n"
+                   "Gid:\t%d %d %d\n",
+                   t->name, t->pid, t->parent_pid > 0 ? t->parent_pid : 1,
+                   t->uid, t->euid, t->suid, t->gid, t->egid, t->sgid);
+}
 static uint32_t proc_size(int node) {
-    if (node != PROC_MEMINFO) {
-        return 0;
+    char buf[256];
+    if (node == PROC_MEMINFO) {
+        return meminfo_build(buf, sizeof(buf));
     }
-    char buf[128];
-    return meminfo_build(buf, sizeof(buf));
+    if (node == PROC_STAT && proc_pid_valid) {
+        return procstat_build(buf, sizeof(buf), proc_task_of(proc_pid));
+    }
+    if (node == PROC_STATUS && proc_pid_valid) {
+        return procstatus_build(buf, sizeof(buf), proc_task_of(proc_pid));
+    }
+    return 0;
 }
 
 int proc_open(const char *path, uint8_t flags) {
@@ -68,6 +129,9 @@ int proc_open(const char *path, uint8_t flags) {
     file->fd_flag = flags;
     file->fd_inode = NULL;
     file->proc_id = (uint32_t)node;
+    file->proc_aux = (node == PROC_STAT || node == PROC_STATUS)
+                         ? proc_pid
+                         : 0;
     file->ref_cnt = 1;
     int fd = fd_install(gfd);
     if (fd == -1) {
@@ -78,11 +142,20 @@ int proc_open(const char *path, uint8_t flags) {
 }
 
 uint32_t proc_read(struct file *file, void *buf, uint32_t count) {
-    if (file->proc_id != PROC_MEMINFO) {
+    char info[256];
+    uint32_t len;
+    if (file->proc_id == PROC_MEMINFO) {
+        len = meminfo_build(info, sizeof(info));
+    } else if (file->proc_id == PROC_STAT || file->proc_id == PROC_STATUS) {
+        uint32_t slot = proc_task_of(file->proc_aux);
+        if (slot == MAX_TASKS)
+            return 0;
+        len = file->proc_id == PROC_STAT
+                  ? procstat_build(info, sizeof(info), slot)
+                  : procstatus_build(info, sizeof(info), slot);
+    } else {
         return 0;
     }
-    char info[128];
-    uint32_t len = meminfo_build(info, sizeof(info));
     if (file->fd_pos >= len) {
         return 0;
     }

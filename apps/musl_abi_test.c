@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/statfs.h>
+#include <grp.h>
 #include <time.h>
 
 static char altbuf[8192];
@@ -185,6 +186,13 @@ int main(int argc, char **argv) {
     int ss2 = sigsuspend(&empty);
     printf("[abi] sigsuspend r=%d errno=%d handler=%d\n", ss2, errno,
            usr1_flag);
+    gid_t gb[16];
+    int gn = 16;
+    int gl = getgrouplist("user", 1000, gb, &gn);
+    printf("[abi] getgrouplist r=%d n=%d errno=%d\n", gl, gn,
+           gl < 0 ? errno : 0);
+    int sgp = setgroups(1, gb);
+    printf("[abi] setgroups r=%d errno=%d\n", sgp, sgp < 0 ? errno : 0);
     int su = setuid(1000);
     int shfd = open("/etc/shadow", O_RDONLY);
     int pwfd = open("/etc/passwd", O_RDONLY);
@@ -192,6 +200,16 @@ int main(int argc, char **argv) {
            su, shfd < 0 ? errno : 0, pwfd >= 0, (int)getuid());
     if (shfd >= 0) close(shfd);
     if (pwfd >= 0) close(pwfd);
+    int sp3 = fork();
+    if (sp3 == 0) {
+        char *cargv2[] = {(char *)"sh", (char *)"-c", (char *)"id", NULL};
+        execve("/suidsh", cargv2, cenv);
+        printf("[abi] suid-exec errno=%d\n", errno);
+        _exit(99);
+    }
+    int st3 = 0;
+    waitpid(sp3, &st3, 0);
+    printf("[abi] suid-test done status=%d\n", WEXITSTATUS(st3));
     printf("[abi] ALL PASS\n");
     return 0;
 }

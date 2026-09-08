@@ -1,4 +1,6 @@
 #include "kernel/fs/ext2.h"
+#include "kernel/fs/fs.h"
+#include "kernel/sched/thread.h"
 
 #include "ops/block_ops.h"
 #include "kernel/sched/sync.h"
@@ -749,7 +751,42 @@ static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
     buf[len] = 0;
     return (int)len;
 }
+static int ext2_abs_path(const char *path, char *out, uint32_t cap) {
+    if (path == NULL || path[0] == 0) {
+        return -1;
+    }
+    if (path[0] == '/') {
+        if (strlen(path) >= cap) {
+            return -1;
+        }
+        strcpy(out, path);
+        return 0;
+    }
+    char pre[MAX_PATH_LEN];
+    if (fs_cwd_abs_prefix(pre, sizeof(pre)) != 0) {
+        return -1;
+    }
+    uint32_t pl = (uint32_t)strlen(pre);
+    uint32_t rl = (uint32_t)strlen(path);
+    if (pl + 1 + rl >= cap) {
+        return -1;
+    }
+    memcpy(out, pre, pl);
+    if (pl == 0 || pre[pl - 1] != '/') {
+        out[pl++] = '/';
+    }
+    memcpy(out + pl, path, rl + 1);
+    return 0;
+}
+
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir) {
+    char abs[MAX_PATH_LEN];
+    if (path != NULL && path[0] != '/') {
+        if (ext2_abs_path(path, abs, sizeof(abs)) != 0) {
+            return -1;
+        }
+        path = abs;
+    }
     int ft = 0;
     lock_acquire(&ext2_lock);
     int rc = ext2_lookup_depth(path, ino, &ft, 1, 8);
@@ -758,6 +795,13 @@ int ext2_lookup(const char *path, uint32_t *ino, int *is_dir) {
     return rc;
 }
 int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow) {
+    char abs[MAX_PATH_LEN];
+    if (path != NULL && path[0] != '/') {
+        if (ext2_abs_path(path, abs, sizeof(abs)) != 0) {
+            return -1;
+        }
+        path = abs;
+    }
     lock_acquire(&ext2_lock);
     int rc = ext2_lookup_depth(path, ino, ftype, follow, 8);
     lock_release(&ext2_lock);

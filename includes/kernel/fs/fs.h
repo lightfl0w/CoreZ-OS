@@ -56,6 +56,7 @@ struct dir_entry *sys_readdir(struct dir *dir);
 void sys_rewinddir(struct dir *dir);
 int32_t sys_rmdir(const char *pathname);
 char *sys_getcwd(char *buf, uint32_t size);
+int fs_cwd_abs_prefix(char *buf, uint32_t size);
 int32_t sys_chdir(const char *path);
 int32_t sys_stat(const char *path, struct stat *buf);
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev);

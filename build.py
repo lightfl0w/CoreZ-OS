@@ -302,6 +302,11 @@ class Task:
         return False
     def dep_paths(self) -> Iterable[Path]:
         base = self.cwd or Path.cwd()
+        for d in self.deps:
+            if isinstance(d, Path):
+                if d.exists():
+                    yield d
+                continue
         for tok in self.cmd:
             if tok.startswith("-"):
                 continue
@@ -756,7 +761,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                  f"LDFLAGS={_toybox_ld} "
                  f"make -j4 > toybox.log 2>&1 || "
                  f"(tail -20 toybox.log; false) && "
-                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))}"],
+                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))} && "
+                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
             out=BUILD_DIR / "toybox",
             deps=[TOYBOX_DIR / ".config", TOYBOX_DIR / "toybox"],
             optional=True, group="toybox",

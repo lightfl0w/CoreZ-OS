@@ -35,7 +35,8 @@ FILES = [
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "toybox"
 ]
-ALIASES = {"forktest.elf": "fork_demo.elf"}
+ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
+SPECIAL_MODES = {"suidsh": 0x81ED | 0o4000}
 
 
 def part_entry(bootable, fs_type, start_lba, sec_cnt):
@@ -82,9 +83,14 @@ DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
 EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
               ("tmp", 0x41ED | 0o777)]
 
+BIN_LINKS = ["sh", "su", "login", "id", "ls", "cat", "echo", "ps", "passwd",
+             "adduser", "groups", "chmod", "chown", "mkdir", "rm", "cp",
+             "env", "uname", "free", "setsid", "hostname", "date", "clear",
+             "dmesg", "kill"]
+
 ETC_FILES = [
     ("passwd",
-     b"root:x:0:0:root:/:/toybox\nuser:x:1000:1000:user:/home/user:/toybox\n",
+     b"root:x:0:0:root:/:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n",
      0x81A4 & ~0o777 | 0o644, 0, 0),
     ("group", b"root:x:0:\nuser:x:1000:\n", 0x81A4 & ~0o777 | 0o644, 0, 0),
     ("shadow", b"root::0:0:99999:7:::\nuser::0:0:99999:7:::\n",
@@ -140,8 +146,13 @@ def build(build_dir, out, smoke=False):
     names = [n for n in names if n in pre]
     if smoke:
         pre["autoexec"] = (b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
-                   b"toybox echo TOYBOX_ECHO_OK\n"
-                   b"toybox id\ntoybox ls -l /etc/passwd\ntoybox ls /\n")
+                           b"toybox echo TOYBOX_ECHO_OK\n"
+                           b"toybox id\ntoybox ls -l /etc/passwd\n"
+                           b"toybox su user -c id\ntoybox cat /proc/self/status\n"
+                           b"toybox ls /\n")
+        names.append("autoexec")
+    else:
+        pre["autoexec"] = b"toybox login\n"
         names.append("autoexec")
 
     ino_map = {}
@@ -170,6 +181,13 @@ def build(build_dir, out, smoke=False):
     for name, _ in EXTRA_DIRS:
         dir_inos[name] = next_ino
         dir_entries.append((next_ino, 2, name))
+        next_ino += 1
+    bin_ino = dir_inos["bin"]
+    bin_entries = [(bin_ino, 2, "."), (2, 2, "..")]
+    bin_link_inos = {}
+    for name in BIN_LINKS:
+        bin_link_inos[name] = next_ino
+        bin_entries.append((next_ino, 7, name))
         next_ino += 1
     etc_ino = dir_inos["etc"]
     etc_entries = [(etc_ino, 2, "."), (2, 2, "..")]
@@ -233,6 +251,8 @@ def build(build_dir, out, smoke=False):
     for name, _ in EXTRA_DIRS:
         dir_blk_list[name] = cur_block
         cur_block += 1
+    bin_dir_block = cur_block
+    cur_block += 1
     etc_dir_block = cur_block
     cur_block += 1
     etc_file_payloads = []
@@ -251,6 +271,13 @@ def build(build_dir, out, smoke=False):
         put_inode(itable, dir_inos[name], BLOCK, [dir_blk_list[name]], True,
                   mode=dmode)
     put_inode(itable, etc_ino, BLOCK, [etc_dir_block], True, mode=0o40755)
+    put_inode(itable, bin_ino, BLOCK, [bin_dir_block], True, mode=0o40755)
+    for name in BIN_LINKS:
+        tgt = b"/toybox"
+        off = (bin_link_inos[name] - 1) * INODE_SIZE
+        struct.pack_into("<H", itable, off + 0, 0xA1FF)
+        struct.pack_into("<I", itable, off + 4, len(tgt))
+        itable[off + 40:off + 40 + len(tgt)] = tgt
     for i, (_, tgt) in enumerate(SYMLINKS):
         put_symlink(itable, link_ino + i, tgt, link_blk_list[i])
     put_inode(itable, dev_ino, BLOCK, [dev_dir_block], True)
@@ -263,7 +290,8 @@ def build(build_dir, out, smoke=False):
                   mode=mode, uid=uid, gid=gid)
     for name in names:
         put_inode(itable, ino_map[name], len(pre[name]),
-                  file_ptrs[name], False)
+                  file_ptrs[name], False,
+                  mode=SPECIAL_MODES.get(name))
 
     used_blocks = set(range(0, DATA_START))
     for i in range(n_root_blks):
@@ -275,6 +303,7 @@ def build(build_dir, out, smoke=False):
     used_blocks.update(b for b in link_blk_list if b)
     used_blocks.add(dev_dir_block)
     used_blocks.add(etc_dir_block)
+    used_blocks.add(bin_dir_block)
     used_blocks.update(dir_blk_list.values())
     for blks, _ in etc_file_payloads:
         used_blocks.update(blks)
@@ -336,6 +365,8 @@ def build(build_dir, out, smoke=False):
             f.write(build_dirent_blocks([(ino, 2, "."), (ino, 2, "..")]))
         f.seek(base * SECTOR + etc_dir_block * BLOCK)
         f.write(build_dirent_blocks(etc_entries))
+        f.seek(base * SECTOR + bin_dir_block * BLOCK)
+        f.write(build_dirent_blocks(bin_entries))
         for (blks, payload) in etc_file_payloads:
             f.seek(base * SECTOR + blks[0] * BLOCK)
             f.write(payload)

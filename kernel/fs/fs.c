@@ -609,6 +609,47 @@ char *sys_getcwd(char *buf, uint32_t size) {
     }
     return buf;
 }
+int fs_cwd_abs_prefix(char *buf, uint32_t size) {
+    uint32_t child = (current != NULL) ? current->cwd_inode_nr : 0;
+    if (child == 0 || child == 2) {
+        if (size < 2) {
+            return -1;
+        }
+        buf[0] = '/';
+        buf[1] = 0;
+        return 0;
+    }
+    char full_path_reverse[MAX_PATH_LEN] = {0};
+    while (child) {
+        uint32_t parent = get_parent_dir_inode_nr(child);
+        if (parent == 0 || parent == (uint32_t)-1) {
+            return -1;
+        }
+        if (get_child_dir_name(parent, child, full_path_reverse) == -1) {
+            return -1;
+        }
+        child = parent;
+    }
+    buf[0] = 0;
+    char *last_slash;
+    while ((last_slash = strrchr(full_path_reverse, '/'))) {
+        uint32_t len = strlen(buf);
+        uint32_t seg_len = strlen(last_slash);
+        if (len + seg_len + 1 > size) {
+            return -1;
+        }
+        strcpy(buf + len, last_slash);
+        *last_slash = 0;
+    }
+    if (buf[0] == 0) {
+        if (size < 2) {
+            return -1;
+        }
+        buf[0] = '/';
+        buf[1] = 0;
+    }
+    return 0;
+}
 int32_t sys_chdir(const char *path) {
     uint32_t ino = 0;
     int is_dir = 0;

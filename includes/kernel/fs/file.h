@@ -13,6 +13,7 @@ struct file {
     uint32_t fd_flag;
     struct inode *fd_inode;
     uint32_t proc_id;
+    uint32_t proc_aux;
     uint32_t ref_cnt;
 };
 

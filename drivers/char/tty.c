@@ -53,6 +53,17 @@ static int tty_read_line(char *buf, uint32_t n) {
             buf[got] = '\n';
             return (int)(got + 1 < n ? got + 1 : n);
         }
+        if (c == '\b' || c == 0x7f) {
+            if (got == 0) {
+                tty_echo('\a');
+                continue;
+            }
+            got--;
+            tty_echo('\b');
+            tty_echo(' ');
+            tty_echo('\b');
+            continue;
+        }
         if (got + 1 >= n) {
             tty_echo('\a');
             continue;
@@ -155,9 +166,11 @@ static int tty_drv(void) {
     return 0;
 }
 
+DRIVER_REGISTER("tty", 12, tty_drv);
+
 
 void tty_init(void) {
-    tty_termios.iflag = 0;
+    tty_termios.iflag = TTY_ICANON | TTY_IECHO;
     tty_termios.cc_vmin = 1;
     tty_termios.cc_vtime = 0;
 }
