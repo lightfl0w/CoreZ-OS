@@ -56,7 +56,7 @@ static void net_thread(void *arg) {
 }
 
 volatile uint32_t net_guard_before = 0x5A5A0001u;
-int net_enable = 0;
+int net_enable = 1;
 volatile uint32_t net_guard_after = 0x5A5A0002u;
 
 void net_check_guards(void) {

@@ -52,7 +52,7 @@ static void copy_user_space(struct task_struct *parent,
         }
         uint64_t *pd = (uint64_t *)VIRT_OF(PTE_PHYS(pdp_e));
         uint64_t child_pdp_e = child_pdp[pdp_idx];
-        if (!(child_pdp_e & PTE_P)) {
+        if (!(child_pdp_e & PTE_P) || child_pdp_e == pdp_e) {
             continue;
         }
         uint64_t *child_pd = (uint64_t *)VIRT_OF(PTE_PHYS(child_pdp_e));

@@ -287,8 +287,28 @@ void page_table_dump(uint32_t vaddr) {
             "NX=%d phys=%#x)\n",
             (int)PT_INDEX(vaddr), (uint32_t)e3, (int)(e3 & 1),
             (int)((e3 >> 1) & 1), (int)((e3 >> 2) & 1), (int)((e3 >> 4) & 1),
-            (int)((e3 >> 7) & 1), (int)((e3 >> 8) & 1), (int)((e3 >> 63) & 1),
+            (int)((e3 >> 7) & 1),             (int)((e3 >> 8) & 1), (int)((e3 >> 63) & 1),
             (uint32_t)(e3 & 0x000ffffffffff000ull));
+    if (pml4_phys != kernel_pml4) {
+        uint64_t *kpml4 = (uint64_t *)VIRT_OF(kernel_pml4);
+        uint64_t ke0 = kpml4[PML4_INDEX(vaddr)];
+        uint64_t ke1 = 0, ke2 = 0, ke3 = 0;
+        if (ke0 & 1) {
+            uint64_t *kpdp = (uint64_t *)VIRT_OF(PTE_PHYS(ke0));
+            ke1 = kpdp[PDPT_INDEX(vaddr)];
+            if (ke1 & 1) {
+                uint64_t *kpd = (uint64_t *)VIRT_OF(PTE_PHYS(ke1));
+                ke2 = kpd[PD_INDEX(vaddr)];
+                if ((ke2 & 1) && !(ke2 & (1ull << 7))) {
+                    uint64_t *kpt = (uint64_t *)VIRT_OF(PTE_PHYS(ke2));
+                    ke3 = kpt[PT_INDEX(vaddr)];
+                }
+            }
+        }
+        kprintf("  [pgtbl] kernel PML4=%x: L1=%x L2=%x L3=%x L4=%x\n",
+                (uint32_t)kernel_pml4, (uint32_t)ke0, (uint32_t)ke1,
+                (uint32_t)ke2, (uint32_t)ke3);
+    }
 }
 
 static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
@@ -303,9 +323,10 @@ static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
 static void page_table_add_no_cache(uint32_t vaddr, uint32_t phy_addr) {
     uint64_t *pte = pte_make(kernel_pml4, (uint64_t)vaddr);
     if (pte == 0) {
+        kprintf("[ptadd] pte_make FAILED vaddr=%x\n", vaddr);
         return;
     }
-    *pte = (uint64_t)phy_addr | pte_wx(PTE_P | PTE_U | 0x10, 1, 0);
+    *pte = (uint64_t)phy_addr | pte_wx(PTE_P | 0x10, 1, 0);
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 

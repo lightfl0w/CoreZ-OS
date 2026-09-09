@@ -69,6 +69,10 @@ void lock_acquire(struct lock *plock) {
     sema_down(&plock->semaphore);
 
     spinlock_acquire(&plock->semaphore.lock);
+    if (plock->holder != 0) {
+        kprintf("[lock] corrupt lock=%p holder=%p cur=%p\n", (void *)plock,
+                (void *)plock->holder, (void *)current);
+    }
     ASSERT(plock->holder == 0);
     ASSERT(plock->holder_repeat_nr == 0);
     plock->holder = current;

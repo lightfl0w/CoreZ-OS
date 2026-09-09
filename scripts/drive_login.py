@@ -21,6 +21,7 @@ proc = subprocess.Popen(
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 keys = sys.argv[1] if len(sys.argv) > 1 else "ROOT"
+keys = keys.encode().decode("unicode_escape")
 try:
     deadline = time.time() + 90
     text = ""
@@ -41,7 +42,8 @@ try:
     time.sleep(2)
     s.recv(4096)
     for ch in keys:
-        name = {" ": "spc", "\n": "ret", "\x08": "backspace"}.get(ch, ch)
+        name = {" ": "spc", "\n": "ret", "\x08": "backspace", ".": "dot",
+                "-": "minus", "/": "slash", "=": "equal"}.get(ch, ch)
         if ch.isupper():
             s.sendall(f"sendkey shift-{ch.lower()}\n".encode())
         else:
