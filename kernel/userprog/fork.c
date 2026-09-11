@@ -169,6 +169,9 @@ pid_t sys_fork(struct Registers *r) {
         build_child_stack(child, r);
     }
     child->status = TASK_BLOCKED;
+    if (foreground_pid == parent->pid) {
+        foreground_pid = child->pid;
+    }
     thread_ready(child);
     return (pid_t)child->pid;
 }

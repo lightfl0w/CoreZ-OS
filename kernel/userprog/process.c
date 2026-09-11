@@ -87,7 +87,10 @@ uint32_t *create_page_dir(void) {
     memset(pd2, 0, PAGE_SIZE);
     {
         uint64_t *loader_pd_lfb = phys_to_virt(0x94000);
-        pd2[0] = loader_pd_lfb[0];
+        for (uint32_t i = 0; i < 512; i++) {
+            if (loader_pd_lfb[i] & PTE_P)
+                pd2[i] = loader_pd_lfb[i];
+        }
     }
     pdp[2] = pd2_phys | 7;
 

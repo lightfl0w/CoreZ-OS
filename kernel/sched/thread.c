@@ -159,6 +159,7 @@ void thread_init(void) {
     task_table[0].errno = 0;
     task_table[0].compat = 0;
     task_table[0].futex_tag.prev = task_table[0].futex_tag.next = NULL;
+    task_table[0].wait_tag.prev = task_table[0].wait_tag.next = NULL;
     task_table[0].futex_ready = 0;
     task_table[0].slot_used = 1;
     list_append(&thread_all_list, &task_table[0].all_list_tag);
@@ -182,6 +183,7 @@ struct task_struct *thread_alloc_slot(const char *name, uint8_t priority) {
     }
     t->slot_used = 1;
     slot_inuse |= 1ULL << i;
+    t->wait_tag.prev = t->wait_tag.next = NULL;
     struct thread_stack *ts =
         (struct thread_stack *)(stack + THREAD_STACK_SIZE -
                                 sizeof(struct thread_stack));
@@ -350,6 +352,7 @@ void thread_kill_pid(uint32_t pid) {
         ready_remove(t);
 
     kill_orphan_children((int32_t)t->pid);
+    list_unlink(&t->wait_tag);
     if (keyboard_ioq.consumer == t)
         keyboard_ioq.consumer = 0;
     if (keyboard_ioq.producer == t)

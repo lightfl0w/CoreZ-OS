@@ -46,6 +46,7 @@ CFLAGS = CFLAGS_BASE
 KERNEL_CFLAGS = CFLAGS_BASE + [
     "-mcmodel=large",
     "-mno-red-zone",
+    "-mstackrealign",
     "-fstack-protector-strong",
     "-Wall", "-Wunused-function", "-Wunused-variable",
 ]
@@ -462,6 +463,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("idt.o",        ROOT / "arch" / "x86" / "interrupt" / "idt.c"),
         ("interrupt.o",  ROOT / "arch" / "x86" / "interrupt" / "interrupt.c"),
         ("kernel.o",     KERNEL_DIR / "init" / "main.c"),
+        ("mb2.o",        KERNEL_DIR / "init" / "mb2.c"),
         ("assert.o",     KERNEL_DIR / "init" / "assert.c"),
         ("ssp.o",        KERNEL_DIR / "init" / "ssp.c"),
         ("str.o",        ROOT / "lib" / "str" / "str.c"),
@@ -505,6 +507,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
+        ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
         ("layout.o",     KERNEL_DIR / "gui" / "layout.c"),
@@ -643,15 +646,31 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     ]
     for stem, src in net_c_sources:
         tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, net_cflags))
+    font_src = ROOT / "lib" / "assets" / "font.ttf"
+    font_kernel_ttf = BUILD_DIR / "font_kernel.ttf"
+    tasks.append(task_python(
+        "font_kernel.ttf",
+        SCRIPTS / "make_font_subset.py",
+        [str(font_src), str(font_kernel_ttf), "--charset=latin"],
+        out=font_kernel_ttf,
+    ))
     font_subset = BUILD_DIR / "font_subset.ttf"
     tasks.append(task_python(
         "font_subset.ttf",
         SCRIPTS / "make_font_subset.py",
-        [str(ROOT / "lib" / "assets" / "font.ttf"), str(font_subset)],
+        [str(font_src), str(font_subset), "--charset=gb2312-l1"],
         out=font_subset,
     ))
+    tasks.append(Task(
+        name="font_kernel.o",
+        cmd=[tools.objcopy, "-I", "binary", "-O", "elf64-x86-64",
+             "-B", "i386:x86-64", "--set-section-alignment", ".data=64",
+             "font_kernel.ttf", "font_kernel.o"],
+        cwd=BUILD_DIR, out=BUILD_DIR / "font_kernel.o", deps=[],
+        description="embed font_kernel.ttf", group="objcopy",
+    ))
     kernel_objs_names = [
-        "entry.o", "kernel.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
+        "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
@@ -661,8 +680,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
-        "mouse.o", "gfx.o", "shm.o", "guiserver.o", "layout.o",
-        "wm.o", "guiclients.o", "gui.o",
+        "mouse.o", "gfx.o", "font.o", "font_kernel.o", "shm.o", "guiserver.o",
+        "layout.o", "wm.o", "guiclients.o", "gui.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
     ]

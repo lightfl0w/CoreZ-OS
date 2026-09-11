@@ -27,46 +27,10 @@
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/exec.h"
 #include "kernel/userprog/process.h"
+#include "kernel/gui/gfx.h"
+#include "kernel/init/mb2.h"
 
 #define VRAM_VIRT 0x80000000UL
-
-#define MULTIBOOT2_BOOTLOADER_MAGIC 0x36D76289UL
-#define MULTIBOOT2_TAG_FRAMEBUFFER 8
-#define MULTIBOOT2_TAG_END 0
-
-struct mb2_tag_header {
-    uint32_t type;
-    uint32_t size;
-};
-struct mb2_tag_framebuffer {
-    uint32_t type;
-    uint32_t size;
-    uint64_t framebuffer_addr;
-    uint32_t framebuffer_pitch;
-    uint32_t framebuffer_width;
-    uint32_t framebuffer_height;
-    uint8_t framebuffer_bpp;
-    uint8_t framebuffer_type;
-    uint8_t reserved;
-    uint8_t color_info[6];
-};
-
-static void mb2_parse(uint32_t magic, void *mbi_ptr,
-                      struct mb2_tag_framebuffer *fb) {
-    if (magic != MULTIBOOT2_BOOTLOADER_MAGIC || mbi_ptr == 0)
-        return;
-    uint8_t *p = (uint8_t *)mbi_ptr + 8; 
-    uint32_t total = *(const uint32_t *)mbi_ptr;
-    uint8_t *end = (uint8_t *)mbi_ptr + total;
-    while (p + 8 <= end) {
-        struct mb2_tag_header *tag = (struct mb2_tag_header *)p;
-        if (tag->type == MULTIBOOT2_TAG_END)
-            break;
-        if (tag->type == MULTIBOOT2_TAG_FRAMEBUFFER && tag->size >= 24)
-            *fb = *(struct mb2_tag_framebuffer *)p;
-        p += (tag->size + 7) & ~7U;
-    }
-}
 
 void drivers_init(int min_level, int max_level) {
     struct driver_ops table[16];
@@ -97,18 +61,39 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     stack_canary_init();
     rand_init();
 
+    mb2_init(magic, mbi_ptr);
+    const struct mb2_info *mi = mb2_get();
     struct mb2_tag_framebuffer fb = {0};
-    mb2_parse(magic, mbi_ptr, &fb);
+    if (mi->has_framebuffer)
+        fb = mi->framebuffer;
+    int fw = (int)fb.framebuffer_width;
+    int fh = (int)fb.framebuffer_height;
+    int fbpp = (int)fb.framebuffer_bpp;
+    if (fbpp <= 0)
+        fbpp = 32;
+    int fpitch = (int)fb.framebuffer_pitch;
+    if (fpitch <= 0)
+        fpitch = fw * (fbpp / 8);
+    uint32_t bytes = (uint32_t)fpitch * (uint32_t)fh;
+    uintptr_t vram_virt =
+        (uintptr_t)VRAM_VIRT + ((uintptr_t)fb.framebuffer_addr & 0x1FFFFFUL);
+    io_init((uint8_t *)vram_virt, fw, fh, bytes, fpitch, fbpp);
+    struct gfx_fb_format fmt = {
+        fbpp,
+        fb.color_info[0], fb.color_info[1],
+        fb.color_info[2], fb.color_info[3],
+        fb.color_info[4], fb.color_info[5],
+    };
+    gfx_set_fb_format(&fmt);
 
-    uint32_t bytes = (fb.framebuffer_pitch > 0)
-                         ? fb.framebuffer_pitch * fb.framebuffer_height
-                         : 0;
-    io_init((uint8_t *)(uintptr_t)VRAM_VIRT, (int)fb.framebuffer_width,
-            (int)fb.framebuffer_height, bytes);
     io_clear_screen();
-    kprintf("[diag] magic=%#x mbi=%p fb: %ux%u bpp=%u addr=%#llx bytes=%u\n",
-            magic, mbi_ptr, fb.framebuffer_width, fb.framebuffer_height,
-            fb.framebuffer_bpp, (unsigned long long)fb.framebuffer_addr, bytes);
+    mb2_dump();
+    kprintf("[diag] magic=%#x mbi=%#x fb: %dx%d bpp=%d pitch=%d addr=%#x\n",
+            magic, (uint32_t)(uintptr_t)mbi_ptr, fw, fh, fbpp, fpitch,
+            (uint32_t)fb.framebuffer_addr);
+    kprintf("[diag] vram virt=%#x rgb masks r=%d/%d g=%d/%d b=%d/%d\n",
+            (uint32_t)vram_virt, fmt.r_pos, fmt.r_bits, fmt.g_pos, fmt.g_bits,
+            fmt.b_pos, fmt.b_bits);
 
     kprintf("[init] mm\n");
     mm_init();

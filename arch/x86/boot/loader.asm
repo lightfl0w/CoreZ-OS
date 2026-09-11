@@ -12,15 +12,18 @@ KEY_DOWN     equ  0x50
 KEY_ENTER    equ  0x1C
 KEY_1        equ  0x02
 KEY_2        equ  0x03
-FONT_BASE    equ  0x9C000   
-MENU_BG      equ  0x00
-MENU_NORMAL  equ  0x07
-MENU_HI      equ  0x0E
-MENU_TITLE   equ  0x0F
+FONT_BASE    equ  0x9C000
+MENU_BG      equ  0x000B0F1A
+MENU_NORMAL  equ  0x00D7DCE5
+MENU_HI      equ  0x00FFB454
+MENU_TITLE   equ  0x00FFFFFF
 DSKCAC  equ     0x00100000
 DSKCAC0 equ     0x00008000
-VBEMODE equ     0x105
-VBEINFO equ     0x0FF0 - 256
+VBEMODE equ     0x143
+VBEINFO equ     0x8000
+VBE_MODEINFO equ 0x9000
+VBE_LFB_VIRT equ 0x80000000
+VBE_LFB_PAGES equ 8
 
 CYLS    equ     0x0FF0
 LEDS    equ     0x0FF1
@@ -51,37 +54,139 @@ kernel_addr:    dd      0x00010000
         mov     al, byte [0x0FFE]
         mov     byte [l_drive], al
 
-        mov     ax, 0x9000
+        mov     dword [l_bestmode], 0xFFFF
+        mov     dword [l_bestarea], 0
+        mov     dword [l_exact], 0xFFFF
+        xor     ax, ax
         mov     es, ax
-        mov     di, 0
-        mov     cx, VBEMODE
-        mov     ax, 0x4F01
+        mov     di, VBEINFO
+        mov     dword [es:di], 'VBE2'
+        mov     ax, 0x4F00
         int     0x10
         cmp     ax, 0x004F
-        jne     vbe_fail
+        jne     vbe_fallback
 
-        mov     bx, VBEMODE + 0x4000
+        mov     si, [es:VBEINFO+14]
+        mov     ax, [es:VBEINFO+16]
+        mov     fs, ax
+        mov     bx, 0
+.vbe_scan:
+        mov     ax, [fs:si]
+        cmp     ax, 0xFFFF
+        je      .vbe_scan_done
+        push    si
+        push    fs
+        push    bx
+        push    ax
+        mov     cx, ax
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        xor     di, di
+        mov     ax, 0x4F01
+        int     0x10
+        pop     dx
+        pop     bx
+        pop     fs
+        pop     si
+        cmp     ax, 0x004F
+        jne     .vbe_next
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        mov     ax, [es:0x0000]
+        test    ax, 0x0010
+        jz      .vbe_next
+        test    ax, 0x0080
+        jz      .vbe_next
+        cmp     byte [es:0x0019], 32
+        jne     .vbe_next
+        cmp     word [es:0x0012], 1024
+        jne     .vbe_area
+        cmp     word [es:0x0014], 768
+        jne     .vbe_area
+        mov     [l_exact], dx
+        jmp     .vbe_scan_done
+.vbe_area:
+        movzx   eax, word [es:0x0012]
+        movzx   ecx, word [es:0x0014]
+        imul    eax, ecx
+        cmp     eax, [l_bestarea]
+        jbe     .vbe_next
+        mov     [l_bestarea], eax
+        movzx   eax, dx
+        mov     [l_bestmode], eax
+.vbe_next:
+        add     si, 2
+        inc     bx
+        cmp     bx, 1024
+        jb      .vbe_scan
+.vbe_scan_done:
+        mov     ax, [l_exact]
+        cmp     ax, 0xFFFF
+        jne     .vbe_have
+        mov     ax, [l_bestmode]
+        cmp     ax, 0xFFFF
+        jne     .vbe_have
+        jmp     vbe_fallback
+.vbe_have:
+        mov     [l_mode], ax
+        mov     bx, ax
+        or      bx, 0x4000
         mov     ax, 0x4F02
         int     0x10
         cmp     ax, 0x004F
-        jne     vbe_fail
-
-        mov     byte [VMODE], 8
-        mov     ax, [es:0x0012]
-        mov     [SCRNX], ax
-        mov     ax, [es:0x0014]
-        mov     [SCRNY], ax
-        mov     eax, [es:0x0028]
-        mov     [VRAM], eax
-        
-        xor     eax, eax
-        mov     ax, [es:0x0010]
-        movzx   ecx, word [es:0x0014]
-        mul     ecx
-        mov     [VRAMBYTES], eax
-        jmp     vbe_done
-
-vbe_fail:
+        jne     vbe_fallback
+        mov     cx, [l_mode]
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        xor     di, di
+        mov     ax, 0x4F01
+        int     0x10
+        cmp     ax, 0x004F
+        jne     vbe_fallback
+        jmp     vbe_configure
+vbe_fallback:
+        mov     word [l_fbptr], fb_modes
+.fb_loop:
+        mov     si, [l_fbptr]
+        mov     ax, [si]
+        cmp     ax, 0xFFFF
+        je      .fb_8bpp
+        mov     [l_mode], ax
+        mov     cx, ax
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        xor     di, di
+        mov     ax, 0x4F01
+        int     0x10
+        cmp     ax, 0x004F
+        jne     .fb_next
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        mov     ax, [es:0x0000]
+        test    ax, 0x0080
+        jz      .fb_next
+        cmp     byte [es:0x0019], 32
+        jne     .fb_next
+        mov     cx, [l_mode]
+        mov     bx, cx
+        or      bx, 0x4000
+        mov     ax, 0x4F02
+        int     0x10
+        cmp     ax, 0x004F
+        jne     .fb_next
+        mov     cx, [l_mode]
+        mov     ax, VBE_MODEINFO
+        mov     es, ax
+        xor     di, di
+        mov     ax, 0x4F01
+        int     0x10
+        cmp     ax, 0x004F
+        jne     .fb_next
+        jmp     vbe_configure
+.fb_next:
+        add     word [l_fbptr], 2
+        jmp     .fb_loop
+.fb_8bpp:
         mov     al, 0x13
         mov     ah, 0x00
         int     0x10
@@ -89,10 +194,59 @@ vbe_fail:
         mov     word [SCRNX], 320
         mov     word [SCRNY], 200
         mov     dword [VRAM], 0x000A0000
-        mov     dword [VRAMBYTES], 64000   
+        mov     dword [VRAMBYTES], 64000
+        mov     dword [vram_pitch], 320
+        mov     byte [bpp_div8], 1
+        mov     byte [fg_rpos], 0
+        mov     byte [fg_rsize], 0
+        mov     byte [fg_gpos], 0
+        mov     byte [fg_gsize], 0
+        mov     byte [fg_bpos], 0
+        mov     byte [fg_bsize], 0
+        jmp     vbe_done
+vbe_configure:
+        movzx   eax, word [es:0x0012]
+        mov     [SCRNX], ax
+        movzx   eax, word [es:0x0014]
+        mov     [SCRNY], ax
+        mov     eax, [es:0x0028]
+        mov     [VRAM], eax
+        movzx   eax, word [es:0x0010]
+        test    eax, eax
+        jnz     .pitch_ok
+        movzx   eax, word [es:0x0012]
+        shl     eax, 2
+.pitch_ok:
+        mov     [vram_pitch], eax
+        mov     al, [es:0x0019]
+        mov     [VMODE], al
+        shr     al, 3
+        jnz     .bpp_ok
+        mov     al, 1
+.bpp_ok:
+        mov     [bpp_div8], al
+        mov     al, [es:0x0020]
+        mov     [fg_rpos], al
+        mov     al, [es:0x001F]
+        mov     [fg_rsize], al
+        mov     al, [es:0x0022]
+        mov     [fg_gpos], al
+        mov     al, [es:0x0021]
+        mov     [fg_gsize], al
+        mov     al, [es:0x0024]
+        mov     [fg_bpos], al
+        mov     al, [es:0x0023]
+        mov     [fg_bsize], al
+        mov     eax, [vram_pitch]
+        movzx   ecx, word [SCRNY]
+        imul    eax, ecx
+        mov     [VRAMBYTES], eax
 
 vbe_done:
+        cmp     byte [VMODE], 8
+        jne     .skip_pal
         call    set_palette
+.skip_pal:
         mov     ax, 0x1130
         mov     bh, 0x06
         int     0x10
@@ -125,6 +279,9 @@ vbe_done:
         int     0x16
         mov     [LEDS], al
 
+        xor     ax, ax
+        mov     es, ax
+        xor     ebx, ebx
         mov     dword [0x6000], 0
         mov     edi, 0x6004
 
@@ -136,6 +293,10 @@ vbe_done:
         jc      .e820_done
         cmp     eax, 0x534D4150
         jne     .e820_done
+        cmp     ecx, 24
+        jae     .e820_norm
+        mov     dword [edi+20], 0
+.e820_norm:
         add     edi, 24
         inc     dword [0x6000]
         cmp     ebx, 0
@@ -148,6 +309,99 @@ vbe_done:
         nop
         out     0xA1, al
 
+        mov     byte [l_rsdp_ok], 0
+        mov     byte [l_rsdp_rev], 0
+        mov     ax, [0x040E]
+        test    ax, ax
+        jz      .rsdp_hi
+        mov     es, ax
+        xor     di, di
+        mov     cx, 1024 / 16
+        call    .rsdp_range
+        jc      .rsdp_hit
+.rsdp_hi:
+        mov     ax, 0xE000
+        mov     es, ax
+        xor     di, di
+        mov     cx, 0x20000 / 16
+        call    .rsdp_range
+        jc      .rsdp_hit
+        jmp     .rsdp_fin
+.rsdp_range:
+        push    si
+        push    di
+        push    cx
+        push    bx
+.rsdp_r_loop:
+        cmp     dword [es:di], 0x20445352
+        jne     .rsdp_r_next
+        cmp     dword [es:di + 4], 0x20525450
+        jne     .rsdp_r_next
+        push    si
+        mov     si, di
+        mov     bx, cx
+        mov     cx, 20
+        xor     al, al
+.rsdp_r_sum:
+        add     al, [es:si]
+        inc     si
+        dec     cx
+        jnz     .rsdp_r_sum
+        mov     cx, bx
+        pop     si
+        test    al, al
+        jz      .rsdp_r_found
+.rsdp_r_next:
+        add     di, 16
+        dec     cx
+        jnz     .rsdp_r_loop
+        pop     bx
+        pop     cx
+        pop     di
+        pop     si
+        clc
+        ret
+.rsdp_r_found:
+        pop     bx
+        pop     cx
+        pop     di
+        pop     si
+        stc
+        ret
+.rsdp_hit:
+        mov     byte [l_rsdp_ok], 1
+        push    es
+        push    fs
+        push    di
+        mov     ax, es
+        mov     fs, ax
+        mov     si, di
+        mov     di, l_rsdp_buf
+        mov     cx, 20
+.rsdp_cp1:
+        mov     al, [fs:si]
+        mov     [di], al
+        inc     si
+        inc     di
+        dec     cx
+        jnz     .rsdp_cp1
+        mov     al, [l_rsdp_buf + 15]
+        mov     [l_rsdp_rev], al
+        cmp     al, 2
+        jb      .rsdp_cp_done
+        mov     cx, 16
+.rsdp_cp2:
+        mov     al, [fs:si]
+        mov     [di], al
+        inc     si
+        inc     di
+        dec     cx
+        jnz     .rsdp_cp2
+.rsdp_cp_done:
+        pop     di
+        pop     fs
+        pop     es
+.rsdp_fin:
         mov     dword [l_loadcur], 0x00010000
 
         xor     ax, ax
@@ -187,6 +441,8 @@ vbe_done:
 .l_found:
         mov     ax, word [bx+26]
         mov     word [l_cluster], ax
+        mov     eax, [bx+28]
+        mov     [l_ksize], eax
 
 .l_loadloop:
         mov     ax, word [l_cluster]
@@ -291,7 +547,13 @@ pipelineflush:
         add     eax, KERNEL - 0x200000
         mov     edi, eax
         mov     esi, [kernel_addr]
-        mov     ecx, 512*1024/4
+        mov     ecx, [l_ksize]
+        cmp     ecx, 0x180000
+        jbe     .ksz_ok
+        mov     ecx, 0x180000
+.ksz_ok:
+        add     ecx, 3
+        shr     ecx, 2
         call    memcpy
 
         mov     esp, STACK_PHYS
@@ -312,46 +574,155 @@ pipelineflush:
         mov     dword [0x92000 + 5*8], 0xA00083
 
         mov     dword [0x91000 + 2*8],  0x94007
-        mov     dword [0x94000 + 0*8],  0xfd000083
+        mov     eax, [VRAM]
+        and     eax, 0xFFE00000
+        or      eax, 0x83
+        mov     edi, 0x94000
+        mov     ecx, VBE_LFB_PAGES
+.lfb_map:
+        mov     [edi], eax
+        mov     dword [edi+4], 0
+        add     eax, 0x200000
+        add     edi, 8
+        dec     ecx
+        jnz     .lfb_map
 
         mov     dword [0x91000 + 1*8],  0x96007
         mov     dword [0x96000 + 0*8],  0xfec00083
         mov     dword [0x96000 + 1*8],  0xfee00083
 
         mov     edi, MBI
-        mov     dword [edi+0], 0       
+        mov     dword [edi], 0
         mov     dword [edi+4], 0
         add     edi, 8
 
-        mov     dword [edi+0], 8
+        mov     ebx, 0x6004
+        mov     ecx, [0x6000]
+        xor     eax, eax
+.memcalc_loop:
+        test    ecx, ecx
+        jz      .memcalc_done
+        cmp     dword [ebx+16], 1
+        jne     .memcalc_next
+        mov     edx, [ebx]
+        add     edx, [ebx+4]
+        cmp     edx, eax
+        jbe     .memcalc_next
+        mov     eax, edx
+.memcalc_next:
+        add     ebx, 24
+        dec     ecx
+        jmp     .memcalc_loop
+.memcalc_done:
+        cmp     eax, 0x100000
+        jbe     .memcalc_zero
+        sub     eax, 0x100000
+        shr     eax, 10
+        jmp     .memcalc_store
+.memcalc_zero:
+        xor     eax, eax
+.memcalc_store:
+        mov     [l_mem_upper], eax
+        mov     edx, 1
+        mov     esi, mb_cmdline
+        call    mb_str_tag
+        mov     edx, 2
+        mov     esi, mb_loader_name
+        call    mb_str_tag
+        mov     dword [edi], 4
+        mov     dword [edi+4], 16
+        mov     dword [edi+8], 640
+        mov     eax, [l_mem_upper]
+        mov     dword [edi+12], eax
+        add     edi, 16
+        call    mb_align
+        mov     dword [edi], 5
+        mov     dword [edi+4], 20
+        movzx   eax, byte [l_drive]
+        mov     dword [edi+8], eax
+        mov     dword [edi+12], 0xFFFFFFFF
+        mov     dword [edi+16], 0xFFFFFFFF
+        add     edi, 20
+        call    mb_pad8
+        mov     ecx, [0x6000]
+        test    ecx, ecx
+        jz      .mb_skip_mmap
+        cmp     ecx, 120
+        jbe     .mb_mmap_n
+        mov     ecx, 120
+.mb_mmap_n:
+        push    ecx
+        imul    edx, ecx, 24
+        lea     eax, [edx+16]
+        mov     dword [edi], 6
+        mov     dword [edi+4], eax
+        mov     dword [edi+8], 24
+        mov     dword [edi+12], 0
+        add     edi, 16
+        pop     ecx
+        imul    ecx, ecx, 24
+        mov     esi, 0x6004
+        rep     movsb
+        call    mb_pad8
+.mb_skip_mmap:
+        mov     dword [edi], 8
         mov     dword [edi+4], 40
         mov     eax, [VRAM]
-        mov     dword [edi+8],  eax
+        mov     dword [edi+8], eax
         mov     dword [edi+12], 0
-        movzx   eax, word [SCRNX]
+        mov     eax, [vram_pitch]
         mov     dword [edi+16], eax
         movzx   eax, word [SCRNX]
         mov     dword [edi+20], eax
         movzx   eax, word [SCRNY]
         mov     dword [edi+24], eax
-        mov     byte  [edi+28], 8
-        mov     byte  [edi+29], 1
-        mov     byte  [edi+30], 0
-        mov     byte  [edi+31], 8
-        mov     byte  [edi+32], 16
-        mov     byte  [edi+33], 8
-        mov     byte  [edi+34], 8
-        mov     byte  [edi+35], 8
-        mov     byte  [edi+36], 0
+        mov     al, [VMODE]
+        mov     byte [edi+28], al
+        mov     byte [edi+29], 1
+        mov     word [edi+30], 0
+        mov     al, [fg_rpos]
+        mov     byte [edi+32], al
+        mov     al, [fg_rsize]
+        mov     byte [edi+33], al
+        mov     al, [fg_gpos]
+        mov     byte [edi+34], al
+        mov     al, [fg_gsize]
+        mov     byte [edi+35], al
+        mov     al, [fg_bpos]
+        mov     byte [edi+36], al
+        mov     al, [fg_bsize]
+        mov     byte [edi+37], al
+        mov     word [edi+38], 0
         add     edi, 40
+        call    mb_align
+        cmp     byte [l_rsdp_ok], 0
+        je      .mb_skip_acpi
+        mov     dword [edi], 14
+        mov     dword [edi+4], 28
+        mov     esi, l_rsdp_buf
+        add     edi, 8
+        mov     ecx, 20
+        rep     movsb
+        call    mb_pad8
+        cmp     byte [l_rsdp_rev], 2
+        jb      .mb_skip_acpi
+        mov     dword [edi], 15
+        mov     dword [edi+4], 44
+        mov     esi, l_rsdp_buf
+        add     edi, 8
+        mov     ecx, 36
+        rep     movsb
+        call    mb_pad8
+.mb_skip_acpi:
 
-        mov     dword [edi+0], 0
+        mov     dword [edi], 0
         mov     dword [edi+4], 8
         add     edi, 8
 
         mov     eax, edi
         sub     eax, MBI
         mov     dword [MBI], eax
+        mov     dword [MBI+4], 0
 
         lgdt    [GDTR64]
 
@@ -406,6 +777,42 @@ memcpy:
         jnz     memcpy
         ret
 
+mb_align:
+        add     edi, 7
+        and     edi, 0xFFFFFFF8
+        ret
+mb_pad8:
+        test    edi, 7
+        jz      .p8_done
+.p8_loop:
+        mov     byte [edi], 0
+        inc     edi
+        test    edi, 7
+        jnz     .p8_loop
+.p8_done:
+        ret
+mb_str_tag:
+        push    ecx
+        push    eax
+        mov     ecx, 0
+.len:
+        cmp     byte [esi+ecx], 0
+        je      .len_done
+        inc     ecx
+        jmp     .len
+.len_done:
+        lea     eax, [ecx+9]
+        add     eax, 7
+        and     eax, 0xFFFFFFF8
+        mov     [edi], edx
+        mov     [edi+4], eax
+        add     edi, 8
+        inc     ecx
+        rep     movsb
+        pop     eax
+        pop     ecx
+        call    mb_pad8
+        ret
 pick_kphys:
         cmp     dword [l_kaslr], 0
         jne     .do_kaslr
@@ -651,39 +1058,44 @@ draw_str:
 draw_char:
         pushad
         mov     [tmp_x], eax
+        mov     [tmp_y], ebx
         mov     [tmp_color], edx
         mov     esi, FONT_BASE
         imul    ecx, ecx, 16
         add     esi, ecx
-        movzx   ecx, word [SCRNX]
-        mov     [pitch], ecx
-        mov     eax, ebx
-        mul     ecx
-        add     eax, [tmp_x]
+        movzx   ebx, byte [bpp_div8]
+        mov     eax, [tmp_y]
+        mul     dword [vram_pitch]
+        mov     ecx, [tmp_x]
+        imul    ecx, ebx
+        add     eax, ecx
         mov     edi, [VRAM]
         add     edi, eax
-        mov     eax, [tmp_color]
-        mov     edx, 16
+        mov     ebp, 16
 .row:
-        movzx   ebx, byte [esi]
-        push    ecx
+        movzx   edx, byte [esi]
         mov     ecx, 8
 .col:
-        shl     bl, 1
-        jnc     .nopix
+        shl     dl, 1
+        jnc     .adv
+        mov     eax, [tmp_color]
+        cmp     byte [VMODE], 32
+        jne     .b8
+        mov     [edi], eax
+        jmp     .adv
+.b8:
         mov     [edi], al
-.nopix:
-        inc     edi
+.adv:
+        add     edi, ebx
         dec     ecx
         jnz     .col
-        pop     ecx
-        inc     esi
-        push    eax
-        mov     eax, [pitch]
-        sub     eax, 8
+        mov     eax, ebx
+        shl     eax, 3
+        neg     eax
+        add     eax, [vram_pitch]
         add     edi, eax
-        pop     eax
-        dec     edx
+        inc     esi
+        dec     ebp
         jnz     .row
         popad
         ret
@@ -695,21 +1107,28 @@ fill_rect:
         mov     [tmp_w], ecx
         mov     [tmp_h], edx
         mov     [tmp_color], esi
-        movzx   ecx, word [SCRNX]
-        mov     [pitch], ecx
-        mov     eax, [tmp_y]
-        mul     ecx
-        add     eax, [tmp_x]
+        mov     eax, ebx
+        mul     dword [vram_pitch]
+        mov     ecx, [tmp_x]
+        movzx   ebx, byte [bpp_div8]
+        imul    ecx, ebx
+        add     eax, ecx
         mov     edi, [VRAM]
         add     edi, eax
-        mov     al, [tmp_color]
+        mov     eax, [tmp_color]
         mov     edx, [tmp_h]
 .row:
         push    edi
         mov     ecx, [tmp_w]
+        cmp     byte [VMODE], 32
+        jne     .b8
+        rep     stosd
+        jmp     .done
+.b8:
         rep     stosb
+.done:
         pop     edi
-        add     edi, [pitch]
+        add     edi, [vram_pitch]
         dec     edx
         jnz     .row
         popad
@@ -791,6 +1210,12 @@ dap:
 
 l_drive: db     0
 l_kphys: dd     0
+l_ksize: dd     0
+l_mem_upper: dd 0
+l_rsdp_ok:   db 0
+l_rsdp_rev:  db 0
+        align 4
+l_rsdp_buf:  times 36 db 0
 l_loadcur: dd   0
 l_rowcl:  dw    0   
 l_cluster: dw   0
@@ -801,6 +1226,20 @@ l_off:    dw    0
 l_seg:    dw    0
 l_kname:  db    "KERNEL  BIN"
 
+l_bestmode:   dw    0xFFFF
+l_exact:      dw    0xFFFF
+l_bestarea:   dd    0
+l_mode:       dw    0xFFFF
+l_fbptr:      dw    0
+vram_pitch:   dd    0
+bpp_div8:     db    1
+fg_rpos:      db    0
+fg_rsize:     db    0
+fg_gpos:      db    0
+fg_gsize:     db    0
+fg_bpos:      db    0
+fg_bsize:     db    0
+fb_modes:     dw    0x143, 0x142, 0x141, 0x144, 0x145, 0x146, 0x147, 0xFFFF
 l_kaslr:      dd    1
 menu_sel:     dd    0
 menu_secs:    dd    0
@@ -827,6 +1266,8 @@ menu_items:
 msg_opt0: db "Boot NiTian OS", 0
 msg_opt2: db "Reboot", 0
 
+mb_cmdline:     db "root=/dev/sda2 console=tty0", 0
+mb_loader_name: db "NiTian Bootloader (MultiBoot2)", 0
 bits    16
 set_palette:
         pusha

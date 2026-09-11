@@ -19,6 +19,14 @@ void list_remove(struct list_elem *elem) {
     elem->next->prev = elem->prev;
 }
 
+void list_unlink(struct list_elem *elem) {
+    if (elem->next != 0) {
+        list_remove(elem);
+        elem->next = 0;
+        elem->prev = 0;
+    }
+}
+
 int list_empty(struct list *list) {
     return list->head.next == &list->tail;
 }

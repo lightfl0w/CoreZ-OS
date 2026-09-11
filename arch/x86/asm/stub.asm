@@ -67,7 +67,10 @@ isr_common_stub:
     push r14
     push r15
     mov  rdi, rsp
+    mov  rbp, rsp
+    and  rsp, -16
     call isr_handler
+    mov  rsp, rbp
 
     pop  r15
     pop  r14
@@ -131,7 +134,10 @@ irq_common_stub:
     push r14
     push r15
     mov  rdi, rsp
+    mov  rbp, rsp
+    and  rsp, -16
     call irq_handler
+    mov  rsp, rbp
     pop  r15
     pop  r14
     pop  r13
@@ -201,7 +207,10 @@ syscall_common_stub:
     push r14
     push r15
     mov  rdi, rsp
+    mov  rbp, rsp
+    and  rsp, -16
     call syscall_handler
+    mov  rsp, rbp
     mov  [rsp + 14*8], rax   
     pop  r15
     pop  r14
