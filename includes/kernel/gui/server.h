@@ -26,8 +26,6 @@ struct wl_event {
     int32_t a, b, c;
 };
 
-enum gui_input_type { GUI_IN_KEY = 1, GUI_IN_MOUSE };
-
 #define MOD_SHIFT 1
 #define MOD_CTRL 2
 #define MOD_ALT 4
