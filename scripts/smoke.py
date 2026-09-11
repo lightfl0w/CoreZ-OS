@@ -6,7 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 IMG = ROOT / "build" / "test_hd.img"
 LOG = Path("/tmp/nit_smoke.log")
-MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS", "TOYBOX_ECHO_OK"]
+MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS",
+         "TOYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root root",
+         "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0"]
 TIMEOUT = 300
 
 

@@ -120,11 +120,18 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     if (ext2_read_inode(pino, &par)) {
         return -1;
     }
+    if (fs_check_perm(&par, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
     struct inode newi;
     uint32_t ino = ext2_new_inode(mode, &newi);
     if (ino == 0) {
         return -1;
     }
+    newi.i_uid = current->euid;
+    newi.i_gid = current->egid;
+    ext2_write_inode(ino, &newi);
     if (is_dir) {
         if (ext2_add_entry(&newi, ino, ".", 1) ||
             ext2_add_entry(&newi, pino, "..", 1)) {
@@ -147,6 +154,24 @@ static void ext2_free_best_effort(struct inode *ino) {
     ext2_truncate_inode(ino);
     ext2_write_inode(ino->i_no, ino);
     ext2_free_inode(ino->i_no);
+}
+int fs_check_perm(const struct inode *ino, uint32_t bits) {
+    struct task_struct *cur = current;
+    if (cur->euid == 0) {
+        if ((bits & 1u) && !(ino->i_mode & 0111u))
+            return -1;
+        return 0;
+    }
+    uint32_t shift;
+    if (cur->euid == ino->i_uid)
+        shift = 6;
+    else if (cur->egid == ino->i_gid)
+        shift = 3;
+    else
+        shift = 0;
+    if (((ino->i_mode >> shift) & 7u & bits) != bits)
+        return -1;
+    return 0;
 }
 int fs_is_chardev(const struct inode *ino) {
     return ino != NULL && (ino->i_mode & 0xF000u) == 0x2000u;
@@ -184,6 +209,53 @@ int32_t sys_symlink(const char *target, const char *linkpath) {
         return -1;
     }
     return ext2_write_inode(ino, &node) ? -1 : 0;
+}
+static int fs_stat_node(uint32_t ino_no, uint32_t *size, uint32_t *mode,
+                        uint32_t *uid, uint32_t *gid) {
+    struct inode obj;
+    if (ext2_read_inode(ino_no, &obj))
+        return -1;
+    if (size) *size = obj.i_size;
+    if (mode) *mode = obj.i_mode;
+    if (uid) *uid = obj.i_uid;
+    if (gid) *gid = obj.i_gid;
+    return 0;
+}
+int fs_stat_full(const char *path, uint32_t *ino_out, uint32_t *size,
+                 uint32_t *mode, uint32_t *uid, uint32_t *gid) {
+    uint32_t ino_no = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(path, &ino_no, &ft, 1))
+        return -1;
+    if (fs_stat_node(ino_no, size, mode, uid, gid))
+        return -1;
+    if (mode) {
+        *mode = (*mode & ~0xF000u) |
+                (ft == FT_DIRECTORY    ? 0x4000u
+                 : ft == FT_CHARDEVICE ? 0x2000u
+                 : ft == FT_SYMLINK    ? 0xA000u
+                                       : 0x8000u);
+    }
+    if (ino_out) *ino_out = ino_no;
+    return 0;
+}
+int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
+    uint32_t ino_no = 0;
+    int ft = 0;
+    if (path == NULL || ext2_lookup_ftype(path, &ino_no, &ft, 1))
+        return -1;
+    struct inode obj;
+    if (ext2_read_inode(ino_no, &obj))
+        return -1;
+    if (current->euid != 0) {
+        current->errno = 1;
+        return -1;
+    }
+    if (uid != (uint32_t)-1)
+        obj.i_uid = (uint16_t)uid;
+    if (gid != (uint32_t)-1)
+        obj.i_gid = (uint16_t)gid;
+    return ext2_write_inode(ino_no, &obj) ? -1 : 0;
 }
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev) {
     if (path == NULL || (mode & 0xF000u) != 0x2000u) {
@@ -237,6 +309,16 @@ int open_file(const char *pathname, uint8_t flags) {
     file->fd_flag = flags;
     file->fd_inode = inode_open(cur_part, ino);
     if (file->fd_inode == NULL) {
+        file_table_free_slot(gfd);
+        return -1;
+    }
+    uint32_t low = flags & 3u;
+    uint32_t need = (low == O_WRONLY) ? 2u : 4u;
+    if (low == O_RDWR)
+        need |= 2u;
+    if (fs_check_perm(file->fd_inode, need)) {
+        current->errno = 13;
+        inode_close(file->fd_inode);
         file_table_free_slot(gfd);
         return -1;
     }
@@ -381,6 +463,10 @@ static int remove_entry_common(const char *pathname, int want_dir,
     if (ext2_read_inode(pino, &par) || ext2_read_inode(ino, &obj)) {
         return -1;
     }
+    if (fs_check_perm(&par, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
     if (check_empty && !ext2_dir_is_empty(&obj)) {
         return -1;
     }
@@ -413,6 +499,14 @@ struct dir *sys_opendir(const char *name) {
         return NULL;
     }
     if (!is_dir) {
+        return NULL;
+    }
+    struct inode obj;
+    if (ext2_read_inode(ino, &obj)) {
+        return NULL;
+    }
+    if (fs_check_perm(&obj, 4u)) {
+        current->errno = 13;
         return NULL;
     }
     return dir_open(cur_part, ino);
@@ -515,10 +609,59 @@ char *sys_getcwd(char *buf, uint32_t size) {
     }
     return buf;
 }
+int fs_cwd_abs_prefix(char *buf, uint32_t size) {
+    uint32_t child = (current != NULL) ? current->cwd_inode_nr : 0;
+    if (child == 0 || child == 2) {
+        if (size < 2) {
+            return -1;
+        }
+        buf[0] = '/';
+        buf[1] = 0;
+        return 0;
+    }
+    char full_path_reverse[MAX_PATH_LEN] = {0};
+    while (child) {
+        uint32_t parent = get_parent_dir_inode_nr(child);
+        if (parent == 0 || parent == (uint32_t)-1) {
+            return -1;
+        }
+        if (get_child_dir_name(parent, child, full_path_reverse) == -1) {
+            return -1;
+        }
+        child = parent;
+    }
+    buf[0] = 0;
+    char *last_slash;
+    while ((last_slash = strrchr(full_path_reverse, '/'))) {
+        uint32_t len = strlen(buf);
+        uint32_t seg_len = strlen(last_slash);
+        if (len + seg_len + 1 > size) {
+            return -1;
+        }
+        strcpy(buf + len, last_slash);
+        *last_slash = 0;
+    }
+    if (buf[0] == 0) {
+        if (size < 2) {
+            return -1;
+        }
+        buf[0] = '/';
+        buf[1] = 0;
+    }
+    return 0;
+}
 int32_t sys_chdir(const char *path) {
     uint32_t ino = 0;
     int is_dir = 0;
     if (ext2_lookup(path, &ino, &is_dir) || !is_dir) {
+        return -1;
+    }
+    struct inode obj;
+    if (ext2_read_inode(ino, &obj)) {
+        return -1;
+    }
+    if (fs_check_perm(&obj, 1u)) {
+        current->errno = 13;
         return -1;
     }
     current->cwd_inode_nr = ino;

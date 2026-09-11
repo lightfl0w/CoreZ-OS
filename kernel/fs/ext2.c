@@ -1,4 +1,6 @@
 #include "kernel/fs/ext2.h"
+#include "kernel/fs/fs.h"
+#include "kernel/sched/thread.h"
 
 #include "ops/block_ops.h"
 #include "kernel/sched/sync.h"
@@ -42,6 +44,11 @@ static uint32_t free_inodes = 0;
 
 static int ext2_read_block(uint32_t blk, void *buf) {
     if (disk == NULL) {
+        return -1;
+    }
+    if (blk >= total_blocks && total_blocks != 0) {
+        kprintf("[ext2] read out-of-range block %d (total %d)\n", blk,
+                total_blocks);
         return -1;
     }
     BLOCK.read_sectors(disk, start + blk * sect_per_block, buf,
@@ -134,7 +141,9 @@ static int ext2_read_inode_impl(uint32_t ino, struct inode *out) {
     memset(out, 0, sizeof(struct inode));
     out->i_no = ino;
     out->i_mode = (uint32_t)(*(uint16_t *)(p + 0));
+    out->i_uid = *(uint16_t *)(p + 2);
     out->i_size = *(uint32_t *)(p + 4);
+    out->i_gid = *(uint16_t *)(p + 24);
     uint32_t bi = 0;
     for (bi = 0; bi < 15; bi++) {
         out->i_block[bi] = *(uint32_t *)(p + 40 + 4 * bi);
@@ -271,6 +280,8 @@ static int ext2_write_inode_impl(uint32_t ino, const struct inode *in) {
     ext2_read_block(blk, buf);
     uint8_t *p = buf + off;
     *(uint16_t *)(p + 0) = (uint16_t)in->i_mode;
+    *(uint16_t *)(p + 2) = (uint16_t)in->i_uid;
+    *(uint16_t *)(p + 24) = (uint16_t)in->i_gid;
     *(uint32_t *)(p + 4) = in->i_size;
     for (uint32_t bi = 0; bi < 15; bi++) {
         *(uint32_t *)(p + 40 + 4 * bi) = in->i_block[bi];
@@ -740,7 +751,42 @@ static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
     buf[len] = 0;
     return (int)len;
 }
+static int ext2_abs_path(const char *path, char *out, uint32_t cap) {
+    if (path == NULL || path[0] == 0) {
+        return -1;
+    }
+    if (path[0] == '/') {
+        if (strlen(path) >= cap) {
+            return -1;
+        }
+        strcpy(out, path);
+        return 0;
+    }
+    char pre[MAX_PATH_LEN];
+    if (fs_cwd_abs_prefix(pre, sizeof(pre)) != 0) {
+        return -1;
+    }
+    uint32_t pl = (uint32_t)strlen(pre);
+    uint32_t rl = (uint32_t)strlen(path);
+    if (pl + 1 + rl >= cap) {
+        return -1;
+    }
+    memcpy(out, pre, pl);
+    if (pl == 0 || pre[pl - 1] != '/') {
+        out[pl++] = '/';
+    }
+    memcpy(out + pl, path, rl + 1);
+    return 0;
+}
+
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir) {
+    char abs[MAX_PATH_LEN];
+    if (path != NULL && path[0] != '/') {
+        if (ext2_abs_path(path, abs, sizeof(abs)) != 0) {
+            return -1;
+        }
+        path = abs;
+    }
     int ft = 0;
     lock_acquire(&ext2_lock);
     int rc = ext2_lookup_depth(path, ino, &ft, 1, 8);
@@ -749,6 +795,13 @@ int ext2_lookup(const char *path, uint32_t *ino, int *is_dir) {
     return rc;
 }
 int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow) {
+    char abs[MAX_PATH_LEN];
+    if (path != NULL && path[0] != '/') {
+        if (ext2_abs_path(path, abs, sizeof(abs)) != 0) {
+            return -1;
+        }
+        path = abs;
+    }
     lock_acquire(&ext2_lock);
     int rc = ext2_lookup_depth(path, ino, ftype, follow, 8);
     lock_release(&ext2_lock);

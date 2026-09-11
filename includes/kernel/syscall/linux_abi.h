@@ -78,7 +78,27 @@
 #define SYS_LINUX_setpgid 109
 #define SYS_LINUX_getpgid 121
 #define SYS_LINUX_setsid 112
+#define SYS_LINUX_fchmod 91
+#define SYS_LINUX_chown 92
+#define SYS_LINUX_fchown 93
+#define SYS_LINUX_lchown 94
 #define SYS_LINUX_umask 95
+#define SYS_LINUX_getuid 102
+#define SYS_LINUX_setuid 105
+#define SYS_LINUX_getgid 104
+#define SYS_LINUX_setgid 106
+#define SYS_LINUX_geteuid 107
+#define SYS_LINUX_getegid 108
+#define SYS_LINUX_setreuid 113
+#define SYS_LINUX_setregid 114
+#define SYS_LINUX_getgroups 115
+#define SYS_LINUX_setgroups 116
+#define SYS_LINUX_setresuid 117
+#define SYS_LINUX_getresuid 118
+#define SYS_LINUX_setresgid 119
+#define SYS_LINUX_getresgid 120
+#define SYS_LINUX_fchownat 260
+#define SYS_LINUX_fchmodat 268
 #define SYS_LINUX_tkill 200
 #define SYS_LINUX_times 153
 #define SYS_LINUX_arch_prctl 158
@@ -178,6 +198,7 @@
 #define LINUX_TCSETS 0x5402
 #define LINUX_TCSETSW 0x5403
 #define LINUX_TCSETSF 0x5404
+#define LINUX_TCFLSH 0x540B
 #define LINUX_TIOCGPGRP 0x540f
 #define LINUX_TIOCSPGRP 0x5410
 #define LINUX_TIOCGWINSZ 0x5413
@@ -213,6 +234,7 @@
 #define LINUX_EMFILE 24
 #define LINUX_ENOSPC 28
 #define LINUX_EPIPE 32
+#define LINUX_EAFNOSUPPORT 97
 #define LINUX_ERANGE 34
 #define LINUX_ENOSYS 38
 #define LINUX_ENOTTY 25
@@ -220,6 +242,8 @@
 #define LINUX_ENOTEMPTY 39
 #define LINUX_ELOOP 40
 #define LINUX_ENOTSOCK 88
+#define LINUX_EOPNOTSUPP 95
+#define LINUX_ENOTCONN 107
 
 #define LINUX_NAME_MAX 255
 #define LINUX_PATH_MAX 4096

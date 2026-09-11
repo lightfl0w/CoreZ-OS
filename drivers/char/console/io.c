@@ -8,12 +8,22 @@ static uint8_t *vram = (uint8_t *)0;
 static int scrnx = 0;
 static int scrny = 0;
 static int pitch = 0;
+static int bpp = 8;
+static int bpp_bytes = 1;
 static size_t vram_bytes = 0;
 static int cursor_x = 0;
 static int cursor_y = -20;
-static int text_color = 7;
+static uint32_t text_color = 0;
 static int gui_active = 0;
 
+static const uint32_t ansi16[16] = {
+    0xFF000000u, 0xFF0000AAu, 0xFF00AA00u, 0xFF00AAAAu, 0xFFAA0000u,
+    0xFFAA00AAu, 0xFFAA5500u, 0xFFAAAAAAu, 0xFF555555u, 0xFF5555FFu,
+    0xFF55FF55u, 0xFF55FFFFu, 0xFFFF5555u, 0xFFFF55FFu, 0xFFFFFF55u,
+    0xFFFFFFFFu};
+uint32_t io_ansi_color(int idx) {
+    return ansi16[idx & 15];
+}
 uint8_t *io_get_vram(void) {
     return vram;
 }
@@ -22,6 +32,12 @@ int io_get_scrnx(void) {
 }
 int io_get_scrny(void) {
     return scrny;
+}
+int io_get_pitch(void) {
+    return pitch;
+}
+int io_get_bpp(void) {
+    return bpp;
 }
 size_t io_get_vram_bytes(void) {
     return vram_bytes;
@@ -37,20 +53,25 @@ void io_set_gui_active(int on) {
 
 #define PRINTF_LINE_GAP 20
 
-void io_init(uint8_t *vram_base, int width, int height, uint32_t bytes) {
+void io_init(uint8_t *vram_base, int width, int height, uint32_t bytes,
+             int fb_pitch, int fb_bpp) {
     vram = vram_base;
     scrnx = width;
     scrny = height;
-    pitch = width;
-
-    vram_bytes = (bytes > 0) ? (size_t)bytes : (size_t)width * (size_t)height;
+    bpp = (fb_bpp > 0) ? fb_bpp : 8;
+    bpp_bytes = bpp / 8;
+    if (bpp_bytes < 1)
+        bpp_bytes = 1;
+    pitch = (fb_pitch > 0) ? fb_pitch : width * bpp_bytes;
+    vram_bytes = (bytes > 0) ? (size_t)bytes
+                             : (size_t)pitch * (size_t)height;
     cursor_x = 0;
     cursor_y = 0;
-    text_color = 7;
+    text_color = ansi16[7];
 }
 
 void set_text_color(int color) {
-    text_color = color & 0xFF;
+    text_color = ansi16[color & 15];
 }
 
 void set_cursor(int x, int y) {
@@ -289,27 +310,51 @@ void io_clear_screen(void) {
     vram_zero_all();
     cursor_x = 0;
     cursor_y = 0;
-    text_color = 7;
+    text_color = ansi16[7];
 }
 
-void show_char(uint8_t *vram, int pitch, int x, int y, int scrnx, int scrny,
-               char c, int color, int bg) {
+static inline void store_px(uint8_t *p, uint32_t color) {
+    if (bpp_bytes == 4) {
+        *(uint32_t *)p = color;
+    } else if (bpp_bytes == 2) {
+        *(uint16_t *)p = (uint16_t)color;
+    } else if (bpp_bytes == 3) {
+        p[0] = (uint8_t)color;
+        p[1] = (uint8_t)(color >> 8);
+        p[2] = (uint8_t)(color >> 16);
+    } else {
+        *p = (uint8_t)color;
+    }
+}
+void show_char(uint8_t *vram_ptr, int p, int x, int y, int sw, int sh, char c,
+               uint32_t color, int bg) {
+    if (!vram_ptr)
+        return;
     const uint8_t *font = FONT_BASE + ((uint8_t)c) * 16;
+    uint32_t bgc = (bg < 0) ? 0 : (uint32_t)bg;
 
     for (int row = 0; row < 16; row++) {
         uint8_t bits = font[row];
         for (int col = 0; col < 8; col++) {
             int px = x + col;
             int py = y + row;
-            if (px < 0 || px >= scrnx || py < 0 || py >= scrny)
+            if (px < 0 || px >= sw || py < 0 || py >= sh)
                 continue;
-
-            if (bits & (0x80 >> col)) {
-                vram[py * pitch + px] = (uint8_t)color;
-            } else if (bg >= 0) {
-                vram[py * pitch + px] = (uint8_t)bg;
-            }
+            uint8_t *dst = vram_ptr + (size_t)py * (size_t)p +
+                           (size_t)px * (size_t)bpp_bytes;
+            if (bits & (0x80 >> col))
+                store_px(dst, color);
+            else if (bg >= 0)
+                store_px(dst, bgc);
         }
     }
 }
 
+void show_string(uint8_t *vram_ptr, int p, int x, int y, int sw, int sh,
+                 const char *s, uint32_t color, int bg) {
+    while (*s) {
+        show_char(vram_ptr, p, x, y, sw, sh, *s, color, bg);
+        x += 8;
+        s++;
+    }
+}

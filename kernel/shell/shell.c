@@ -102,6 +102,8 @@ static int32_t cmd_parse(char *cmd_str, char **argv, char token) {
 }
 
 static void cmd_execute(int32_t argc, char **argv) {
+    if (argc <= 0 || argv[0] == NULL)
+        return;
     if (!strcmp("ls", argv[0])) {
         buildin_ls(argc, argv);
     } else if (!strcmp("cd", argv[0])) {
@@ -243,7 +245,6 @@ static void autoexec(void) {
 
 void my_shell(void *arg) {
     (void)arg;
-    kprintf("[shell] my_shell start\n");
     clear();
     cwd_cache[0] = '/';
     cwd_cache[1] = 0;

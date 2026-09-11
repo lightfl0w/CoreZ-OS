@@ -9,6 +9,7 @@
 #include "kernel/init/pic/pic.h"
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/pool/pool.h"
+#include "kernel/mm/access.h"
 #include "kernel/sched/thread.h"
 #include "kernel/signal.h"
 #include "kernel/userprog/process.h"
@@ -102,8 +103,9 @@ void isr_handler(struct Registers *r) {
             (fa < 0x40000000u || fa >= 0x80200000u)) {
             set_text_color(14);
             kprintf("[pf] kernel touched unmapped user addr 0x%x, killing "
-                    "pid %d (%s) eip=0x%x\n",
-                    fa, current->pid, current->name, (uint32_t)r->eip);
+                    "pid %d (%s) eip=0x%x err=%x mapped=%d\n",
+                    fa, current->pid, current->name, (uint32_t)r->eip,
+                    (uint32_t)r->err_code, page_is_mapped(fa));
             signal_terminate(current, SIGSEGV);
             return;
         }

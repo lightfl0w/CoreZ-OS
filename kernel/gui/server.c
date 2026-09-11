@@ -6,6 +6,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/gui/font.h"
 #include "kernel/gui/shm.h"
 #include "kernel/gui/wm.h"
 
@@ -40,12 +41,17 @@ static uint8_t last_buttons = 0;
 #define CURSOR_W 12
 #define CURSOR_H 18
 static const char *cursor_bmp[CURSOR_H] = {
-    "#...........", "##..........", "#.#.........", "#..#........",
-    "#...#.......", "#....#......", "#.....#.....", "#......#....",
-    "#.......#...", "#........#..", "#.....#####.", "#..#..#.....",
-    "#.#...#.....", "##....#.....", "#.....#.....", ".....#......",
-    "....#.......", "............",
+    "#...........", "##..........", "#O#.........", "#OO#........",
+    "#OOO#.......", "#OOOO#......", "#OOOOO#.....", "#OOOOOO#....",
+    "#OOOOOOO#...", "#OOOOOOOO#..", "#OOOOO#####.", "#OO#OO#.....",
+    "#O#.#OO#....", "##..#OO#....", "#....#OO#...", ".....#OO#...",
+    "......#OO#..", ".......##...",
 };
+#define CURSOR_OUTLINE GFX_RGB(0, 0, 0)
+#define CURSOR_FILL GFX_RGB(255, 255, 255)
+#define UI_FONT_PX 13
+#define TITLE_FONT_PX 13
+#define CLOSE_FONT_PX 10
 
 static void client_post(struct wl_client *c, int type, int32_t a, int32_t b,
                         int32_t cc) {
@@ -282,15 +288,21 @@ void comp_destroy_surface_pool(struct wl_surface *s, struct shm_pool **pool) {
     *pool = 0;
 }
 
-static uint8_t wallpaper_color(int y) {
-    int shade = (y * 5) / scrny;
-    return gfx_rgb(0, shade / 3, 1 + shade / 2);
+static gfx_color wallpaper_color(int y) {
+    int t = (scrny > 1) ? (y * 255) / (scrny - 1) : 0;
+    if (t < 0)
+        t = 0;
+    if (t > 255)
+        t = 255;
+    int r = GFX_R(TH_WP_TOP) + (GFX_R(TH_WP_BOT) - GFX_R(TH_WP_TOP)) * t / 255;
+    int g = GFX_G(TH_WP_TOP) + (GFX_G(TH_WP_BOT) - GFX_G(TH_WP_TOP)) * t / 255;
+    int b = GFX_B(TH_WP_TOP) + (GFX_B(TH_WP_BOT) - GFX_B(TH_WP_TOP)) * t / 255;
+    return GFX_RGB(r, g, b);
 }
 
 static void draw_wallpaper(struct gfx_rect *r) {
-    for (int y = r->y; y < r->y + r->h; y++) {
+    for (int y = r->y; y < r->y + r->h; y++)
         gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
-    }
 }
 
 static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
@@ -305,8 +317,8 @@ static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
         return;
 
     int focused = (wm_focused_surface() == s);
-    uint8_t border_col = focused ? TH_FRAME_FOC : TH_FRAME_UNF;
-    uint8_t title_col = focused ? TH_TITLE_FOC : TH_TITLE_UNF;
+    gfx_color border_col = focused ? TH_FRAME_FOC : TH_FRAME_UNF;
+    gfx_color title_col = focused ? TH_TITLE_FOC : TH_TITLE_UNF;
 
     gfx_fill_round(dst, fx - WIN_SHADOW + 3, fy + 3, fw + 2 * WIN_SHADOW - 6,
                    fh + 2 * WIN_SHADOW - 2, rad + WIN_SHADOW, TH_SHADOW);
@@ -314,34 +326,43 @@ static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
                    fh + 2 * WIN_SHADOW - 6, rad + WIN_SHADOW - 2, TH_SHADOW2);
 
     gfx_fill_round(dst, fx, fy, fw, fh, rad, border_col);
-
     gfx_fill_round(dst, fx + COMP_BORDER, fy + COMP_BORDER,
                    fw - 2 * COMP_BORDER, fh - 2 * COMP_BORDER,
                    rad - COMP_BORDER, title_col);
 
-    gfx_text(dst, fx + 8, fy + 1, s->title, focused ? TH_TEXT : TH_MUTED, -1);
+    int title_px = TITLE_FONT_PX;
+    int ty = fy + (COMP_TITLE_H - font_ascent(title_px)) / 2;
+    if (ty < fy)
+        ty = fy;
+    font_draw(dst, fx + 8, ty, s->title, title_px,
+              focused ? TH_TEXT : TH_MUTED);
 
     int bs = 12, cbx = fx + fw - 14, cby = fy + 1;
-    gfx_fill_round(dst, cbx, cby, bs, bs, 5, focused ? TH_CLOSE : gfx_gray(7));
-    gfx_text(dst, cbx + 2, cby, "x", TH_TEXT, -1);
+    gfx_fill_round(dst, cbx, cby, bs, bs, 5, focused ? TH_CLOSE : TH_DIM);
+    int cw = font_text_width("x", CLOSE_FONT_PX);
+    font_draw(dst, cbx + (bs - cw) / 2,
+              cby + (bs - font_ascent(CLOSE_FONT_PX)) / 2, "x", CLOSE_FONT_PX,
+              TH_TEXT);
 
     if (s->w > 0 && s->h > 0) {
         struct gfx_rect content = {s->x, s->y, s->w, s->h};
         struct gfx_rect iv;
         if (gfx_rect_intersect(content, *clip, &iv)) {
             if (s->buf && s->buf_w == s->w && s->buf_h == s->h) {
-                struct gfx_canvas sc = {s->buf, s->w, s->w, s->h};
-                sc.bytes = (size_t)s->buf_w * (size_t)s->buf_h;
-                gfx_blit(dst, iv.x, iv.y, &sc, iv.x - s->x, iv.y - s->y, iv.w,
-                         iv.h);
+                struct gfx_canvas sc;
+                sc.pixels = (gfx_color *)s->buf;
+                sc.pitch = s->w * 4;
+                sc.w = s->w;
+                sc.h = s->h;
+                sc.bytes = (size_t)s->w * (size_t)s->h * 4u;
+                gfx_blit_round(dst, iv.x, iv.y, &sc, iv.x - s->x, iv.y - s->y,
+                               iv.w, iv.h, 255, fx, fy, fw, fh, rad,
+                               GFX_CORNER_ALL);
             } else {
-                gfx_fill(dst, iv.x, iv.y, iv.w, iv.h, gfx_gray(2));
+                gfx_fill(dst, iv.x, iv.y, iv.w, iv.h, TH_CONTENT);
             }
         }
     }
-
-    gfx_mask_round(dst, fx, fy, fw, fh, rad, wallpaper_color(fy + fh - 1),
-                   GFX_CORNER_BL | GFX_CORNER_BR);
 }
 
 static void draw_cursor(void) {
@@ -353,7 +374,8 @@ static void draw_cursor(void) {
             int px = cur_x + col, py = cur_y + row;
             if (px < 0 || px >= scrnx || py < 0 || py >= scrny)
                 continue;
-            dst->pixels[py * dst->pitch + px] = (p == '#') ? 0 : 15;
+            gfx_color c = (p == 'O') ? CURSOR_FILL : CURSOR_OUTLINE;
+            dst->pixels[(size_t)py * (size_t)gfx_stride(dst) + (size_t)px] = c;
         }
     }
 }
@@ -410,7 +432,8 @@ static void repaint(void) {
     if (double_buffer) {
         for (int i = 0; i < n; i++) {
             struct gfx_rect *dr = &rects[i];
-            gfx_blit(&screen, dr->x, dr->y, &back, dr->x, dr->y, dr->w, dr->h);
+            gfx_present(&screen, dr->x, dr->y, &back, dr->x, dr->y, dr->w,
+                        dr->h);
         }
     }
 
@@ -426,18 +449,21 @@ static void repaint(void) {
 void comp_init(void) {
     scrnx = io_get_scrnx();
     scrny = io_get_scrny();
-    screen.pixels = io_get_vram();
-    screen.pitch = scrnx;
+    int pitch = io_get_pitch();
+    if (pitch < scrnx * 4)
+        pitch = scrnx * 4;
+    screen.pixels = (gfx_color *)io_get_vram();
+    screen.pitch = pitch;
     screen.w = scrnx;
     screen.h = scrny;
     screen.bytes = io_get_vram_bytes();
 
-    size_t bsz = (size_t)scrnx * (size_t)scrny;
+    size_t bsz = (size_t)scrnx * (size_t)scrny * 4u;
     uint8_t *bp = get_kernel_pages(
         (uint32_t)((bsz + (size_t)PAGE_SIZE - 1) / (size_t)PAGE_SIZE));
     if (bp) {
-        back.pixels = bp;
-        back.pitch = scrnx;
+        back.pixels = (gfx_color *)bp;
+        back.pitch = scrnx * 4;
         back.w = scrnx;
         back.h = scrny;
         back.bytes = bsz;

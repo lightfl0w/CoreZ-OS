@@ -93,6 +93,12 @@ static void init_task_struct_basic(struct task_struct *t, int32_t parent_pid) {
     t->tls_msr = 0;
     t->errno = 0;
     t->pgid = 0;
+    t->uid = 0;
+    t->gid = 0;
+    t->euid = 0;
+    t->egid = 0;
+    t->suid = 0;
+    t->sgid = 0;
     t->umask = 0o022;
     t->sid = 0;
     t->itimer_expire = 0;
@@ -153,6 +159,7 @@ void thread_init(void) {
     task_table[0].errno = 0;
     task_table[0].compat = 0;
     task_table[0].futex_tag.prev = task_table[0].futex_tag.next = NULL;
+    task_table[0].wait_tag.prev = task_table[0].wait_tag.next = NULL;
     task_table[0].futex_ready = 0;
     task_table[0].slot_used = 1;
     list_append(&thread_all_list, &task_table[0].all_list_tag);
@@ -176,6 +183,7 @@ struct task_struct *thread_alloc_slot(const char *name, uint8_t priority) {
     }
     t->slot_used = 1;
     slot_inuse |= 1ULL << i;
+    t->wait_tag.prev = t->wait_tag.next = NULL;
     struct thread_stack *ts =
         (struct thread_stack *)(stack + THREAD_STACK_SIZE -
                                 sizeof(struct thread_stack));
@@ -344,6 +352,7 @@ void thread_kill_pid(uint32_t pid) {
         ready_remove(t);
 
     kill_orphan_children((int32_t)t->pid);
+    list_unlink(&t->wait_tag);
     if (keyboard_ioq.consumer == t)
         keyboard_ioq.consumer = 0;
     if (keyboard_ioq.producer == t)

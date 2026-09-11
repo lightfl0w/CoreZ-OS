@@ -9,6 +9,8 @@ struct inode {
     uint32_t i_no;
     uint32_t i_size;
     uint32_t i_mode;
+    uint32_t i_uid;
+    uint32_t i_gid;
     uint32_t i_open_cnt;
     uint8_t write_deny;
     uint32_t i_block[15];

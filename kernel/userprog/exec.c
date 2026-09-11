@@ -12,6 +12,15 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
+#include "kernel/fs/file.h"
+static const char **exec_env_defaults(void) {
+    static const char *root[4] = {"PATH=/bin:/usr/bin:/", "HOME=/",
+                                  "USER=root", "LOGNAME=root"};
+    static const char *user[4] = {"PATH=/bin:/usr/bin", "HOME=/home/user",
+                                  "USER=user", "LOGNAME=user"};
+    return (current != NULL && current->euid == 0) ? root : user;
+}
+
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 #define PF_X 0x1
@@ -233,7 +242,6 @@ static void scan_note_abi(int32_t fd, uint32_t base_off, uint32_t filesz,
                 read_file(fd, desc, 8);
                 if (desc[0] == 0) {
                     *is_linux = 1;
-                    kprintf("[exec] Linux ELF detected (GNU ABI-tag)\n");
                 }
             }
         }
@@ -275,6 +283,11 @@ static int32_t segment_load(int32_t fd, uint32_t offset, uint32_t filesz,
             if (get_a_page(vaddr_page) == 0) {
                 return -1;
             }
+        } else if (!(*pte & 2)) {
+            free_user_page(vaddr_page);
+            if (get_a_page(vaddr_page) == 0) {
+                return -1;
+            }
         }
         vaddr_page += PAGE_SIZE;
     }
@@ -295,6 +308,17 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
     uint32_t image_end = 0;
     unsigned char ident[16];
     int32_t fd = open_file(pathname, O_RDONLY);
+    {
+        uint32_t gfd = fd_local2global((uint32_t)fd);
+        struct file *xf = file_get(gfd);
+        if (xf == NULL || xf->fd_inode == NULL ||
+            fs_check_perm(xf->fd_inode, 1u)) {
+            if (fd >= 0)
+                close_file(fd);
+            current->errno = 13;
+            return -1;
+        }
+    }
     if (fd == -1) {
         return -1;
     }
@@ -432,8 +456,25 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         apply_relocs(bias, dyn_vaddr);
         for (int i = 0; i < wxn; i++)
             apply_rx(wx[i].base, wx[i].pages);
-        ret = (int32_t)((uint64_t)elf64_header.e_entry + bias);
+    ret = (int32_t)((uint64_t)elf64_header.e_entry + bias);
         *bias_out = bias;
+        {
+            uint32_t gfd2 = fd_local2global((uint32_t)fd);
+            struct file *xf = file_get(gfd2);
+            if (xf != NULL && xf->fd_inode != NULL &&
+                (xf->fd_inode->i_mode & 0xF000u) == 0x8000u) {
+                uint32_t xm = xf->fd_inode->i_mode;
+                struct task_struct *xt = current;
+                if (xm & 0x800u) {
+                    xt->euid = xf->fd_inode->i_uid;
+                    xt->suid = xt->euid;
+                }
+                if (xm & 0x400u) {
+                    xt->egid = xf->fd_inode->i_gid;
+                    xt->sgid = xt->egid;
+                }
+            }
+        }
         if (image_end <= USER_VADDR_START ||
             image_end + PAGE_SIZE >= USER_LOW_CEILING) {
             goto done;
@@ -591,10 +632,12 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         if (argc < 0) {
             return -1;
         }
-        if (envp == NULL) {
-            envc = 2;
-            envlens[0] = (uint32_t)strlen("PATH=/") + 1;
-            envlens[1] = (uint32_t)strlen("HOME=/") + 1;
+    const char **env_def = exec_env_defaults();
+    if (envp == NULL) {
+            envc = 4;
+            for (int ed_i = 0; ed_i < 4; ed_i++)
+                envlens[ed_i] =
+                    (uint32_t)strlen(env_def[ed_i]) + 1;
         } else {
             envc = count_strs(envp, envlens, kcaller);
             if (envc < 0) {
@@ -634,11 +677,6 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     cur->errno = 0;
     cur->compat = is_linux;
     cur->stack_bottom = USER_STACK_BOTTOM;
-    if (is_linux) {
-        kprintf("[exec] task %d marked as Linux compat (ABI-tag detected)\n",
-                cur->pid);
-    }
-
     {
         uint32_t below = rand_u32() % (USER_STACK_PAGES - 3);
         uint32_t sub = (rand_u32() % (PAGE_SIZE / 8)) * 8;
@@ -655,8 +693,6 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         rnd[3] = (uint32_t)(r1 >> 32);
         aux_random_addr = ustack_ptr;
     }
-    kprintf("[exec] ASLR: base=0x%x brk=0x%x stack=0x%x\n", aux_bias,
-            aux_brk_base, ustack_ptr);
     for (i = 0; i < MAX_ARG_NR; ++i) {
         argv_user_addrs[i] = 0;
     }
@@ -674,7 +710,6 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         }
     }
     {
-        static const char *env_defaults[2] = {"PATH=/", "HOME=/"};
         const char *exefn = path;
         uint32_t envp_addrs[MAX_ARG_NR];
         uint32_t exefn_addr = 0;
@@ -732,7 +767,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             if (ustack_ptr < cur->stack_bottom) {
                 return -1;
             }
-            memcpy((void *)ustack_ptr, envp ? envp[e] : env_defaults[e], slen);
+            memcpy((void *)ustack_ptr, envp ? envp[e] : exec_env_defaults()[e], slen);
             envp_addrs[e] = ustack_ptr;
         }
 

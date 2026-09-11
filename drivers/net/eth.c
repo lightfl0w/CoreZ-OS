@@ -45,6 +45,8 @@ void eth_input(NETIF *ifp, const void *frame, uint32_t len) {
 
 int eth_output(NETIF *ifp, const uint8_t *dst, uint16_t ethertype,
                const void *payload, uint32_t len) {
+    if (ifp == NULL || ifp->tx == NULL)
+        return -1;
     uint8_t frame[ETH_FRAME_MAX];
     uint32_t fidx = ETH_HDR_LEN + len;
     if (fidx > sizeof frame)

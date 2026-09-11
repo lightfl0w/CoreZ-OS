@@ -6,6 +6,7 @@
 #include "kernel/sched/percpu.h"
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
+#include "kernel/init/mb2.h"
 static struct lock mem_lock;
 
 #define PML4_INDEX(v) (((uint64_t)(v) >> 39) & 0x1ff)
@@ -26,6 +27,11 @@ uint32_t kernel_kphys;
 #define KERNEL_VADDR_START 0x40400000
 
 static uint32_t e820_mem_upper(void) {
+    uint64_t top = mb2_mem_top();
+    if (top >= 0xFFFFFFFFull)
+        return 0xFFFFFFFFu;
+    if (top != 0)
+        return (uint32_t)top;
     uint32_t count = *(uint32_t *)0x6000;
     uint8_t *p = (uint8_t *)0x6004;
     uint32_t upper = 0;
@@ -89,12 +95,15 @@ void mm_init(void) {
     kernel_pool.pool_bitmap.bits = kernel_pool_bitmap;
     kernel_pool.pool_bitmap.btmp_bytes_len = sizeof(kernel_pool_bitmap);
     bitmap_init(&kernel_pool.pool_bitmap);
+    extern char _kernel_phys_start;
+    extern char _kernel_phys_end;
     {
-        extern char _kernel_phys_start;
-        extern char _kernel_phys_end;
-        mark_used((uint32_t)(uintptr_t)&_kernel_phys_start,
-                  (uint32_t)((uintptr_t)&_kernel_phys_end -
-                             (uintptr_t)&_kernel_phys_start));
+        
+        uint32_t koff = (uint32_t)(uintptr_t)&_kernel_phys_start - 0x200000u;
+        uint32_t kspan =
+            (uint32_t)((uintptr_t)&_kernel_phys_end -
+                       (uintptr_t)&_kernel_phys_start);
+        mark_used(kernel_kphys + koff, kspan);
     }
 
     {
@@ -127,7 +136,8 @@ void mm_init(void) {
         }
     }
     mark_used(0x200000, 0x400000 - 0x200000);
-    mark_used(0x400000, 0x460000 - 0x400000);
+    mark_used(0x400000,
+              (uint32_t)((uintptr_t)&_kernel_phys_end) - 0x400000);
     mark_used(PER_CPU_BASE, NR_CPU * PAGE_SIZE);
     kernel_vaddr.vaddr_start = KERNEL_VADDR_START;
     kernel_vaddr.vaddr_bitmap.bits = kernel_vaddr_bitmap;
@@ -141,8 +151,8 @@ void mm_init(void) {
 
     {
         uint64_t *pd98 = (uint64_t *)VIRT_OF(0x98000);
-        pd98[4] = (uint64_t)0x00080000 | 0x83;
-        pd98[7] = (uint64_t)0x000E0000 | 0x83;
+        pd98[4] = (uint64_t)0x00800000u | 0x83;
+        pd98[7] = (uint64_t)0x00E00000u | 0x83;
     }
 }
 
@@ -285,8 +295,28 @@ void page_table_dump(uint32_t vaddr) {
             "NX=%d phys=%#x)\n",
             (int)PT_INDEX(vaddr), (uint32_t)e3, (int)(e3 & 1),
             (int)((e3 >> 1) & 1), (int)((e3 >> 2) & 1), (int)((e3 >> 4) & 1),
-            (int)((e3 >> 7) & 1), (int)((e3 >> 8) & 1), (int)((e3 >> 63) & 1),
+            (int)((e3 >> 7) & 1),             (int)((e3 >> 8) & 1), (int)((e3 >> 63) & 1),
             (uint32_t)(e3 & 0x000ffffffffff000ull));
+    if (pml4_phys != kernel_pml4) {
+        uint64_t *kpml4 = (uint64_t *)VIRT_OF(kernel_pml4);
+        uint64_t ke0 = kpml4[PML4_INDEX(vaddr)];
+        uint64_t ke1 = 0, ke2 = 0, ke3 = 0;
+        if (ke0 & 1) {
+            uint64_t *kpdp = (uint64_t *)VIRT_OF(PTE_PHYS(ke0));
+            ke1 = kpdp[PDPT_INDEX(vaddr)];
+            if (ke1 & 1) {
+                uint64_t *kpd = (uint64_t *)VIRT_OF(PTE_PHYS(ke1));
+                ke2 = kpd[PD_INDEX(vaddr)];
+                if ((ke2 & 1) && !(ke2 & (1ull << 7))) {
+                    uint64_t *kpt = (uint64_t *)VIRT_OF(PTE_PHYS(ke2));
+                    ke3 = kpt[PT_INDEX(vaddr)];
+                }
+            }
+        }
+        kprintf("  [pgtbl] kernel PML4=%x: L1=%x L2=%x L3=%x L4=%x\n",
+                (uint32_t)kernel_pml4, (uint32_t)ke0, (uint32_t)ke1,
+                (uint32_t)ke2, (uint32_t)ke3);
+    }
 }
 
 static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
@@ -301,9 +331,10 @@ static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
 static void page_table_add_no_cache(uint32_t vaddr, uint32_t phy_addr) {
     uint64_t *pte = pte_make(kernel_pml4, (uint64_t)vaddr);
     if (pte == 0) {
+        kprintf("[ptadd] pte_make FAILED vaddr=%x\n", vaddr);
         return;
     }
-    *pte = (uint64_t)phy_addr | pte_wx(PTE_P | PTE_U | 0x10, 1, 0);
+    *pte = (uint64_t)phy_addr | pte_wx(PTE_P | 0x10, 1, 0);
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 

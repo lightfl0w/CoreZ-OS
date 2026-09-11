@@ -67,6 +67,12 @@ struct task_struct {
     uint8_t tls_msr;
     int32_t errno;
     uint32_t pgid;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t euid;
+    uint32_t egid;
+    uint32_t suid;
+    uint32_t sgid;
     uint32_t umask;
     uint32_t sid;
     uint64_t itimer_expire;

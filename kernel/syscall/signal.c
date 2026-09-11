@@ -278,6 +278,19 @@ int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     }
     return 0;
 }
+static int sig_default_terminates(struct task_struct *t, int sig) {
+    if (sig == SIGKILL) {
+        return 1;
+    }
+    void (*handler)(int) = t->sigactions[sig].sa_handler;
+    if (handler == SIG_IGN) {
+        return 0;
+    }
+    if (handler == SIG_DFL) {
+        return sig_default[sig] == SIG_ACT_TERM;
+    }
+    return 0;
+}
 int sys_kill(int pid, int sig) {
     if (pid < 0) {
         uint32_t pgid = (uint32_t)(-pid);
@@ -320,6 +333,11 @@ int sys_kill(int pid, int sig) {
     t->signal_pending |= (1u << sig);
     if (t->status == TASK_WAITING) {
         thread_ready(t);
+    } else if (t->status & (TASK_BLOCKED | TASK_STOPPED)) {
+        if (sig_default_terminates(t, sig)) {
+            t->signal_pending &= ~(1u << sig);
+            thread_kill_pid((uint32_t)pid);
+        }
     }
     return 0;
 }

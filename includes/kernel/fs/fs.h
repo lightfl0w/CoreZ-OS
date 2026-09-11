@@ -56,10 +56,15 @@ struct dir_entry *sys_readdir(struct dir *dir);
 void sys_rewinddir(struct dir *dir);
 int32_t sys_rmdir(const char *pathname);
 char *sys_getcwd(char *buf, uint32_t size);
+int fs_cwd_abs_prefix(char *buf, uint32_t size);
 int32_t sys_chdir(const char *path);
 int32_t sys_stat(const char *path, struct stat *buf);
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev);
+int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid);
+int fs_stat_full(const char *path, uint32_t *ino_no, uint32_t *size,
+                 uint32_t *mode, uint32_t *uid, uint32_t *gid);
 int32_t sys_symlink(const char *target, const char *linkpath);
+int fs_check_perm(const struct inode *ino, uint32_t bits);
 int fs_is_chardev(const struct inode *ino);
 uint32_t fs_chardev_dev(const struct inode *ino);
 

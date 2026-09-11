@@ -46,6 +46,7 @@ CFLAGS = CFLAGS_BASE
 KERNEL_CFLAGS = CFLAGS_BASE + [
     "-mcmodel=large",
     "-mno-red-zone",
+    "-mstackrealign",
     "-fstack-protector-strong",
     "-Wall", "-Wunused-function", "-Wunused-variable",
 ]
@@ -302,6 +303,11 @@ class Task:
         return False
     def dep_paths(self) -> Iterable[Path]:
         base = self.cwd or Path.cwd()
+        for d in self.deps:
+            if isinstance(d, Path):
+                if d.exists():
+                    yield d
+                continue
         for tok in self.cmd:
             if tok.startswith("-"):
                 continue
@@ -457,6 +463,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("idt.o",        ROOT / "arch" / "x86" / "interrupt" / "idt.c"),
         ("interrupt.o",  ROOT / "arch" / "x86" / "interrupt" / "interrupt.c"),
         ("kernel.o",     KERNEL_DIR / "init" / "main.c"),
+        ("mb2.o",        KERNEL_DIR / "init" / "mb2.c"),
         ("assert.o",     KERNEL_DIR / "init" / "assert.c"),
         ("ssp.o",        KERNEL_DIR / "init" / "ssp.c"),
         ("str.o",        ROOT / "lib" / "str" / "str.c"),
@@ -500,6 +507,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
+        ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
         ("layout.o",     KERNEL_DIR / "gui" / "layout.c"),
@@ -534,6 +542,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("signal_demo", "signal_demo.c", "_start", []),
         ("mmap_demo",   "mmap_demo.c",   "_start", []),
         ("mmap2_demo",  "mmap2_demo.c",  "_start", []),
+        ("dev_demo",    "dev_demo.c",    "_start", []),
         ("dev_demo",    "dev_demo.c",    "_start", []),
         ("futex_demo",  "futex_demo.c",  "_start", []),
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
@@ -637,15 +646,31 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     ]
     for stem, src in net_c_sources:
         tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, net_cflags))
+    font_src = ROOT / "lib" / "assets" / "font.ttf"
+    font_kernel_ttf = BUILD_DIR / "font_kernel.ttf"
+    tasks.append(task_python(
+        "font_kernel.ttf",
+        SCRIPTS / "make_font_subset.py",
+        [str(font_src), str(font_kernel_ttf), "--charset=latin"],
+        out=font_kernel_ttf,
+    ))
     font_subset = BUILD_DIR / "font_subset.ttf"
     tasks.append(task_python(
         "font_subset.ttf",
         SCRIPTS / "make_font_subset.py",
-        [str(ROOT / "lib" / "assets" / "font.ttf"), str(font_subset)],
+        [str(font_src), str(font_subset), "--charset=gb2312-l1"],
         out=font_subset,
     ))
+    tasks.append(Task(
+        name="font_kernel.o",
+        cmd=[tools.objcopy, "-I", "binary", "-O", "elf64-x86-64",
+             "-B", "i386:x86-64", "--set-section-alignment", ".data=64",
+             "font_kernel.ttf", "font_kernel.o"],
+        cwd=BUILD_DIR, out=BUILD_DIR / "font_kernel.o", deps=[],
+        description="embed font_kernel.ttf", group="objcopy",
+    ))
     kernel_objs_names = [
-        "entry.o", "kernel.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
+        "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
@@ -655,8 +680,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
-        "mouse.o", "gfx.o", "shm.o", "guiserver.o", "layout.o",
-        "wm.o", "guiclients.o", "gui.o",
+        "mouse.o", "gfx.o", "font.o", "font_kernel.o", "shm.o", "guiserver.o",
+        "layout.o", "wm.o", "guiclients.o", "gui.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
     ]
@@ -714,45 +739,54 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             group="musl-lib",
             description="configure+make+install native musl 1.2.6",
         ))
+
         TOYBOX_DIR = ROOT / "third_modules" / "toybox"
-        TOYBOX_BIN = TOYBOX_DIR / "toybox"
-        musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
-        if musl_gcc.exists():
-            toybox_cfg = Task(
-                name="toybox-config",
-                cmd=[sh, "-c",
-                     f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                     f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
-                     f"make oldconfig >/dev/null 2>&1; true"],
-                out=TOYBOX_DIR / ".config",
-                deps=[TOYBOX_DIR / "Makefile"],
-                optional=True, group="toybox",
-                description="toybox defconfig",
-            )
-            tasks.append(toybox_cfg)
-            tasks.append(Task(
-                name="toybox-abitag",
-                cmd=[str(musl_gcc), "-c", str(TOYBOX_DIR / "abitag.c"),
-                     "-o", str(TOYBOX_DIR / "abitag.o")],
-                out=TOYBOX_DIR / "abitag.o",
-                deps=[TOYBOX_DIR / "abitag.c"],
-                optional=True, group="toybox",
-                description="toybox GNU ABI-tag note",
-            ))
-            toybox_build = Task(
-                name="toybox-build",
-                cmd=[sh, "-c",
-                     f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                     f"CC={shlex.quote(str(musl_gcc))} "
-                     f"CFLAGS=-static\ -Os make -j4 "
-                     f"> toybox.log 2>&1 || "
-                     f"(tail -20 toybox.log; false)"],
-                out=TOYBOX_BIN,
-                deps=[TOYBOX_DIR / ".config"],
-                optional=True, group="toybox",
-                description="build toybox (static musl)",
-            )
-            tasks.append(toybox_build)
+        _musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
+        _toybox_pre = f"test -x {shlex.quote(str(_musl_gcc))} || exit 0; "
+        tasks.append(Task(
+            name="toybox-config",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                 f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
+                 f"make oldconfig >/dev/null 2>&1; true"],
+            out=TOYBOX_DIR / ".config",
+            deps=[TOYBOX_DIR / "Makefile"],
+            optional=True, group="toybox",
+            description="toybox defconfig",
+        ))
+        tasks.append(Task(
+            name="toybox-abitag",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"{shlex.quote(str(_musl_gcc))} -c "
+                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.c'))} -o "
+                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.o'))}"],
+            out=TOYBOX_DIR / "abitag.o",
+            deps=[TOYBOX_DIR / "abitag.c"],
+            optional=True, group="toybox",
+            description="toybox GNU ABI-tag note",
+        ))
+        _toybox_ld = shlex.quote("-static " +
+                                 str(TOYBOX_DIR / "abitag.o") +
+                                 " -Wl,-Ttext-segment=0x8048000")
+        tasks.append(Task(
+            name="toybox-build",
+            cmd=[sh, "-c",
+                 _toybox_pre +
+                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
+                 f"CC={shlex.quote(str(_musl_gcc))} "
+                 f"CFLAGS={shlex.quote('-static -Os')} "
+                 f"LDFLAGS={_toybox_ld} "
+                 f"make -j4 > toybox.log 2>&1 || "
+                 f"(tail -20 toybox.log; false) && "
+                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))} && "
+                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
+            out=BUILD_DIR / "toybox",
+            deps=[TOYBOX_DIR / ".config", TOYBOX_DIR / "toybox"],
+            optional=True, group="toybox",
+            description="build toybox (static musl)",
+        ))
 
         musl_demo_c = task_cc("musl_demo.o", APPS_DIR / "musl_demo.c",
                               BUILD_DIR / "musl_demo.o", tools, MUSL_DEMO_CFLAGS)
@@ -946,6 +980,13 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
                 update(i, t.description)
     s += 1
 
+    console.step_header(s, total_steps, "Building toybox")
+    toybox_tasks = [t for t in plan.tasks if t.group == "toybox"]
+    with console.progress(len(toybox_tasks), "toybox", Ansi.BR_BLU) as update:
+        for i, t in enumerate(toybox_tasks, 1):
+            run_task(t)
+            update(i, t.description)
+    s += 1
     console.step_header(s, total_steps, "Generating font subset")
     font_py = [t for t in plan.tasks if t.group == "python" and "font" in t.name]
     with console.progress(len(font_py), "font", Ansi.BR_MAG) as update:

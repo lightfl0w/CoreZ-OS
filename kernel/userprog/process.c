@@ -60,20 +60,24 @@ uint32_t *create_page_dir(void) {
     memset(pdp, 0, PAGE_SIZE);
     pml4[0] = pdp_phys | 7;
 
-    uint64_t pd0_phys = palloc_pages(&kernel_pool, 1);
-    if (pd0_phys == 0) {
-        return 0;
-    }
-    uint64_t *pd0 = phys_to_virt(pd0_phys);
-    memset(pd0, 0, PAGE_SIZE);
-
     {
+        uint64_t pd0_phys = palloc_pages(&kernel_pool, 1);
+        if (pd0_phys == 0) {
+            return 0;
+        }
+        uint64_t *pd0 = phys_to_virt(pd0_phys);
+        memset(pd0, 0, PAGE_SIZE);
         uint64_t *loader_pd_low = phys_to_virt(0x92000);
         pd0[0] = loader_pd_low[0] & ~(uint64_t)PTE_U;
+        pdp[0] = pd0_phys | 7;
     }
-    pdp[0] = pd0_phys | 7;
 
-    pdp[1] = 0x96000 | 7;
+    {
+        uint64_t *kpml4 = phys_to_virt(kernel_pml4);
+        uint64_t kpdp0_phys = kpml4[0] & ~0xFFFull;
+        uint64_t *kpdp0 = phys_to_virt(kpdp0_phys);
+        pdp[1] = kpdp0[1];
+    }
 
     uint64_t pd2_phys = palloc_pages(&kernel_pool, 1);
     if (pd2_phys == 0) {
@@ -83,7 +87,10 @@ uint32_t *create_page_dir(void) {
     memset(pd2, 0, PAGE_SIZE);
     {
         uint64_t *loader_pd_lfb = phys_to_virt(0x94000);
-        pd2[0] = loader_pd_lfb[0];
+        for (uint32_t i = 0; i < 512; i++) {
+            if (loader_pd_lfb[i] & PTE_P)
+                pd2[i] = loader_pd_lfb[i];
+        }
     }
     pdp[2] = pd2_phys | 7;
 

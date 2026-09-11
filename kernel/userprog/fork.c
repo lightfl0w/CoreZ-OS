@@ -52,7 +52,7 @@ static void copy_user_space(struct task_struct *parent,
         }
         uint64_t *pd = (uint64_t *)VIRT_OF(PTE_PHYS(pdp_e));
         uint64_t child_pdp_e = child_pdp[pdp_idx];
-        if (!(child_pdp_e & PTE_P)) {
+        if (!(child_pdp_e & PTE_P) || child_pdp_e == pdp_e) {
             continue;
         }
         uint64_t *child_pd = (uint64_t *)VIRT_OF(PTE_PHYS(child_pdp_e));
@@ -140,6 +140,12 @@ pid_t sys_fork(struct Registers *r) {
     child->compat = parent->compat;
     child->pgid = parent->pgid ? parent->pgid : parent->pid;
     child->sid = parent->sid;
+    child->uid = parent->uid;
+    child->gid = parent->gid;
+    child->euid = parent->euid;
+    child->egid = parent->egid;
+    child->suid = parent->suid;
+    child->sgid = parent->sgid;
     for (int i = 0; i < NSIG; i++) {
         child->sigactions[i] = parent->sigactions[i];
     }
@@ -163,6 +169,9 @@ pid_t sys_fork(struct Registers *r) {
         build_child_stack(child, r);
     }
     child->status = TASK_BLOCKED;
+    if (foreground_pid == parent->pid) {
+        foreground_pid = child->pid;
+    }
     thread_ready(child);
     return (pid_t)child->pid;
 }

@@ -3,6 +3,7 @@
 #include "arch/x86/interrupt/interrupt.h"
 #include "kernel/init/pit/pit.h"
 #include "lib/str/str.h"
+#include "kernel/gui/font.h"
 #include "kernel/gui/layout.h"
 
 extern void clients_spawn_next(void);
@@ -439,6 +440,10 @@ int wm_bar_check_dirty(void) {
     return d;
 }
 
+#define BAR_FONT_PX 12
+static int bar_text_y(void) {
+    return (COMP_BAR_H - font_ascent(BAR_FONT_PX)) / 2;
+}
 void wm_draw_bar(struct gfx_canvas *c, struct gfx_rect *clip) {
     struct gfx_rect bar = {0, 0, comp_screen_w(), COMP_BAR_H}, v;
     if (!gfx_rect_intersect(bar, *clip, &v))
@@ -447,25 +452,28 @@ void wm_draw_bar(struct gfx_canvas *c, struct gfx_rect *clip) {
     gfx_fill(c, v.x, v.y, v.w, v.h, TH_BAR);
     gfx_hline(c, 0, COMP_BAR_H - 1, comp_screen_w(), TH_BAR_LINE);
 
+    int ty = bar_text_y();
     int x = 8;
     for (int i = 0; i < WL_MAX_WS; i++) {
         int cur = (i == cur_ws);
         int occ = workspaces[i].n > 0;
         int px = x, py = 3, pw = 24, ph = 16;
-        uint8_t pill = cur ? TH_ACCENT : (occ ? gfx_gray(6) : gfx_gray(4));
+        gfx_color pill = cur ? TH_ACCENT : (occ ? TH_FRAME_UNF : TH_DIM);
         gfx_fill_round(c, px, py, pw, ph, 7, pill);
         char label[4] = {' ', (char)('1' + i), ' ', 0};
-        uint8_t fg = cur ? TH_TEXT : (occ ? gfx_gray(16) : gfx_gray(11));
-        gfx_text(c, px + (pw - 24) / 2, py + (ph - 16) / 2, label, fg, -1);
+        gfx_color fg = cur ? TH_TITLE_FOC : (occ ? TH_TEXT : TH_MUTED);
+        int lw = font_text_width(label, BAR_FONT_PX);
+        font_draw(c, px + (pw - lw) / 2, py + (ph - font_ascent(BAR_FONT_PX)) / 2,
+                  label, BAR_FONT_PX, fg);
         x += pw + 6;
     }
 
-    gfx_text(c, x + 6, 3, layout_name(workspaces[cur_ws].layout), TH_ACCENT,
-             -1);
+    font_draw(c, x + 6, ty, layout_name(workspaces[cur_ws].layout),
+              BAR_FONT_PX, TH_ACCENT);
 
     struct wl_surface *f = wm_focused_surface();
     if (f)
-        gfx_text(c, x + 60, 3, f->title, TH_TEXT, -1);
+        font_draw(c, x + 60, ty, f->title, BAR_FONT_PX, TH_TEXT);
 
     char right[48];
     char num[12];
@@ -474,8 +482,10 @@ void wm_draw_bar(struct gfx_canvas *c, struct gfx_rect *clip) {
     strcat(right, "up ");
     strcat(right, num);
     strcat(right, "s");
-    int rx = comp_screen_w() - 4 - (int)strlen(right) * 8;
-    gfx_text(c, rx, 3, right, TH_MUTED, -1);
-    int bx = rx - 6 - (int)strlen("CoreZOS") * 8;
-    gfx_text(c, bx, 3, "CoreZOS", TH_ACCENT, -1);
+    int rw = font_text_width(right, BAR_FONT_PX);
+    int rx = comp_screen_w() - 6 - rw;
+    font_draw(c, rx, ty, right, BAR_FONT_PX, TH_MUTED);
+    int bw = font_text_width("CoreZOS", BAR_FONT_PX);
+    int bx = rx - 10 - bw;
+    font_draw(c, bx, ty, "CoreZOS", BAR_FONT_PX, TH_ACCENT);
 }
