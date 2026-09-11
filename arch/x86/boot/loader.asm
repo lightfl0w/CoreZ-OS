@@ -1255,7 +1255,7 @@ tmp_w:        dd    0
 tmp_h:        dd    0
 tmp_color:    dd    0
 
-msg_title:  db "NiTian OS Boot Menu", 0
+msg_title:  db "CoreZ OS Boot Menu", 0
 msg_sel:    db "> ", 0
 msg_unsel:  db "  ", 0
 msg_count1: db "Auto boot in ", 0
@@ -1263,11 +1263,11 @@ msg_count2: db "s", 0
 menu_items:
         dd  msg_opt0
         dd  msg_opt2
-msg_opt0: db "Boot NiTian OS", 0
+msg_opt0: db "Boot CoreZ OS", 0
 msg_opt2: db "Reboot", 0
 
 mb_cmdline:     db "root=/dev/sda2 console=tty0", 0
-mb_loader_name: db "NiTian Bootloader (MultiBoot2)", 0
+mb_loader_name: db "CoreZ Bootloader", 0
 bits    16
 set_palette:
         pusha

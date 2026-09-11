@@ -33,7 +33,7 @@ FILES = [
     "canary_test.elf",
     "font_subset.ttf", "nr_shell.elf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "toybox"
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
 SPECIAL_MODES = {"suidsh": 0x81ED | 0o4000}

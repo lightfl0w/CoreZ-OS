@@ -609,6 +609,18 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
               "-z", "pack-relative-relocs"])
     tasks.append(lc_elf)
     user_elves.append(lc_elf)
+    gui_launch_c = task_cc("gui_launch.o", APPS_DIR / "gui_launch.c",
+                           BUILD_DIR / "gui_launch.o", tools, LC_CFLAGS)
+    tasks.append(gui_launch_c)
+    gui_elf = task_link(
+        "gui.elf", BUILD_DIR / "gui.elf", tools,
+        [BUILD_DIR / "lc_start.o", BUILD_DIR / "gui_launch.o",
+         BUILD_DIR / "lc_libc.o"],
+        flags=["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
+               "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
+               "-z", "pack-relative-relocs"])
+    tasks.append(gui_elf)
+    user_elves.append(gui_elf)
     shell_cflags = UP_CFLAGS_64 + [
         "-I", str(SHELL_SRC / "inc"),
         "-I", str(NRSHELL),
