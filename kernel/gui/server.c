@@ -279,9 +279,45 @@ static gfx_color wallpaper_color(int y) {
     return GFX_RGB(r, g, b);
 }
 
+static struct gfx_canvas wp_cache;
+static int wp_ready;
+
+static void wallpaper_init(void) {
+    size_t bsz = (size_t)scrnx * (size_t)scrny * 4u;
+    uint8_t *bp = (uint8_t *)get_kernel_pages(
+        (uint32_t)((bsz + (size_t)PAGE_SIZE - 1) / (size_t)PAGE_SIZE));
+    if (bp == 0)
+        return;
+    wp_cache.pixels = (gfx_color *)bp;
+    wp_cache.pitch = scrnx * 4;
+    wp_cache.w = scrnx;
+    wp_cache.h = scrny;
+    wp_cache.bytes = bsz;
+    for (int y = 0; y < scrny; y++) {
+        gfx_color c = wallpaper_color(y);
+        gfx_color *row =
+            wp_cache.pixels + (size_t)y * (size_t)gfx_stride(&wp_cache);
+        for (int x = 0; x < scrnx; x++)
+            row[x] = c;
+    }
+    wp_ready = 1;
+}
+
 static void draw_wallpaper(struct gfx_rect *r) {
-    for (int y = r->y; y < r->y + r->h; y++)
-        gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
+    if (!wp_ready) {
+        for (int y = r->y; y < r->y + r->h; y++)
+            gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
+        return;
+    }
+    int dstride = gfx_stride(dst);
+    int sstride = gfx_stride(&wp_cache);
+    for (int y = r->y; y < r->y + r->h; y++) {
+        gfx_color *drow = dst->pixels + (size_t)y * (size_t)dstride;
+        const gfx_color *srow =
+            wp_cache.pixels + (size_t)y * (size_t)sstride;
+        for (int x = r->x; x < r->x + r->w; x++)
+            drow[x] = srow[x];
+    }
 }
 
 static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
@@ -406,7 +442,6 @@ static void repaint(void) {
         wm_draw_bar(dst, r);
     }
     lock_release(&comp_lock);
-
     comp_present(rects, n);
 
     for (int i = 0; i < vn; i++) {
@@ -439,6 +474,7 @@ void comp_init(void) {
     (void)fc;
 
     input_init();
+    wallpaper_init();
     lock_init(&comp_lock);
     shm_init();
     memset(clients, 0, sizeof(clients));
@@ -496,6 +532,7 @@ void comp_run(void) {
         }
         if (damage_full || damage_n > 0) {
             repaint();
+            continue;
         }
         if (d && d->wait_vblank)
             d->wait_vblank();

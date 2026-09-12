@@ -7,7 +7,7 @@
 #include "lib/list/list.h"
 #include <stdint.h>
 
-#define THREAD_STACK_SIZE 0x4000
+#define THREAD_STACK_SIZE 0x8000
 #define MAX_TASKS 64
 #define STACK_MAGIC 0x19860726
 

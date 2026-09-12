@@ -509,6 +509,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
         ("display.o",    KERNEL_DIR / "gui" / "display.c"),
         ("input.o",      KERNEL_DIR / "gui" / "input.c"),
+        ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
+        ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
@@ -694,7 +696,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
-        "mouse.o", "gfx.o", "display.o", "input.o", "font.o",
+        "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
+        "udi_virtio.o", "font.o",
         "font_kernel.o", "shm.o", "guiserver.o",
         "layout.o", "wm.o", "guiclients.o", "gui.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
@@ -1074,10 +1077,10 @@ def do_run(console: Console, stats: BuildStats,
     if kvm:
         console.info("KVM 加速已启用 (-enable-kvm -cpu host), 可在 ring0 测 MWAIT")
         cmd = [qemu, "-enable-kvm", "-cpu", "host", "-m", "1G",
-               "-smp", str(max(1, smp))]
+               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
     else:
         cmd = [qemu, "-accel", "tcg,tb-size=256", "-m", "1G",
-               "-smp", str(max(1, smp))]
+               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
     if boot_floppy:
         cmd += ["-fda", str(BUILD_DIR / "floppy.img")]
     else:
