@@ -507,6 +507,10 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
+        ("display.o",    KERNEL_DIR / "gui" / "display.c"),
+        ("input.o",      KERNEL_DIR / "gui" / "input.c"),
+        ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
+        ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
@@ -609,6 +613,18 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
               "-z", "pack-relative-relocs"])
     tasks.append(lc_elf)
     user_elves.append(lc_elf)
+    gui_launch_c = task_cc("gui_launch.o", APPS_DIR / "gui_launch.c",
+                           BUILD_DIR / "gui_launch.o", tools, LC_CFLAGS)
+    tasks.append(gui_launch_c)
+    gui_elf = task_link(
+        "gui.elf", BUILD_DIR / "gui.elf", tools,
+        [BUILD_DIR / "lc_start.o", BUILD_DIR / "gui_launch.o",
+         BUILD_DIR / "lc_libc.o"],
+        flags=["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
+               "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
+               "-z", "pack-relative-relocs"])
+    tasks.append(gui_elf)
+    user_elves.append(gui_elf)
     shell_cflags = UP_CFLAGS_64 + [
         "-I", str(SHELL_SRC / "inc"),
         "-I", str(NRSHELL),
@@ -680,7 +696,9 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
-        "mouse.o", "gfx.o", "font.o", "font_kernel.o", "shm.o", "guiserver.o",
+        "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
+        "udi_virtio.o", "font.o",
+        "font_kernel.o", "shm.o", "guiserver.o",
         "layout.o", "wm.o", "guiclients.o", "gui.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
@@ -1059,10 +1077,10 @@ def do_run(console: Console, stats: BuildStats,
     if kvm:
         console.info("KVM 加速已启用 (-enable-kvm -cpu host), 可在 ring0 测 MWAIT")
         cmd = [qemu, "-enable-kvm", "-cpu", "host", "-m", "1G",
-               "-smp", str(max(1, smp))]
+               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
     else:
         cmd = [qemu, "-accel", "tcg,tb-size=256", "-m", "1G",
-               "-smp", str(max(1, smp))]
+               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
     if boot_floppy:
         cmd += ["-fda", str(BUILD_DIR / "floppy.img")]
     else:

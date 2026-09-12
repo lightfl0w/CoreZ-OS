@@ -9,26 +9,17 @@
 #include "kernel/gui/font.h"
 #include "kernel/gui/shm.h"
 #include "kernel/gui/wm.h"
+#include "kernel/gui/display.h"
+#include "kernel/gui/input.h"
 
 static struct wl_client clients[WL_MAX_CLIENTS];
 static struct wl_surface surfaces[WL_MAX_SURFACES];
 
-static struct gfx_canvas screen;
-static struct gfx_canvas back;
-static struct gfx_canvas *dst = &screen;
-static int double_buffer = 0;
+static struct gfx_canvas *dst;
 static int scrnx, scrny;
 
 static struct lock comp_lock;
-static int session_active = 0;
-
-struct gui_input {
-    int type;
-    int32_t a, b, c;
-};
-#define GUI_INQ_SIZE 32
-static volatile struct gui_input inq[GUI_INQ_SIZE];
-static volatile uint32_t inq_head = 0, inq_tail = 0;
+static int session_active = 1;
 
 #define MAX_DAMAGE 48
 static struct gfx_rect damage[MAX_DAMAGE];
@@ -125,25 +116,13 @@ void comp_damage_surface(struct wl_surface *s) {
 }
 
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods) {
-    uint32_t next = (inq_head + 1) % GUI_INQ_SIZE;
-    if (next == inq_tail)
-        return;
-    inq[inq_head].type = GUI_IN_KEY;
-    inq[inq_head].a = scancode;
-    inq[inq_head].b = pressed;
-    inq[inq_head].c = mods;
-    inq_head = next;
+    input_post(INPUT_DEV_KEYBOARD, scancode,
+               (int32_t)pressed | ((int32_t)mods << 8));
 }
 
 void comp_post_mouse(int dx, int dy, uint8_t buttons) {
-    uint32_t next = (inq_head + 1) % GUI_INQ_SIZE;
-    if (next == inq_tail)
-        return;
-    inq[inq_head].type = GUI_IN_MOUSE;
-    inq[inq_head].a = dx;
-    inq[inq_head].b = dy;
-    inq[inq_head].c = buttons;
-    inq_head = next;
+    input_post(INPUT_DEV_POINTER, (uint32_t)buttons,
+               (int32_t)(dx & 0xFFFF) | ((int32_t)(dy & 0xFFFF) << 16));
 }
 
 struct wl_client *wl_display_connect(const char *name) {
@@ -300,9 +279,45 @@ static gfx_color wallpaper_color(int y) {
     return GFX_RGB(r, g, b);
 }
 
+static struct gfx_canvas wp_cache;
+static int wp_ready;
+
+static void wallpaper_init(void) {
+    size_t bsz = (size_t)scrnx * (size_t)scrny * 4u;
+    uint8_t *bp = (uint8_t *)get_kernel_pages(
+        (uint32_t)((bsz + (size_t)PAGE_SIZE - 1) / (size_t)PAGE_SIZE));
+    if (bp == 0)
+        return;
+    wp_cache.pixels = (gfx_color *)bp;
+    wp_cache.pitch = scrnx * 4;
+    wp_cache.w = scrnx;
+    wp_cache.h = scrny;
+    wp_cache.bytes = bsz;
+    for (int y = 0; y < scrny; y++) {
+        gfx_color c = wallpaper_color(y);
+        gfx_color *row =
+            wp_cache.pixels + (size_t)y * (size_t)gfx_stride(&wp_cache);
+        for (int x = 0; x < scrnx; x++)
+            row[x] = c;
+    }
+    wp_ready = 1;
+}
+
 static void draw_wallpaper(struct gfx_rect *r) {
-    for (int y = r->y; y < r->y + r->h; y++)
-        gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
+    if (!wp_ready) {
+        for (int y = r->y; y < r->y + r->h; y++)
+            gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
+        return;
+    }
+    int dstride = gfx_stride(dst);
+    int sstride = gfx_stride(&wp_cache);
+    for (int y = r->y; y < r->y + r->h; y++) {
+        gfx_color *drow = dst->pixels + (size_t)y * (size_t)dstride;
+        const gfx_color *srow =
+            wp_cache.pixels + (size_t)y * (size_t)sstride;
+        for (int x = r->x; x < r->x + r->w; x++)
+            drow[x] = srow[x];
+    }
 }
 
 static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
@@ -394,11 +409,13 @@ static int rect_covered_by_window(struct gfx_rect *r, struct wl_surface **vis,
     return 0;
 }
 
-static void repaint(void) {
-    lock_acquire(&comp_lock);
+static void repaint(void);
+static void comp_present(struct gfx_rect *rects, int n);
 
+static void repaint(void) {
     struct gfx_rect rects[MAX_DAMAGE + 1];
     int n = 0;
+    lock_acquire(&comp_lock);
     if (damage_full) {
         rects[0].x = 0;
         rects[0].y = 0;
@@ -424,18 +441,8 @@ static void repaint(void) {
             draw_window(vis[j], r);
         wm_draw_bar(dst, r);
     }
-
     lock_release(&comp_lock);
-
-    draw_cursor();
-
-    if (double_buffer) {
-        for (int i = 0; i < n; i++) {
-            struct gfx_rect *dr = &rects[i];
-            gfx_present(&screen, dr->x, dr->y, &back, dr->x, dr->y, dr->w,
-                        dr->h);
-        }
-    }
+    comp_present(rects, n);
 
     for (int i = 0; i < vn; i++) {
         struct wl_surface *s = vis[i];
@@ -446,39 +453,32 @@ static void repaint(void) {
     }
 }
 
+static void comp_present(struct gfx_rect *rects, int n) {
+    struct display_ops *d = display_get();
+    if (d == 0)
+        return;
+    draw_cursor();
+    d->flip(rects, n);
+}
+
 void comp_init(void) {
+    display_init();
+    struct display_ops *d = display_get();
+    d->init();
+
     scrnx = io_get_scrnx();
     scrny = io_get_scrny();
-    int pitch = io_get_pitch();
-    if (pitch < scrnx * 4)
-        pitch = scrnx * 4;
-    screen.pixels = (gfx_color *)io_get_vram();
-    screen.pitch = pitch;
-    screen.w = scrnx;
-    screen.h = scrny;
-    screen.bytes = io_get_vram_bytes();
+    dst = d->surface(DISP_BACK);
 
-    size_t bsz = (size_t)scrnx * (size_t)scrny * 4u;
-    uint8_t *bp = get_kernel_pages(
-        (uint32_t)((bsz + (size_t)PAGE_SIZE - 1) / (size_t)PAGE_SIZE));
-    if (bp) {
-        back.pixels = (gfx_color *)bp;
-        back.pitch = scrnx * 4;
-        back.w = scrnx;
-        back.h = scrny;
-        back.bytes = bsz;
-        double_buffer = 1;
-        dst = &back;
-    } else {
-        double_buffer = 0;
-        dst = &screen;
-    }
+    struct gfx_canvas *fc = d->surface(DISP_FRONT);
+    (void)fc;
 
+    input_init();
+    wallpaper_init();
     lock_init(&comp_lock);
     shm_init();
     memset(clients, 0, sizeof(clients));
     memset(surfaces, 0, sizeof(surfaces));
-    inq_head = inq_tail = 0;
     damage_n = 0;
     damage_full = 1;
     cur_x = scrnx / 2;
@@ -488,19 +488,16 @@ void comp_init(void) {
 }
 
 static void drain_input(void) {
-    while (inq_tail != inq_head) {
-        struct gui_input ev;
-        ev.type = inq[inq_tail].type;
-        ev.a = inq[inq_tail].a;
-        ev.b = inq[inq_tail].b;
-        ev.c = inq[inq_tail].c;
-        inq_tail = (inq_tail + 1) % GUI_INQ_SIZE;
-
-        if (ev.type == GUI_IN_KEY) {
-            wm_handle_key((uint8_t)ev.a, (int)ev.b, (uint8_t)ev.c);
-        } else if (ev.type == GUI_IN_MOUSE) {
-            int nx = cur_x + ev.a;
-            int ny = cur_y + ev.b;
+    struct input_event ev;
+    while (input_get(&ev)) {
+        if (ev.dev == INPUT_DEV_KEYBOARD) {
+            wm_handle_key((uint8_t)ev.code, (int)(ev.value & 0xFF),
+                          (uint8_t)(ev.value >> 8));
+        } else if (ev.dev == INPUT_DEV_POINTER) {
+            int dx = (int16_t)(ev.value & 0xFFFF);
+            int dy = (int16_t)((uint32_t)ev.value >> 16);
+            int nx = cur_x + dx;
+            int ny = cur_y + dy;
             if (nx < 0)
                 nx = 0;
             if (nx >= scrnx)
@@ -516,7 +513,7 @@ static void drain_input(void) {
                 cur_x = nx;
                 cur_y = ny;
             }
-            uint8_t btn = (uint8_t)ev.c;
+            uint8_t btn = (uint8_t)ev.code;
             uint8_t edge = btn ^ last_buttons;
             if (edge) {
                 wm_handle_button(cur_x, cur_y, btn, edge);
@@ -527,6 +524,7 @@ static void drain_input(void) {
 }
 
 void comp_run(void) {
+    struct display_ops *d = display_get();
     while (session_active) {
         drain_input();
         if (wm_bar_check_dirty()) {
@@ -534,7 +532,11 @@ void comp_run(void) {
         }
         if (damage_full || damage_n > 0) {
             repaint();
+            continue;
         }
-        mtime_sleep(20);
+        if (d && d->wait_vblank)
+            d->wait_vblank();
+        else
+            mtime_sleep(20);
     }
 }
