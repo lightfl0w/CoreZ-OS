@@ -626,7 +626,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         int kcaller = (regs != NULL) ? ((regs->cs & 3) == 0) : 1;
         argc = count_strs(argv, slens, kcaller);
         if (argc < 0) {
-            return -1;
+            goto exec_fail;
         }
     const char **env_def = exec_env_defaults();
     if (envp == NULL) {
@@ -637,18 +637,14 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         } else {
             envc = count_strs(envp, envlens, kcaller);
             if (envc < 0) {
-                return -1;
+                goto exec_fail;
             }
         }
     }
     entry_point = load(path, &is64, &is_linux, &aux_phdr_vaddr, &aux_phentsize,
                        &aux_phnum, &aux_bias, &aux_brk_base);
     if (entry_point == -1) {
-        if (cur->pml4_phys != old_pml4_phys) {
-            cur->pml4_phys = old_pml4_phys;
-            page_dir_activate(cur);
-        }
-        return -1;
+        goto exec_fail;
     }
     memcpy(cur->name, path, 15);
     cur->name[15] = 0;
@@ -663,7 +659,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
 
             if (get_a_page(sp) == 0) {
                 kprintf("[exec] get_a_page for user stack failed\n");
-                return -1;
+                goto exec_fail;
             }
         }
     }
@@ -699,7 +695,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             ustack_ptr &= ~(is64 ? 0x7u : 0x3u);
             if (ustack_ptr < cur->stack_bottom) {
                 kprintf("[exec] argv too large for user stack\n");
-                return -1;
+                goto exec_fail;
             }
             memcpy((void *)ustack_ptr, argv[i], slen);
             argv_user_addrs[i] = ustack_ptr;
@@ -751,7 +747,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         ustack_ptr -= slen;
         ustack_ptr &= ~amask;
         if (ustack_ptr < cur->stack_bottom) {
-            return -1;
+            goto exec_fail;
         }
         memcpy((void *)ustack_ptr, exefn, slen);
         exefn_addr = ustack_ptr;
@@ -761,7 +757,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             ustack_ptr -= slen;
             ustack_ptr &= ~amask;
             if (ustack_ptr < cur->stack_bottom) {
-                return -1;
+                goto exec_fail;
             }
             memcpy((void *)ustack_ptr, envp ? envp[e] : exec_env_defaults()[e], slen);
             envp_addrs[e] = ustack_ptr;
@@ -771,7 +767,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         ustack_ptr -= (uint32_t)naw * aw;
         aux_dst = ustack_ptr;
         if (ustack_ptr < cur->stack_bottom) {
-            return -1;
+            goto exec_fail;
         }
         aux[1] = exefn_addr;
         for (int k = 0; k < naw; k++) {
@@ -789,6 +785,19 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
 #undef PVAL
 #undef PSTACK
     }
+    goto exec_done;
+exec_fail:
+    if (cur->pml4_phys != old_pml4_phys) {
+        uint32_t abandoned = cur->pml4_phys;
+        cur->pml4_phys = old_pml4_phys;
+        process_activate(cur);
+        free_user_space(cur, abandoned);
+    } else if (old_pml4_phys == 0 &&
+               cur->userprog_v_addr.vaddr_bitmap.bits != NULL) {
+        free_user_space(cur, 0);
+    }
+    return -1;
+exec_done:
     for (int32_t fd = 3; fd < MAX_FILES_OPEN_PER_PROC; ++fd) {
         if (cur->fd_table[fd] != (uint32_t)-1 && (cur->fd_cloexec >> fd) & 1) {
             cur->fd_cloexec &= ~(1ull << fd);

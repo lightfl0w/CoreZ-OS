@@ -8,6 +8,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/shell/pipe.h"
 #include "kernel/shell/shell.h"
+#include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/exec.h"
 #include "kernel/userprog/process.h"
@@ -113,24 +114,24 @@ static void share_user_space_cow(struct TASK *child, uint64_t *pdp,
     }
 }
 
-static void copy_user_space(struct TASK *parent,
-                            struct TASK *child) {
+static int copy_user_space(struct TASK *parent, struct TASK *child) {
     if (parent->pml4_phys == 0) {
-        return;
+        return 0;
     }
 
     uint64_t *parent_pml4 = (uint64_t *)VIRT_OF(parent->pml4_phys);
     uint64_t *child_pml4 = (uint64_t *)VIRT_OF(child->pml4_phys);
     uint64_t pml4e = parent_pml4[0];
     if (!(pml4e & PTE_P)) {
-        return;
+        return 0;
     }
     uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
     uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
     if (alloc_child_page_tables(child, pdp, child_pdp) != 0) {
-        return;
+        return -1;
     }
     share_user_space_cow(child, pdp, child_pdp);
+    return 0;
 }
 
 static void build_child_stack(struct TASK *child,
@@ -189,9 +190,11 @@ pid_t sys_fork(struct X86_REGS *r) {
     create_user_vaddr_bitmap(child);
     child->pml4_phys = (uint32_t)create_page_dir();
     if (child->pml4_phys == 0) {
-        return -1;
+        goto fork_fail;
     }
-    copy_user_space(parent, child);
+    if (copy_user_space(parent, child) != 0) {
+        goto fork_fail;
+    }
     if (parent->pml4_phys == 0) {
         struct TASK_STACK *ts =
             (struct TASK_STACK *)((uint8_t *)child->kernel_stack_top -
@@ -211,4 +214,18 @@ pid_t sys_fork(struct X86_REGS *r) {
     }
     thread_ready(child);
     return (pid_t)child->pid;
+
+fork_fail:
+    free_user_space(child, child->pml4_phys);
+    for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
+        uint32_t g = child->fd_table[i];
+        if (g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
+            lock_acquire(&file_table_lock);
+            if (file_table[g].ref_cnt > 0)
+                file_table[g].ref_cnt--;
+            lock_release(&file_table_lock);
+        }
+    }
+    thread_exit(child, 0);
+    return -1;
 }

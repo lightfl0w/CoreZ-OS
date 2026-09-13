@@ -56,6 +56,7 @@ uint32_t *create_page_dir(void) {
 
     uint64_t pdp_phys = palloc_pages(&kernel_pool, 1);
     if (pdp_phys == 0) {
+        pfree(&kernel_pool, (uint32_t)pml4_phys);
         return 0;
     }
     uint64_t *pdp = phys_to_virt(pdp_phys);
@@ -65,6 +66,8 @@ uint32_t *create_page_dir(void) {
     {
         uint64_t pd0_phys = palloc_pages(&kernel_pool, 1);
         if (pd0_phys == 0) {
+            pfree(&kernel_pool, (uint32_t)pdp_phys);
+            pfree(&kernel_pool, (uint32_t)pml4_phys);
             return 0;
         }
         uint64_t *pd0 = phys_to_virt(pd0_phys);
@@ -83,6 +86,9 @@ uint32_t *create_page_dir(void) {
 
     uint64_t pd2_phys = palloc_pages(&kernel_pool, 1);
     if (pd2_phys == 0) {
+        pfree(&kernel_pool, (uint32_t)PTE_PHYS(pdp[0]));
+        pfree(&kernel_pool, (uint32_t)pdp_phys);
+        pfree(&kernel_pool, (uint32_t)pml4_phys);
         return 0;
     }
     uint64_t *pd2 = phys_to_virt(pd2_phys);
@@ -99,6 +105,10 @@ uint32_t *create_page_dir(void) {
     {
         uint64_t pd3_phys = palloc_pages(&kernel_pool, 1);
         if (pd3_phys == 0) {
+            pfree(&kernel_pool, (uint32_t)PTE_PHYS(pdp[2]));
+            pfree(&kernel_pool, (uint32_t)PTE_PHYS(pdp[0]));
+            pfree(&kernel_pool, (uint32_t)pdp_phys);
+            pfree(&kernel_pool, (uint32_t)pml4_phys);
             return 0;
         }
         uint64_t *pd3 = phys_to_virt(pd3_phys);
@@ -108,6 +118,81 @@ uint32_t *create_page_dir(void) {
     }
 
     return (uint32_t *)(uintptr_t)pml4_phys;
+}
+
+void free_user_space(struct TASK *t, uint32_t pml4_phys) {
+    if (t == NULL) {
+        return;
+    }
+    if (pml4_phys != 0) {
+        uint64_t *pml4 = phys_to_virt(pml4_phys);
+        uint64_t pml4e = pml4[0];
+        if (pml4e & 1) {
+            uint64_t *pdp = phys_to_virt(PTE_PHYS(pml4e));
+            for (uint32_t pdp_idx = 0; pdp_idx < 3; pdp_idx++) {
+                uint64_t pdp_e = pdp[pdp_idx];
+                if (!(pdp_e & 1) || (pdp_e & 0x80)) {
+                    continue;
+                }
+                uint64_t *pd = phys_to_virt(PTE_PHYS(pdp_e));
+                uint32_t pd_remaining = 0;
+                for (uint32_t pd_idx = 0; pd_idx < 512; pd_idx++) {
+                    uint64_t pd_e = pd[pd_idx];
+                    if (!(pd_e & 1)) {
+                        continue;
+                    }
+                    if (pd_e & 0x80) {
+                        pd_remaining++;
+                        continue;
+                    }
+                    uint64_t *pt = phys_to_virt(PTE_PHYS(pd_e));
+                    uint32_t pt_remaining = 0;
+                    for (uint32_t pte_idx = 0; pte_idx < 512; pte_idx++) {
+                        if (!(pt[pte_idx] & 1)) {
+                            continue;
+                        }
+                        uint64_t vaddr =
+                            ((uint64_t)pdp_idx << 30) +
+                            ((uint64_t)pd_idx << 21) + ((uint64_t)pte_idx << 12);
+                        uint32_t bit =
+                            (uint32_t)((vaddr - USER_VADDR_START) / PAGE_SIZE);
+                        if (vaddr < USER_VADDR_START || vaddr >= 0xc0000000u ||
+                            bit >= t->userprog_v_addr.vaddr_bitmap
+                                       .btmp_bytes_len *
+                                       8 ||
+                            bitmap_scan_test(&t->userprog_v_addr.vaddr_bitmap,
+                                             bit) != 1) {
+                            pt_remaining++;
+                            continue;
+                        }
+                        page_free_or_decref((uint32_t)PTE_PHYS(pt[pte_idx]));
+                        pt[pte_idx] = 0;
+                    }
+                    if (pt_remaining == 0) {
+                        page_free_or_decref((uint32_t)PTE_PHYS(pd_e));
+                        pd[pd_idx] = 0;
+                    } else {
+                        pd_remaining++;
+                    }
+                }
+                if (pd_remaining == 0) {
+                    page_free_or_decref((uint32_t)PTE_PHYS(pdp_e));
+                    pdp[pdp_idx] = 0;
+                }
+            }
+        }
+        pfree(&kernel_pool, pml4_phys);
+    }
+    if (t->userprog_v_addr.vaddr_bitmap.bits != NULL) {
+        uint32_t bytes = t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len;
+        uint32_t pg_cnt = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (uint32_t i = 0; i < pg_cnt; i++) {
+            free_kernel_page(
+                (uint32_t)t->userprog_v_addr.vaddr_bitmap.bits + i * PAGE_SIZE);
+        }
+        t->userprog_v_addr.vaddr_bitmap.bits = NULL;
+    }
+    t->pml4_phys = 0;
 }
 
 void create_user_vaddr_bitmap(struct TASK *user_prog) {
