@@ -15,7 +15,6 @@
 
 extern void asm_stihlt(void);
 
-
 extern void insw(uint16_t port, void *buf, int words);
 extern void outsw(uint16_t port, const void *buf, int words);
 extern void outl(uint16_t port, uint32_t value);

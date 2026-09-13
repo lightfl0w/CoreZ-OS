@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "kernel/init/pit/pit.h"
@@ -39,7 +39,6 @@
 
 #define MAX_LBA_DEFAULT ((80 * 1024 * 1024 / 512) - 1)
 #define MAX_LBA28 (0x0FFFFFFF)
-
 
 uint8_t channel_cnt;
 struct ide_channel channels[2];

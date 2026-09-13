@@ -3,7 +3,7 @@
 #include "arch/x86/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "kernel/asm/stub.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/auxv.h"
 #include "kernel/fs/fs.h"
@@ -563,6 +563,7 @@ done:
     close_file(fd);
     return ret;
 }
+
 static int count_strs(const char *const *strs, uint32_t *lens, int kcaller) {
     int n = 0;
     if (strs == NULL)

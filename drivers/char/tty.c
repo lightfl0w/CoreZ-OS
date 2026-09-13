@@ -19,7 +19,6 @@ static struct {
     uint8_t cc_vtime;
 } tty_termios;
 
-
 int tty_write(const char *buf, uint32_t n) {
     for (uint32_t i = 0; i < n; i++)
         console_putc(buf[i]);
@@ -183,7 +182,6 @@ static int tty_drv(void) {
 }
 
 DRIVER_REGISTER("tty", 12, tty_drv);
-
 
 void tty_init(void) {
     tty_termios.iflag = TTY_ICANON | TTY_IECHO;

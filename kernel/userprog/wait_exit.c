@@ -18,6 +18,7 @@ static int vaddr_owned_by_current(struct task_struct *t, uint32_t vaddr) {
     }
     return bitmap_scan_test(&t->userprog_v_addr.vaddr_bitmap, bit_idx) == 1;
 }
+
 static void release_prog_resource(struct task_struct *release_thread) {
     if (release_thread->pml4_phys != 0) {
         uint64_t *pml4 = (uint64_t *)VIRT_OF(release_thread->pml4_phys);
@@ -107,10 +108,12 @@ static int find_hanging_child(struct list_elem *pelem, int32_t ppid) {
     struct task_struct *t = list_entry(pelem, struct task_struct, all_list_tag);
     return (t->parent_pid == ppid && t->status == TASK_HANGING);
 }
+
 static int find_child(struct list_elem *pelem, int32_t ppid) {
     struct task_struct *t = list_entry(pelem, struct task_struct, all_list_tag);
     return (t->parent_pid == ppid);
 }
+
 pid_t sys_wait(int32_t *status) {
     struct task_struct *parent = current;
     int32_t ignored_status;
@@ -144,6 +147,7 @@ pid_t sys_wait(int32_t *status) {
         thread_block_with_status(TASK_WAITING);
     }
 }
+
 void proc_exit(struct task_struct *cur, int status) {
     cur->exit_status = status;
 
@@ -155,6 +159,7 @@ void proc_exit(struct task_struct *cur, int status) {
     }
     thread_block_with_status(TASK_HANGING);
 }
+
 void sys_exit(int32_t status) {
     proc_exit(current, status);
 }
@@ -168,6 +173,7 @@ static int waitid_match(struct task_struct *t, int idtype, int32_t id) {
     }
     return 1;
 }
+
 int sys_waitid(int idtype, int32_t id, struct LINUX_SIGINFO *info,
                uint32_t options) {
     struct task_struct *parent = current;

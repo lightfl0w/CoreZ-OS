@@ -2,7 +2,7 @@
 #include "drivers/char/keyboard.h"
 #include "drivers/char/mouse.h"
 #include "kernel/fs/fs.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/apic/apic.h"

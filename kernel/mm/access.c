@@ -14,6 +14,7 @@ int access_ok(const void *addr, size_t n, int write) {
     }
     return user_range_walk(a, (uint32_t)n, write);
 }
+
 static int user_page_readable(uint32_t a) {
     uint64_t *pde = pde_ptr(a);
     if (pde == NULL || !(*pde & PTE_P)) {
@@ -25,6 +26,7 @@ static int user_page_readable(uint32_t a) {
     uint64_t *pte = pte_ptr(a);
     return (*pte & PTE_P) && (*pte & PTE_U);
 }
+
 static int user_str_span(const char *src, uint32_t max, char *dst) {
     if (src == NULL || max == 0) {
         return -1;
@@ -55,9 +57,11 @@ static int user_str_span(const char *src, uint32_t max, char *dst) {
     }
     return -1;
 }
+
 int copy_str_from_user(char *dst, const char *src, uint32_t max) {
     return user_str_span(src, max, dst) < 0 ? -1 : 0;
 }
+
 int user_strnlen(const char *src, uint32_t max) {
     return user_str_span(src, max, NULL);
 }
@@ -95,9 +99,11 @@ static int user_range_walk(uint32_t addr, uint32_t len, int write) {
         }
     }
 }
+
 int user_range_readable(uint32_t addr, uint32_t len) {
     return user_range_walk(addr, len, 0);
 }
+
 int user_range_writable(uint32_t addr, uint32_t len) {
     return user_range_walk(addr, len, 1);
 }

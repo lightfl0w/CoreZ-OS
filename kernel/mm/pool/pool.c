@@ -1,5 +1,5 @@
 #include "kernel/mm/pool/pool.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
@@ -145,7 +145,7 @@ void mm_init(void) {
     extern char _kernel_phys_start;
     extern char _kernel_phys_end;
     {
-        
+
         uint32_t koff = (uint32_t)(uintptr_t)&_kernel_phys_start - 0x200000u;
         uint32_t kspan =
             (uint32_t)((uintptr_t)&_kernel_phys_end -
@@ -404,6 +404,7 @@ void *ioremap(uint32_t phy_addr, uint32_t size) {
     lock_release(&mem_lock);
     return (void *)(vaddr + (phy_addr & 0xfff));
 }
+
 void *get_a_page(uint32_t vaddr) {
     struct task_struct *cur = current;
     uint32_t bit_idx = (vaddr - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
@@ -570,4 +571,3 @@ void page_free_or_decref(uint32_t phy_addr) {
     lock_release(&mem_lock);
     pfree(&kernel_pool, phy_addr);
 }
-

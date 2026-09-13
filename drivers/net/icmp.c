@@ -1,6 +1,6 @@
 #include "drivers/net/icmp.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/nt_ping_reply.h"
 #include "lib/str/str.h"
 #include "drivers/net/ip.h"

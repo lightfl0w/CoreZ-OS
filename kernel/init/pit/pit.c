@@ -1,6 +1,6 @@
 #include "kernel/init/pit/pit.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/sched/thread.h"
 #include "arch/x86/interrupt/interrupt.h"
 

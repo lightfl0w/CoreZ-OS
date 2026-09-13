@@ -2,7 +2,7 @@
 #include "drivers/driver_ops.h"
 #include "drivers/char/tty.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/sched/thread.h"
 
 #define KEYBOARD_DATA 0x60
@@ -25,6 +25,7 @@ void keyboard_init(void) {
     ioq_init(&keyboard_ioq);
     keyboard_flush_pending();
 }
+
 #define SC_SHIFT_L_DOWN 0x2A
 #define SC_SHIFT_R_DOWN 0x36
 #define SC_SHIFT_L_UP 0xAA

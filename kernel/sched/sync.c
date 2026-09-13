@@ -1,11 +1,12 @@
 #include "kernel/sched/sync.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "kernel/sched/thread.h"
 void spinlock_init(struct spinlock *s) {
     s->locked = 0;
 }
+
 void spinlock_acquire(struct spinlock *s) {
     while (asm_xchg(&s->locked, 1) != 0) {
         while (s->locked != 0) {
@@ -14,15 +15,18 @@ void spinlock_acquire(struct spinlock *s) {
     }
     __asm__ volatile("" : : : "memory");
 }
+
 void spinlock_release(struct spinlock *s) {
     __asm__ volatile("" : : : "memory");
     s->locked = 0;
 }
+
 void sema_init(struct semaphore *psema, uint8_t value) {
     psema->value = value;
     list_init(&psema->waiters);
     spinlock_init(&psema->lock);
 }
+
 void sema_down(struct semaphore *psema) {
     uint32_t old = asm_save_eflags();
     asm_cli();
@@ -37,6 +41,7 @@ void sema_down(struct semaphore *psema) {
     spinlock_release(&psema->lock);
     asm_restore_eflags(old);
 }
+
 void sema_up(struct semaphore *psema) {
     uint32_t old = asm_save_eflags();
     asm_cli();
@@ -52,6 +57,7 @@ void sema_up(struct semaphore *psema) {
     spinlock_release(&psema->lock);
     asm_restore_eflags(old);
 }
+
 void lock_init(struct lock *plock) {
     plock->holder = 0;
     plock->holder_repeat_nr = 0;
@@ -68,6 +74,7 @@ static void lkdump(const char *why) {
         kprintf("[ev] %u t=%x h=%x v=%u\n", e->ev, e->task, e->holder, e->val);
     }
 }
+
 static void lklog(struct lock *p, uint32_t ev) {
 
     uint32_t h = (uint32_t)(uintptr_t)p->holder;

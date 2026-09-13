@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-
 static struct gfx_fb_format fb_fmt = {32, 16, 8, 8, 8, 0, 8};
 
 void gfx_set_fb_format(const struct gfx_fb_format *fmt) {
@@ -333,14 +332,17 @@ void gfx_fill_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
                     gfx_color color) {
     round_core(c, x, y, w, h, rad, GFX_CORNER_ALL, color, 255, 0);
 }
+
 void gfx_fill_round_a(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
                       gfx_color color, int alpha) {
     round_core(c, x, y, w, h, rad, GFX_CORNER_ALL, color, alpha, 0);
 }
+
 void gfx_mask_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
                     gfx_color color, int corners) {
     round_core(c, x, y, w, h, rad, corners, color, 255, 1);
 }
+
 void gfx_blit_round(struct gfx_canvas *dst, int dx, int dy,
                     const struct gfx_canvas *src, int sx, int sy, int w, int h,
                     int alpha, int rx, int ry, int rw, int rh, int rad,
@@ -394,10 +396,12 @@ void gfx_blit_round(struct gfx_canvas *dst, int dx, int dy,
         }
     }
 }
+
 static int fmt_is_standard_32(const struct gfx_fb_format *f) {
     return f->bpp == 32 && f->r_pos == 16 && f->r_bits == 8 && f->g_pos == 8 &&
            f->g_bits == 8 && f->b_pos == 0 && f->b_bits == 8;
 }
+
 static uint32_t scale_channel(int v, int bits) {
     if (bits >= 8)
         return (uint32_t)v << (bits - 8);

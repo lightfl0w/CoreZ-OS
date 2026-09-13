@@ -50,6 +50,7 @@ int32_t sys_fstat(int32_t fd, void *buf) {
     st->st_filetype = FT_REGULAR;
     return 0;
 }
+
 int32_t sys_dup(int32_t oldfd) {
     struct file *pf = fd_lookup(oldfd);
     if (pf == NULL) {
@@ -66,6 +67,7 @@ int32_t sys_dup(int32_t oldfd) {
     lock_release(&file_table_lock);
     return newfd;
 }
+
 int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     if (newfd < 0 || newfd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return -1;
@@ -88,6 +90,7 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     lock_release(&file_table_lock);
     return newfd;
 }
+
 int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
     if (net_is_socket(fd))
         return net_fcntl(fd, cmd, arg);
@@ -116,6 +119,7 @@ int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
         return -1;
     }
 }
+
 int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     if (dirp == NULL) {
         return -1;
@@ -143,6 +147,7 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     }
     return (int32_t)written;
 }
+
 int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     if (path == NULL || buf == NULL || bufsiz == 0) {
         return -1;
@@ -163,6 +168,7 @@ int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     memcpy(buf, kbuf, n);
     return (int32_t)n;
 }
+
 int32_t sys_access(const char *path, int32_t mode) {
     if (path == NULL) {
         return -1;
@@ -187,18 +193,21 @@ int32_t sys_access(const char *path, int32_t mode) {
     }
     return 0;
 }
+
 int32_t sys_rename(const char *oldpath, const char *newpath) {
     (void)oldpath;
     (void)newpath;
     current->errno = 30;
     return -1;
 }
+
 int32_t sys_truncate(const char *path, int32_t length) {
     (void)path;
     (void)length;
     current->errno = 30;
     return -1;
 }
+
 int32_t sys_chmod(const char *path, uint32_t mode) {
     if (path == NULL) {
         return -1;

@@ -17,6 +17,7 @@ static int32_t unmap_pages(uint32_t addr, uint32_t pages) {
         free_user_page(addr + i * PAGE_SIZE);
     return 0;
 }
+
 int page_is_mapped(uint32_t v) {
     uint64_t *pde = pde_ptr(v);
     if (pde == NULL)
@@ -26,6 +27,7 @@ int page_is_mapped(uint32_t v) {
     uint64_t *pte = pte_ptr(v);
     return (pte != NULL && (*pte & PTE_P)) ? 1 : 0;
 }
+
 static void apply_prot(uint32_t v, uint32_t prot) {
     uint64_t *pte = pte_ptr(v);
     if (pte == NULL || !(*pte & PTE_P))
@@ -34,6 +36,7 @@ static void apply_prot(uint32_t v, uint32_t prot) {
                                       !!(prot & PROT_EXEC));
     __asm__ volatile("invlpg (%0)" : : "r"(v) : "memory");
 }
+
 static uint32_t map_run(uint32_t base, uint32_t pages, uint32_t prot) {
     for (uint32_t i = 0; i < pages; i++) {
         uint32_t v = base + i * PAGE_SIZE;
@@ -45,6 +48,7 @@ static uint32_t map_run(uint32_t base, uint32_t pages, uint32_t prot) {
     }
     return base;
 }
+
 static void fill_file(uint32_t fd, uint32_t off, uint32_t base, uint32_t len) {
     int32_t old = sys_lseek((int32_t)fd, 0, 1);
     if (sys_lseek((int32_t)fd, (int32_t)off, 0) < 0)
@@ -59,6 +63,7 @@ static void fill_file(uint32_t fd, uint32_t off, uint32_t base, uint32_t len) {
     if (old >= 0)
         sys_lseek((int32_t)fd, old, 0);
 }
+
 static uint32_t find_free_region(uint32_t pages) {
     struct task_struct *cur = current;
     uint32_t start = cur->userprog_v_addr.vaddr_start;
@@ -83,6 +88,7 @@ static uint32_t find_free_region(uint32_t pages) {
     }
     return 0;
 }
+
 uint32_t sys_mmap(const struct mmap_args *a) {
     if (a == NULL)
         return -LINUX_EFAULT;
@@ -112,11 +118,13 @@ uint32_t sys_mmap(const struct mmap_args *a) {
         fill_file(a->fd, a->offset, base, len);
     return base;
 }
+
 uint32_t sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags,
                    uint32_t fd, uint32_t offset) {
     struct mmap_args a = {addr, len, prot, flags, fd, offset << 12};
     return sys_mmap(&a);
 }
+
 int32_t sys_munmap(uint32_t addr, uint32_t len) {
     if (addr == 0 || len == 0 || (addr & (PAGE_SIZE - 1)))
         return -LINUX_EINVAL;
@@ -129,6 +137,7 @@ int32_t sys_munmap(uint32_t addr, uint32_t len) {
     unmap_pages(addr, pages);
     return 0;
 }
+
 int32_t sys_mprotect(uint32_t addr, uint32_t len, uint32_t prot) {
     if (addr & (PAGE_SIZE - 1) || (prot & ~PROT_MASK))
         return -LINUX_EINVAL;

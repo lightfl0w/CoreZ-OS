@@ -236,6 +236,7 @@ struct wl_surface **comp_surfaces(int *count) {
 int comp_screen_w(void) {
     return scrnx;
 }
+
 int comp_screen_h(void) {
     return scrny;
 }
@@ -243,12 +244,15 @@ int comp_screen_h(void) {
 void comp_send_configure(struct wl_surface *s, int w, int h) {
     client_post(s->client, WL_EV_CONFIGURE, w, h, 0);
 }
+
 void comp_send_close(struct wl_surface *s) {
     client_post(s->client, WL_EV_CLOSE, 0, 0, 0);
 }
+
 void comp_send_key(struct wl_surface *s, int scancode, int pressed, int mods) {
     client_post(s->client, WL_EV_KEY, scancode, pressed, mods);
 }
+
 void comp_request_exit(void) {
     session_active = 0;
 }

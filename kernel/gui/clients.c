@@ -32,6 +32,7 @@ static void canvas_of(struct gfx_canvas *cv, struct demo_client *dc) {
     cv->h = dc->h;
     cv->bytes = (size_t)dc->w * (size_t)dc->h * 4u;
 }
+
 static int buffer_resize(struct demo_client *dc, int w, int h) {
     if (w <= 0 || h <= 0)
         return -1;

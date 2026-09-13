@@ -1,7 +1,7 @@
 #include "kernel/fs/inode.h"
 
 #include "drivers/block/ide.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/ext2.h"

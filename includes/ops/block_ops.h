@@ -1,4 +1,6 @@
-#pragma once
+#ifndef OPS_BLOCK_OPS_H
+#define OPS_BLOCK_OPS_H
+
 #include <stdint.h>
 
 struct block_ops {
@@ -8,3 +10,5 @@ struct block_ops {
 };
 
 extern const struct block_ops BLOCK;
+
+#endif /* OPS_BLOCK_OPS_H */

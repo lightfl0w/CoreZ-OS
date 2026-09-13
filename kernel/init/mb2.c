@@ -27,6 +27,7 @@ static const char *tag_name(uint32_t type) {
     default: return "?";
     }
 }
+
 static void parse_tag(const struct mb2_tag *tag) {
     uint32_t size = tag->size;
     switch (tag->type) {
@@ -108,6 +109,7 @@ static void parse_tag(const struct mb2_tag *tag) {
         break;
     }
 }
+
 void mb2_init(uint32_t magic, const void *mbi) {
     memset(&g_mb2, 0, sizeof(g_mb2));
     if (magic != MB2_BOOTLOADER_MAGIC || mbi == 0)
@@ -139,9 +141,11 @@ void mb2_init(uint32_t magic, const void *mbi) {
             g_mb2.mem_upper = (uint32_t)((top - 0x100000ull) >> 10);
     }
 }
+
 const struct mb2_info *mb2_get(void) {
     return &g_mb2;
 }
+
 uint64_t mb2_mem_top(void) {
     uint64_t top = 0;
     for (uint32_t i = 0; i < g_mb2.mmap_count; i++) {
@@ -156,9 +160,11 @@ uint64_t mb2_mem_top(void) {
         top = ((uint64_t)g_mb2.mem_upper + 1024ull) * 1024ull;
     return top;
 }
+
 uint32_t mb2_mem_upper_kb(void) {
     return g_mb2.mem_upper;
 }
+
 void mb2_dump(void) {
     const char *lname = "?";
     switch (g_mb2.has_framebuffer ? g_mb2.framebuffer.framebuffer_type : 0xFF) {

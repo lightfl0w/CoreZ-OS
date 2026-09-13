@@ -1,6 +1,6 @@
 #include "kernel/assert.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "drivers/char/console/io.h"
 
 void assert_fail(const char *expr, const char *file, int line) {

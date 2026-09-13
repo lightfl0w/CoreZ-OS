@@ -17,12 +17,15 @@ extern void *memset(void *s, int c, size_t n);
 static inline size_t get_u(void *p) {
     return *(size_t *)p;
 }
+
 static inline void put_u(void *p, size_t v) {
     *(size_t *)p = v;
 }
+
 static inline size_t blk_size(void *hdr) {
     return get_u(hdr) & ~(size_t)ALLOC_BIT;
 }
+
 static inline int blk_alloc(void *hdr) {
     return (int)(get_u(hdr) & ALLOC_BIT);
 }
@@ -30,12 +33,15 @@ static inline int blk_alloc(void *hdr) {
 static inline void *hdr_of(void *bp) {
     return (char *)bp - WSIZE;
 }
+
 static inline void *ftr_of(void *bp) {
     return (char *)bp + blk_size(hdr_of(bp)) - DSIZE;
 }
+
 static inline void *next_blk(void *bp) {
     return (char *)bp + blk_size(hdr_of(bp));
 }
+
 static inline void *prev_blk(void *bp) {
     size_t psize = get_u((char *)bp - DSIZE) & ~(size_t)ALLOC_BIT;
     return (char *)bp - psize;

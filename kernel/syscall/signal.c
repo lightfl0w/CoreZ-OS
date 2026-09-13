@@ -1,5 +1,5 @@
 #include "kernel/asm/stub.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/mm/access.h"
@@ -34,9 +34,11 @@ void init_signal_state(struct task_struct *t) {
         t->sigactions[i].sa_restorer = NULL;
     }
 }
+
 void signal_reset_user(struct task_struct *t) {
     init_signal_state(t);
 }
+
 int exception_to_signal(int int_no) {
     switch (int_no) {
     case 0:
@@ -55,12 +57,15 @@ int exception_to_signal(int int_no) {
         return 0;
     }
 }
+
 void signal_terminate(struct task_struct *t, int sig) {
     proc_exit(t, 128 + sig);
 }
+
 static void signal_stop_current(void) {
     thread_block_with_status(TASK_STOPPED);
 }
+
 struct sigframe64 {
     uint64_t restorer;
     uint64_t signo;
@@ -106,6 +111,7 @@ static int sigframe_valid(uint64_t cs, uint64_t rip, uint64_t rsp,
     }
     return 1;
 }
+
 static void deliver_signal64(struct task_struct *cur, struct Registers *r,
                              int sig, struct sigaction *sa) {
     struct sigframe64 frame;
@@ -153,6 +159,7 @@ static void deliver_signal64(struct task_struct *cur, struct Registers *r,
     r->rdi = (uint64_t)sig;
     r->rax = 0;
 }
+
 static void deliver_signal(struct task_struct *cur, struct Registers *r,
                            int sig, struct sigaction *sa) {
     if (r->cs == SELECTOR_USER64_CODE) {
@@ -192,6 +199,7 @@ static void deliver_signal(struct task_struct *cur, struct Registers *r,
     r->eip = (uint32_t)sa->sa_handler;
     r->eax = (uint32_t)sig;
 }
+
 void check_pending_signals(struct Registers *r) {
     struct task_struct *cur = current;
     if (cur == NULL) {
@@ -242,6 +250,7 @@ void check_pending_signals(struct Registers *r) {
         return;
     }
 }
+
 int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
     if (sig < 1 || sig >= NSIG) {
         return -1;
@@ -259,6 +268,7 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
     }
     return 0;
 }
+
 int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     if (oldset) {
         *oldset = current->signal_mask;
@@ -278,6 +288,7 @@ int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     }
     return 0;
 }
+
 static int sig_default_terminates(struct task_struct *t, int sig) {
     if (sig == SIGKILL) {
         return 1;
@@ -291,6 +302,7 @@ static int sig_default_terminates(struct task_struct *t, int sig) {
     }
     return 0;
 }
+
 int sys_kill(int pid, int sig) {
     if (pid < 0) {
         uint32_t pgid = (uint32_t)(-pid);
@@ -341,6 +353,7 @@ int sys_kill(int pid, int sig) {
     }
     return 0;
 }
+
 uint64_t sys_sigreturn(struct Registers *r) {
     struct task_struct *cur = current;
     if (r->cs == SELECTOR_USER64_CODE) {
@@ -427,4 +440,3 @@ void itimer_tick(void) {
         }
     }
 }
-

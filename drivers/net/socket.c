@@ -1,6 +1,6 @@
 #include "drivers/net/socket.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/sched/thread.h"
 #include "drivers/net/net.h"

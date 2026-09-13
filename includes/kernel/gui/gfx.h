@@ -21,6 +21,7 @@ static inline gfx_color gfx_alpha_mul(gfx_color c, int a) {
     int na = (GFX_A(c) * a + 127) / 255;
     return (c & 0x00FFFFFFu) | ((uint32_t)na << 24);
 }
+
 struct gfx_canvas {
     gfx_color *pixels;
     int pitch;
@@ -31,14 +32,17 @@ struct gfx_canvas {
 static inline int gfx_stride(const struct gfx_canvas *c) {
     return c->pitch >> 2;
 }
+
 static inline gfx_color *gfx_row(struct gfx_canvas *c, int y) {
     return (gfx_color *)(void *)((uint8_t *)c->pixels + (size_t)y *
                                                            (size_t)c->pitch);
 }
+
 static inline const gfx_color *gfx_row_c(const struct gfx_canvas *c, int y) {
     return (const gfx_color *)(const void *)((const uint8_t *)c->pixels +
                                              (size_t)y * (size_t)c->pitch);
 }
+
 static inline size_t gfx_canvas_mapped_bytes(const struct gfx_canvas *c,
                                              int *ok) {
     *ok = 1;

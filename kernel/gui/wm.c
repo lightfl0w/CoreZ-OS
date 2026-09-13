@@ -444,6 +444,7 @@ int wm_bar_check_dirty(void) {
 static int bar_text_y(void) {
     return (COMP_BAR_H - font_ascent(BAR_FONT_PX)) / 2;
 }
+
 void wm_draw_bar(struct gfx_canvas *c, struct gfx_rect *clip) {
     struct gfx_rect bar = {0, 0, comp_screen_w(), COMP_BAR_H}, v;
     if (!gfx_rect_intersect(bar, *clip, &v))

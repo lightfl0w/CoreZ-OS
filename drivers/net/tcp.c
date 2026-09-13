@@ -1,6 +1,6 @@
 #include "drivers/net/tcp.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "drivers/net/ip.h"
 #include "drivers/net/net.h"

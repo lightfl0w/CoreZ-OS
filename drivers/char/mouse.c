@@ -1,7 +1,7 @@
 #include "drivers/char/mouse.h"
 #include "drivers/driver_ops.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "drivers/char/keyboard.h"
 
 #define KBD_DATA 0x60

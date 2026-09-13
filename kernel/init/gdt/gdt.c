@@ -1,5 +1,5 @@
 #include "kernel/init/gdt/gdt.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/sched/percpu.h"
 
 struct gdt_desc gdt[GDT_ENTRIES];

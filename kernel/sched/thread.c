@@ -2,7 +2,7 @@
 #include "kernel/sched/thread.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/keyboard.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/userprog/process.h"

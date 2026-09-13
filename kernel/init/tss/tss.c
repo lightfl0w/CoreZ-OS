@@ -1,6 +1,6 @@
 #include "kernel/init/tss/tss.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/sched/percpu.h"

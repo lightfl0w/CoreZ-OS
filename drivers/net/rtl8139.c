@@ -1,6 +1,6 @@
 #include "drivers/net/rtl8139.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
@@ -31,6 +31,7 @@ static uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t reg) {
     outl(0xCF8, addr);
     return inl(0xCFC);
 }
+
 static void pci_write32(uint8_t bus, uint8_t dev, uint8_t reg, uint32_t val) {
     uint32_t addr = 0x80000000u | ((uint32_t)bus << 16) |
                     ((uint32_t)dev << 11) | (reg & 0xFC);

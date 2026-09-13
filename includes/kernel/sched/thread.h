@@ -1,5 +1,5 @@
-#ifndef THREAD_H
-#define THREAD_H
+#ifndef SCHED_THREAD_H
+#define SCHED_THREAD_H
 
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/percpu.h"
@@ -113,4 +113,4 @@ struct task_struct *thread_alloc_slot(const char *name, uint8_t priority);
 void thread_ready(struct task_struct *t);
 void thread_exit_current(void);
 void thread_kill_pid(uint32_t pid);
-#endif
+#endif /* SCHED_THREAD_H */

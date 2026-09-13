@@ -1,5 +1,5 @@
 #include "drivers/char/ioqueue.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/sched/sync.h"
 void ioq_init(struct ioqueue *ioq) {
@@ -9,15 +9,19 @@ void ioq_init(struct ioqueue *ioq) {
     ioq->head = 0;
     ioq->tail = 0;
 }
+
 static int32_t next_pos(int32_t pos) {
     return (pos + 1) % BUFSIZE;
 }
+
 int ioq_full(struct ioqueue *ioq) {
     return next_pos(ioq->head) == ioq->tail;
 }
+
 int ioq_empty(struct ioqueue *ioq) {
     return ioq->head == ioq->tail;
 }
+
 uint32_t ioq_length(struct ioqueue *ioq) {
     uint32_t len = 0;
     if (ioq->head >= ioq->tail) {
@@ -27,10 +31,12 @@ uint32_t ioq_length(struct ioqueue *ioq) {
     }
     return len;
 }
+
 static void ioq_wait(struct task_struct **waiter) {
     *waiter = current;
     thread_block();
 }
+
 static void wakeup(struct task_struct **waiter) {
     struct task_struct *w = *waiter;
     *waiter = 0;
@@ -38,6 +44,7 @@ static void wakeup(struct task_struct **waiter) {
         thread_unblock(w);
     }
 }
+
 void ioq_putchar(struct ioqueue *ioq, char byte) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
     while (ioq_full(ioq)) {
@@ -51,6 +58,7 @@ void ioq_putchar(struct ioqueue *ioq, char byte) {
         wakeup(&ioq->consumer);
     }
 }
+
 char ioq_getchar(struct ioqueue *ioq) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
     while (ioq_empty(ioq)) {

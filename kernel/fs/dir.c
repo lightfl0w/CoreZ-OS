@@ -34,6 +34,7 @@ struct dir *dir_open(struct partition *part, uint32_t inode_no) {
     free_kernel_page((uint32_t)pdir);
     return NULL;
 }
+
 static struct dir *dir_handle_get(struct dir *handle) {
     uint32_t idx = (uint32_t)(uintptr_t)handle;
     if (idx == 0 || idx > MAX_OPEN_DIRS || dir_table[idx - 1] == NULL) {
@@ -41,6 +42,7 @@ static struct dir *dir_handle_get(struct dir *handle) {
     }
     return dir_table[idx - 1];
 }
+
 void dir_close(struct dir *handle) {
     struct dir *d = dir_handle_get(handle);
     if (d == NULL) {
@@ -50,6 +52,7 @@ void dir_close(struct dir *handle) {
     inode_close(d->inode);
     free_kernel_page((uint32_t)d);
 }
+
 struct dir_entry *dir_read(struct dir *handle) {
     struct dir *d = dir_handle_get(handle);
     if (d == NULL) {
@@ -61,10 +64,10 @@ struct dir_entry *dir_read(struct dir *handle) {
     }
     return dir_e;
 }
+
 void dir_rewind(struct dir *handle) {
     struct dir *d = dir_handle_get(handle);
     if (d != NULL) {
         d->dir_pos = 0;
     }
 }
-

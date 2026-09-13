@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DRIVER_OPS_H
+#define DRIVER_OPS_H
 
 struct driver_ops {
     const char *name;
@@ -16,3 +17,5 @@ extern const struct driver_ops __drivers_end[];
     }
 
 void drivers_init(int min_level, int max_level);
+
+#endif /* DRIVER_OPS_H */

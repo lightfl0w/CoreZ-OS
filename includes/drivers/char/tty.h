@@ -1,4 +1,6 @@
-#pragma once
+#ifndef DRIVERS_CHAR_TTY_H
+#define DRIVERS_CHAR_TTY_H
+
 #include <stdint.h>
 
 #define TTY_FLAG 0x5454u
@@ -24,3 +26,5 @@ void tty_sigint_foreground(void);
 #define TTY_IOCTL_TCSETS 0x5402u
 #define TTY_IOCTL_TIOCGWINSZ 0x5413u
 #define TTY_IOCTL_FIONREAD 0x541bu
+
+#endif /* DRIVERS_CHAR_TTY_H */

@@ -6,7 +6,7 @@
 #include "drivers/char/tty.h"
 #include "drivers/net/net.h"
 #include "drivers/net/socket.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
@@ -31,6 +31,7 @@
 static uint32_t sys_getpid(void) {
     return current->pid;
 }
+
 int32_t sys_clock_gettime(int32_t clk_id, struct timespec *tp) {
     if (tp == NULL) {
         return -1;
@@ -41,6 +42,7 @@ int32_t sys_clock_gettime(int32_t clk_id, struct timespec *tp) {
     tp->tv_nsec = (int32_t)((tick % PIT_HZ) * (1000u * 1000u * 1000u / PIT_HZ));
     return 0;
 }
+
 int32_t sys_gettimeofday(struct timeval *tv, void *tz) {
     if (tv == NULL) {
         return -1;
@@ -51,6 +53,7 @@ int32_t sys_gettimeofday(struct timeval *tv, void *tz) {
     tv->tv_usec = (int32_t)((tick % PIT_HZ) * (1000u * 1000u / PIT_HZ));
     return 0;
 }
+
 int32_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
     if (req == NULL || req->tv_sec < 0 || req->tv_nsec < 0) {
         return -1;
@@ -72,19 +75,23 @@ int32_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
     }
     return 0;
 }
+
 static uint32_t sys_getid(void) {
     return 0;
 }
+
 static void sys_exit_group(int32_t status) {
     sys_exit(status);
     for (;;) {
     }
 }
+
 static uint32_t sys_shutdown(void) {
     kprintf("[shutdown] shutting down system...\n");
     acpi_shutdown();
     return 0;
 }
+
 static uint32_t sys_write(int32_t fd, char *str, uint32_t count) {
     if (fd < 0 || fd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return (uint32_t)-1;
@@ -101,14 +108,17 @@ static uint32_t sys_write(int32_t fd, char *str, uint32_t count) {
     TTY.write(str, count);
     return count;
 }
+
 static uint32_t sys_putchar(char c) {
     console_putc(c);
     return (uint32_t)(unsigned char)c;
 }
+
 static uint32_t sys_clear(void) {
     io_clear_screen();
     return 0;
 }
+
 static int32_t sys_read(int32_t fd, void *buf, uint32_t count) {
     if (fd == 1 || fd == 2)
         return -1;
@@ -125,6 +135,7 @@ static int32_t sys_read(int32_t fd, void *buf, uint32_t count) {
     int32_t r = (int32_t)read_file(fd, buf, count);
     return r;
 }
+
 static const char *task_status_str(enum task_status s) {
     static const char *names[] = {"RUNNING", "READY",  "BLOCKED",
                                   "WAITING", "HANGING", "DIED"};
@@ -132,6 +143,7 @@ static const char *task_status_str(enum task_status s) {
                ? names[__builtin_ctz(s)]
                : "?";
 }
+
 static int ps_action(struct task_struct *t, void *arg) {
     (void)arg;
     char buf[80];
@@ -144,11 +156,13 @@ static int ps_action(struct task_struct *t, void *arg) {
             task_status_str(t->status), t->elapsed_ticks, t->name);
     return 0;
 }
+
 static uint32_t sys_ps(void) {
     kprintf("=== ps ===\n");
     thread_traverse_all(ps_action, NULL);
     return 0;
 }
+
 uint32_t sys_brk(uint32_t addr) {
     struct task_struct *cur = current;
     uint32_t base = (cur->brk_base != 0) ? cur->brk_base : USER_HEAP_BASE;
@@ -188,6 +202,7 @@ uint32_t sys_brk(uint32_t addr) {
     cur->user_brk = new_brk;
     return new_brk;
 }
+
 static uint32_t sys_set_thread_area(struct Registers *r, uint32_t base) {
     if (base == 0 || !user_range_writable(base, sizeof(int32_t)))
         return (uint32_t)-1;
@@ -528,12 +543,14 @@ static int64_t nsys_chmod(struct Registers *r) {
     }
     return (uint32_t)sys_chmod((const char *)r->ebx, (uint32_t)r->ecx);
 }
+
 static int64_t nsys_symlink(struct Registers *r) {
     if (!ok_read(r, r->ebx, 1) || !ok_read(r, r->ecx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_symlink((const char *)r->ebx, (const char *)r->ecx);
 }
+
 static int64_t nsys_mknod(struct Registers *r) {
     if (!ok_read(r, r->ebx, 1)) {
         return (uint32_t)-1;

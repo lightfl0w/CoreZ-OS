@@ -93,6 +93,7 @@ static uint32_t procstat_build(char *dst, uint32_t cap, uint32_t slot) {
                    t->pgid ? t->pgid : t->pid, t->sid ? t->sid : t->pid,
                    t->elapsed_ticks);
 }
+
 static uint32_t procstatus_build(char *dst, uint32_t cap, uint32_t slot) {
     struct task_struct *t = &task_table[slot];
     return sprintf(dst,
@@ -101,6 +102,7 @@ static uint32_t procstatus_build(char *dst, uint32_t cap, uint32_t slot) {
                    t->name, t->pid, t->parent_pid > 0 ? t->parent_pid : 1,
                    t->uid, t->euid, t->suid, t->gid, t->egid, t->sgid);
 }
+
 static uint32_t proc_size(int node) {
     char buf[256];
     if (node == PROC_MEMINFO) {

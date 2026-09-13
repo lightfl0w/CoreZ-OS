@@ -1,5 +1,5 @@
-#ifndef __NR_MICRO_SHELL_PORT_H__
-#define __NR_MICRO_SHELL_PORT_H__
+#ifndef NR_MICRO_SHELL_PORT_H
+#define NR_MICRO_SHELL_PORT_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,5 +23,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+
 #endif
-#endif 
+#endif /* NR_MICRO_SHELL_PORT_H */

@@ -1,5 +1,5 @@
 #include "kernel/syscall/futex.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "lib/list/list.h"
 #include "kernel/sched/sync.h"
@@ -18,6 +18,7 @@ void futex_init(void) {
     }
     futex_inited = 1;
 }
+
 static struct futex_bucket *futex_bucket_for(uint32_t uaddr, uint32_t pml4_phys) {
     if (!futex_inited) {
         futex_init();
@@ -25,6 +26,7 @@ static struct futex_bucket *futex_bucket_for(uint32_t uaddr, uint32_t pml4_phys)
     uint32_t h = (pml4_phys ^ (uaddr >> 2)) % FUTEX_BUCKETS;
     return &futex_buckets[h];
 }
+
 static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
     struct futex_bucket *b = futex_bucket_for(uaddr, current->pml4_phys);
     current->futex_ready = 0;
@@ -53,6 +55,7 @@ static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
     }
     return 0;
 }
+
 static int32_t sys_futex_wake(uint32_t uaddr, uint32_t nr) {
     struct futex_bucket *b = futex_bucket_for(uaddr, current->pml4_phys);
     int32_t woken = 0;
@@ -70,6 +73,7 @@ static int32_t sys_futex_wake(uint32_t uaddr, uint32_t nr) {
     asm_restore_eflags(old);
     return woken;
 }
+
 int32_t sys_futex(uint32_t uaddr, uint32_t op, uint32_t val, uint32_t timeout) {
     if (uaddr == 0) {
         return -1;
