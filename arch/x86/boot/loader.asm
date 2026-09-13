@@ -56,7 +56,9 @@ DATA_LBA  equ FAT_LBA + FAT_COUNT*FAT_SECTORS
 DIR_BUF   equ 0x3000
 FAT_BUF   equ 0x3400
 BOUNCE    equ 0x4000
+E820_MAX  equ 100
 STAGE_HI  equ 0x00100000
+MAX_KSIZE equ 0x00180000
 
         org     0xC200
 
@@ -64,7 +66,7 @@ STAGE_HI  equ 0x00100000
 
 start:
         cld
-        mov     al, byte [0x0FFE]
+        mov     al, byte [0x0FF0]
         mov     byte [l_drive], al
 
         mov     dword [l_bestmode], 0xFFFF
@@ -312,6 +314,8 @@ vbe_done:
 .e820_norm:
         add     edi, 24
         inc     dword [0x6000]
+        cmp     dword [0x6000], E820_MAX
+        jae     .e820_done
         cmp     ebx, 0
         je      .e820_done
         jmp     .e820_loop
@@ -475,6 +479,10 @@ vbe_done:
         mov     word [l_cluster], ax
         mov     eax, [bx+28]
         mov     [l_ksize], eax
+        cmp     eax, MAX_KSIZE
+        jbe     .l_loadloop
+        mov     si, kmsg2
+        jmp     .kerr
 
 .l_loadloop:
         mov     ax, word [l_cluster]
@@ -520,7 +528,7 @@ vbe_done:
         jmp     .l_loadloop
 
 .l_kload_ok:
-        jmp     .kload_ok
+        jmp     kload_ok
 
 .lkerr:
         mov     si, kmsg
@@ -535,7 +543,14 @@ vbe_done:
 .khalt:
         hlt
         jmp     .khalt
-.kload_ok:
+koverflow:
+        bits 32
+        cli
+.khang:
+        hlt
+        jmp     .khang
+        bits 16
+kload_ok:
 
         cli
 
@@ -565,10 +580,8 @@ pipelineflush:
         mov     edi, eax
         mov     esi, STAGE_HI
         mov     ecx, [l_ksize]
-        cmp     ecx, 0x180000
-        jbe     .ksz_ok
-        mov     ecx, 0x180000
-.ksz_ok:
+        cmp     ecx, MAX_KSIZE
+        ja      koverflow
         add     ecx, 3
         shr     ecx, 2
         call    memcpy
@@ -1294,6 +1307,7 @@ get_rtc_sec:
         mov     al, 0x00
         out     0x70, al
         in      al, 0x71
+        movzx   eax, al
         mov     ecx, eax
         and     ecx, 0x0F
         shr     eax, 4
@@ -1327,6 +1341,7 @@ l_cluster: dw   0
 l_fbyte:  dw    0
 l_buf:    dw    0
 l_lba:    dw    0
+l_retryn: db    0
 l_kname:  db    "KERNEL  BIN"
 
 l_bestmode:   dw    0xFFFF
@@ -1418,14 +1433,37 @@ l_readsec:
         mov     word [dap+0x06], 0
         mov     word [dap+0x08], si
         mov     word [dap+0x0C], 0
+        call    l_retry13
+        pop     si
+        ret
+
+l_retry13:
+        mov     byte [l_retryn], 5
+.try:
         mov     si, dap
         mov     dl, byte [l_drive]
         mov     ah, 0x42
         int     0x13
-        pop     si
+        jnc     .chk
+        jmp     .fail
+.chk:
+        test    ah, ah
+        jz      .done
+.fail:
+        dec     byte [l_retryn]
+        jz      .err
+        xor     ah, ah
+        int     0x13
+        jmp     .try
+.done:
+        clc
+        ret
+.err:
+        stc
         ret
 
 kmsg:   db      0x0A, 0x0A, "kernel load error", 0
+kmsg2:  db      0x0A, 0x0A, "kernel too large", 0
 
 IDT0:
     %rep 256

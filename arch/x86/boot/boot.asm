@@ -6,7 +6,7 @@
         mov     sp, 0x7C00
         mov     ds, ax
         mov     es, ax
-        mov     [0x0FFE], dl
+        mov     [0x0FF0], dl
 
         mov     si, 0x7C00 + 0x1BE
         mov     cx, 4
@@ -19,11 +19,23 @@
 .have:
         mov     eax, [si + 8]
         mov     [dap + 8], eax
+        mov     cx, 5
+.try:
         mov     si, dap
-        mov     dl, byte [0x0FFE]
+        mov     dl, byte [0x0FF0]
         mov     ah, 0x42
         int     0x13
-        jc      err
+        jnc     .chk
+        jmp     .fail
+.chk:
+        test    ah, ah
+        jz      .read_ok
+.fail:
+        xor     ah, ah
+        int     0x13
+        loop    .try
+        jmp     err
+.read_ok:
         jmp     word 0x0000:0x0600
 
 err:
