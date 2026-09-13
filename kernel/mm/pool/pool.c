@@ -459,6 +459,17 @@ void free_user_page(uint32_t vaddr) {
     lock_release(&mem_lock);
 }
 
+void page_cow_share(uint32_t phy_addr) {
+    if (phy_addr < MEMORY_BASE || phy_addr >= MAX_PHYS_MEM) {
+        return;
+    }
+    uint32_t idx = FRAME_IDX(phy_addr);
+    lock_acquire(&mem_lock);
+
+    frame_owner[idx] = (frame_owner[idx] == 0) ? 2 : frame_owner[idx] + 1;
+    lock_release(&mem_lock);
+}
+
 int page_cow_resolve(uint32_t vaddr, uint64_t pte_val) {
     uint32_t phy = (uint32_t)PTE_PHYS(pte_val);
     if (phy < MEMORY_BASE || phy >= MAX_PHYS_MEM) {
@@ -466,41 +477,29 @@ int page_cow_resolve(uint32_t vaddr, uint64_t pte_val) {
     }
     uint32_t idx = FRAME_IDX(phy);
     lock_acquire(&mem_lock);
-    uint32_t owner = frame_owner[idx];
-    if (owner <= 1) {
-        uint64_t *pte = pte_ptr(vaddr);
-        if (pte == NULL || !(*pte & 1) || !(*pte & COW_FLAG)) {
-            lock_release(&mem_lock);
-            return 0;
-        }
-        *pte = (*pte & ~(uint64_t)COW_FLAG) | 2;
-        __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
-        lock_release(&mem_lock);
-        return 1;
-    }
-
-    uint32_t new_phy = (uint32_t)palloc(&kernel_pool);
-    if (new_phy == 0) {
+    uint64_t *pte = pte_ptr(vaddr);
+    if (pte == NULL || !(*pte & 1)) {
         lock_release(&mem_lock);
         return 0;
     }
-    memcpy((void *)VIRT_OF(new_phy), (void *)VIRT_OF(phy), PAGE_SIZE);
-    if (frame_owner[idx] > 1) {
-        frame_owner[idx]--;
-    } else {
-        frame_owner[idx] = 0;
-        pfree(&kernel_pool, phy);
-    }
-    uint64_t *pte = pte_ptr(vaddr);
-    if (pte == NULL || !(*pte & 1) || !(*pte & COW_FLAG)) {
-        if (pte != NULL && (*pte & 1)) {
-            *pte = (PTE_PHYS(pte_val)) | pte_wx(PTE_P | PTE_U, 1, 0);
-            __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
-        }
+    if (!(*pte & COW_FLAG)) {
+        uint32_t ok = (*pte & PTE_W) ? 1 : 0;
         lock_release(&mem_lock);
-        return 1;
+        return ok;
     }
-    *pte = (*pte & 0x000ffffffffff000ull) | pte_wx(PTE_P | PTE_U, 1, 0);
+    if (frame_owner[idx] > 1) {
+        uint32_t new_phy = (uint32_t)palloc(&kernel_pool);
+        if (new_phy == 0) {
+            lock_release(&mem_lock);
+            return 0;
+        }
+        memcpy((void *)VIRT_OF(new_phy), (void *)VIRT_OF(phy), PAGE_SIZE);
+        frame_owner[idx]--;
+        *pte = (uint64_t)new_phy |
+               (pte_val & (PTE_P | PTE_U | PTE_NX | 0x0f0)) | PTE_W;
+    } else {
+        *pte = (*pte & ~(uint64_t)COW_FLAG) | PTE_W;
+    }
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
     lock_release(&mem_lock);
     return 1;

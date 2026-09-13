@@ -34,6 +34,7 @@ uint32_t palloc_pages(struct pool *pool, uint32_t cnt);
 #define COW_FLAG (1u << 9)
 
 int page_cow_resolve(uint32_t vaddr, uint64_t pte_val);
+void page_cow_share(uint32_t phy_addr);
 
 #define VIRT_OF(phys) ((phys) + 0xC0000000ull)
 

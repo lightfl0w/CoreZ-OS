@@ -31,20 +31,44 @@ static void mark_child_bitmap(struct task_struct *child, uint32_t vaddr) {
         bitmap_set(&child->userprog_v_addr.vaddr_bitmap, bit, 1);
     }
 }
-static void copy_user_space(struct task_struct *parent,
-                            struct task_struct *child) {
-    if (parent->pml4_phys == 0) {
-        return;
-    }
+static int cow_vaddr_ok(uint32_t vaddr) {
+    return vaddr >= USER_VADDR_START &&
+           !(vaddr >= KERNEL_VADDR_START &&
+             vaddr < KERNEL_VADDR_START + KERNEL_VADDR_SIZE) &&
+           vaddr < 0xc0000000;
+}
 
-    uint64_t *parent_pml4 = (uint64_t *)VIRT_OF(parent->pml4_phys);
-    uint64_t *child_pml4 = (uint64_t *)VIRT_OF(child->pml4_phys);
-    uint64_t pml4e = parent_pml4[0];
-    if (!(pml4e & PTE_P)) {
-        return;
+static int alloc_child_page_tables(struct task_struct *child, uint64_t *pdp,
+                                   uint64_t *child_pdp) {
+    for (uint32_t pdp_idx = 0; pdp_idx < 3; pdp_idx++) {
+        uint64_t pdp_e = pdp[pdp_idx];
+        if (!(pdp_e & PTE_P) || (pdp_e & PTE_PS)) {
+            continue;
+        }
+        uint64_t *pd = (uint64_t *)VIRT_OF(PTE_PHYS(pdp_e));
+        uint64_t child_pdp_e = child_pdp[pdp_idx];
+        if (!(child_pdp_e & PTE_P) || child_pdp_e == pdp_e) {
+            continue;
+        }
+        uint64_t *child_pd = (uint64_t *)VIRT_OF(PTE_PHYS(child_pdp_e));
+        for (uint32_t pd_idx = 0; pd_idx < 512; pd_idx++) {
+            uint64_t pd_e = pd[pd_idx];
+            if (!(pd_e & PTE_P) || (pd_e & PTE_PS)) {
+                continue;
+            }
+            uint32_t child_tbl = (uint32_t)palloc(&kernel_pool);
+            if (child_tbl == 0) {
+                return -1;
+            }
+            memset((void *)VIRT_OF(child_tbl), 0, PAGE_SIZE);
+            child_pd[pd_idx] = (uint64_t)child_tbl | (pd_e & 0xfff);
+        }
     }
-    uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
-    uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
+    return 0;
+}
+
+static void share_user_space_cow(struct task_struct *child, uint64_t *pdp,
+                                 uint64_t *child_pdp) {
     for (uint32_t pdp_idx = 0; pdp_idx < 3; pdp_idx++) {
         uint64_t pdp_e = pdp[pdp_idx];
         if (!(pdp_e & PTE_P) || (pdp_e & PTE_PS)) {
@@ -62,12 +86,8 @@ static void copy_user_space(struct task_struct *parent,
                 continue;
             }
             uint64_t *pt = (uint64_t *)VIRT_OF(PTE_PHYS(pd_e));
-            uint32_t child_tbl = (uint32_t)palloc(&kernel_pool);
-            if (child_tbl == 0) {
-                return;
-            }
-            memset((void *)VIRT_OF(child_tbl), 0, PAGE_SIZE);
-            uint64_t *child_pt = (uint64_t *)VIRT_OF(child_tbl);
+            uint64_t *child_pt =
+                (uint64_t *)VIRT_OF(PTE_PHYS(child_pd[pd_idx]));
             for (uint32_t pte_idx = 0; pte_idx < 512; pte_idx++) {
                 uint64_t pte = pt[pte_idx];
                 if (!(pte & PTE_P)) {
@@ -75,27 +95,39 @@ static void copy_user_space(struct task_struct *parent,
                 }
                 uint32_t vaddr =
                     (pdp_idx << 30) + (pd_idx << 21) + (pte_idx << 12);
-                if (vaddr < USER_VADDR_START ||
-                    (vaddr >= KERNEL_VADDR_START &&
-                     vaddr < KERNEL_VADDR_START + KERNEL_VADDR_SIZE) ||
-                    vaddr >= 0xc0000000) {
+                if (!cow_vaddr_ok(vaddr)) {
                     continue;
                 }
-                
-                uint32_t new_phy = (uint32_t)palloc(&kernel_pool);
-                if (new_phy == 0) {
-                    return;
-                }
-                memcpy((void *)VIRT_OF(new_phy), (void *)VIRT_OF(PTE_PHYS(pte)),
-                       PAGE_SIZE);
+                uint32_t src_phy = (uint32_t)PTE_PHYS(pte);
+                page_cow_share(src_phy);
+                pt[pte_idx] = (pte & ~(uint64_t)PTE_W) | COW_FLAG;
+                __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
                 mark_child_bitmap(child, vaddr);
-                child_pt[pte_idx] = (uint64_t)new_phy |
-                                    (pte & (PTE_P | PTE_W | PTE_U | PTE_NX |
-                                            0x0f0));
+                child_pt[pte_idx] = (uint64_t)src_phy |
+                                    (pte & (PTE_P | PTE_U | PTE_NX | 0x0f0)) |
+                                    COW_FLAG;
             }
-            child_pd[pd_idx] = (uint64_t)child_tbl | (pd_e & 0xfff);
         }
     }
+}
+static void copy_user_space(struct task_struct *parent,
+                            struct task_struct *child) {
+    if (parent->pml4_phys == 0) {
+        return;
+    }
+
+    uint64_t *parent_pml4 = (uint64_t *)VIRT_OF(parent->pml4_phys);
+    uint64_t *child_pml4 = (uint64_t *)VIRT_OF(child->pml4_phys);
+    uint64_t pml4e = parent_pml4[0];
+    if (!(pml4e & PTE_P)) {
+        return;
+    }
+    uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
+    uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
+    if (alloc_child_page_tables(child, pdp, child_pdp) != 0) {
+        return;
+    }
+    share_user_space_cow(child, pdp, child_pdp);
 }
 static void build_child_stack(struct task_struct *child,
                               struct Registers *parent_frame) {
