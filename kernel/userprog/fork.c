@@ -114,7 +114,7 @@ static void share_user_space_cow(struct TASK *child, uint64_t *pdp,
     }
 }
 
-static int copy_user_space(struct TASK *parent, struct TASK *child) {
+int copy_user_space(struct TASK *parent, struct TASK *child) {
     if (parent->pml4_phys == 0) {
         return 0;
     }
@@ -192,6 +192,7 @@ pid_t sys_fork(struct X86_REGS *r) {
     if (child->pml4_phys == 0) {
         goto fork_fail;
     }
+    space_ref(child->pml4_phys);
     if (copy_user_space(parent, child) != 0) {
         goto fork_fail;
     }

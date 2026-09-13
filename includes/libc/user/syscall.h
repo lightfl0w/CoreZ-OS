@@ -80,7 +80,7 @@ void*    mmap2(void* addr, uint32_t len, int prot, int flags, int fd, uint32_t o
 int32_t  munmap(void* addr, uint32_t len);
 int32_t  mprotect(void* addr, uint32_t len, int prot);
 int32_t  futex(uint32_t uaddr, int op, uint32_t val, void* timeout);
-int32_t  clone(uint32_t flags, void* child_stack);
+int32_t  clone(int (*fn)(void*), void* child_stack, uint32_t flags, void* arg);
 
 int32_t  fstat(int32_t fd, struct FS_STAT* buf);
 int32_t  dup(int32_t oldfd);

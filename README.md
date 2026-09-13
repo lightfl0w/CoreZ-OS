@@ -22,7 +22,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | 引导 (Boot)    | `arch/x86/boot/boot.asm`：512 字节主引导扇区，从硬盘分区加载 loader                                                       |
 | 加载器 (Loader) | `arch/x86/boot/loader.asm`：FAT32 读取内核、VBE 图形模式、E820 内存探测、Boot Menu（倒计时/上下键选择 + 重启项）、KASLR 内核加载地址随机化、进入保护模式 → 长模式、构造 Multiboot2 信息 |
 | 中断           | `arch/x86/interrupt`：256 门 IDT，ring3 异常转信号（SIGSEGV 等），COW 缺页处理                                                          |
-| 中断控制器        | `kernel/init/apic`：Local APIC + IPI + LAPIC 定时器（校准 per-tick）；`kernel/init/pic`、`kernel/init/pit`：PIC + PIT 回退路径     |
+| 中断控制器        | `kernel/init/apic`：Local APIC（IPI/EOI）+ IOAPIC 路由；`kernel/init/pic`、`kernel/init/pit`：PIT 是唯一的系统 tick 源（固定 1.193182MHz 分频，无需校准），PIC 仅作无 APIC 时的回退 |
 | ACPI         | `kernel/init/acpi`：RSDP/RSDT/FADT 探测与 ACPI 使能                                                                       |
 | SMP          | `kernel/init/smp`：AP trampoline（低 1MB 实模式跳板）+ INIT/SIPI 唤醒 + 每 CPU GDT/栈                                            |
 | 屏幕输出         | `drivers/char/console`：VBE 线性帧缓冲上绘制字库文本，`kprintf`/`console_putc`，debugcon (0xE9) 镜像输出                               |
@@ -43,7 +43,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | ---------- | ----------------------------------------------------------------------------- |
 | 线程/进程      | `kernel/sched/thread`：任务槽（`MAX_TASKS=64`，可回收）+ 红黑树就绪队列 + 时间片抢占调度，DIED 线程由调度器统一回收（栈/页目录/槽位） |
 | 用户进程       | `kernel/userprog/process`：ring3（`intr_exit` 模拟中断返回）、TSS、TLS（`set_thread_area`） |
-| fork/clone | `kernel/userprog/fork`、`kernel/userprog/clone`：COW 地址空间复制；clone 共享页目录与 fd 表（线程语义） |
+| fork/clone | `kernel/userprog/fork`、`kernel/userprog/clone`：fork 为 COW 地址空间复制；clone 按 flags 解释——`CLONE_VM` 共享页目录与 vaddr 位图（引用计数，最后退出者释放），无 `CLONE_VM` 时为 COW 私有副本，`CLONE_THREAD` 分离线程（不进父子树、退出即回收），`CLONE_SETTLS` 取第 5 参数；`CLONE_FS/FILES/SIGHAND` 无共享结构，按带引用计数的拷贝处理。libc 的 clone 包装为 `clone(fn, stack, flags, arg)`（`apps/lc_clone.asm` 分叉父子路径） |
 | exec       | `kernel/userprog/exec`：ELF32/ELF64 加载、辅助向量（auxv）、参数/环境入栈、W^X（可执行段 RX）          |
 | 退出/等待      | `kernel/userprog/wait_exit`：资源释放、孤儿进程自动终止回收、`wait`/`waitpid`                   |
 
@@ -69,7 +69,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | 鼠标  | `drivers/char/mouse`：PS/2 aux 通道，三字节包解析                                                                                                    |
 | 磁盘  | `drivers/block/ide`：IDE 通道 + 分区表解析，对接 block\_ops                                                                                           |
 | 网卡  | `drivers/net/e1000`、`drivers/net/rtl8139`：PCI 探测、MMIO/IO 寄存器、TX/RX 描述符环                                                                     |
-| 网络栈 | `drivers/net`：Ethernet/ARP/IP/ICMP/TCP/UDP + BSD socket API（`socket`/`bind`/`connect`/`send`/`recv`/`select`），QEMU user 网络下自动配置 `10.0.2.15` |
+| 网络栈 | `drivers/net`：Ethernet/ARP/IP/ICMP/TCP/UDP + BSD socket API（`socket`/`bind`/`connect`/`send`/`recv`/`select`），QEMU user 网络下自动配置 `10.0.2.15`；收包在 net 线程轮询完成（非中断上下文），共享状态由 `net_lock` 互斥，不再关中断跑完整条协议栈 |
 | GUI | `kernel/gui`：合成器（类 Wayland 的 surface/client 模型）、可替换平铺布局（Master-Stack/Tall/Wide/Monocle）、鼠标键盘事件分发，shell 输入 `gui` 进入                            |
 
 ### Shell 与用户程序
@@ -182,7 +182,8 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
   正常负载下网络工作正常。
 - 并发：物理页池按 `pool_lock`(位图)/`map_lock`(页表) 拆分，单页分配经每 CPU 缓存、
   空闲页数用原子计数；ext2 元数据用读写锁（读并行/写排他）；file 表槽位分配与引用计数
-  无锁。SMP 调度尚未启用（AP 仅验证可启动），这些机制是为多核做的前置准备。
+  无锁；网络栈共享状态由 `net_lock` 保护（收包在 net 线程任务上下文，用可阻塞锁而非
+  关中断）。SMP 调度尚未启用（AP 仅验证可启动），这些机制是为多核做的前置准备。
 
 ## 参考资料与致谢
 

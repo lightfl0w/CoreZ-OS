@@ -4,6 +4,7 @@
 #include "drivers/net/arp.h"
 #include "drivers/net/eth.h"
 #include "drivers/net/icmp.h"
+#include "drivers/net/net.h"
 #include "drivers/net/tcp.h"
 #include "drivers/net/udp.h"
 
@@ -75,16 +76,20 @@ int ip_output(NETIF *ifp, uint32_t daddr, uint8_t proto, const void *data,
     if (arp_resolve(ifp, nh, mac) == 0)
         return eth_output(ifp, mac, ETH_IP, pkt, tot);
 
+    lock_acquire(&net_lock);
     s_pend_dst = nh;
     s_pend_len = tot;
     memcpy(s_pend, pkt, tot);
     s_pend_active = 1;
+    lock_release(&net_lock);
     return 0;
 }
 
 void ip_arp_resolved(NETIF *ifp, uint32_t ip, const uint8_t *mac) {
+    lock_acquire(&net_lock);
     if (s_pend_active && s_pend_dst == ip) {
         eth_output(ifp, mac, ETH_IP, s_pend, s_pend_len);
         s_pend_active = 0;
     }
+    lock_release(&net_lock);
 }

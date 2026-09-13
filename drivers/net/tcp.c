@@ -69,18 +69,23 @@ static struct TCP_PCB *pcb_find(uint32_t daddr, uint16_t dport, uint32_t saddr,
 }
 
 struct TCP_PCB *tcp_pcb_alloc(void) {
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_TCP_PCB; i++) {
         if (!s_pcb[i].active) {
             memset(&s_pcb[i], 0, sizeof s_pcb[i]);
             s_pcb[i].active = 1;
+            lock_release(&net_lock);
             return &s_pcb[i];
         }
     }
+    lock_release(&net_lock);
     return 0;
 }
 
 void tcp_pcb_free(struct TCP_PCB *pcb) {
+    lock_acquire(&net_lock);
     pcb->active = 0;
+    lock_release(&net_lock);
 }
 
 static int tcp_emit(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq, uint32_t ack,
@@ -143,26 +148,35 @@ static void tcp_fire(NETIF *ifp, struct TCP_PCB *pcb) {
 
 int tcp_bind(struct TCP_PCB *pcb, uint32_t ip, uint16_t port) {
     (void)ip;
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_TCP_PCB; i++) {
         struct TCP_PCB *other = &s_pcb[i];
-        if (other->active && other != pcb && other->local_port == port)
+        if (other->active && other != pcb && other->local_port == port) {
+            lock_release(&net_lock);
             return -1;
+        }
     }
     pcb->local_port = port;
     pcb->local_ip = 0;
+    lock_release(&net_lock);
     return 0;
 }
 
 int tcp_listen(struct TCP_PCB *pcb) {
-    if (!pcb->local_port)
+    lock_acquire(&net_lock);
+    if (!pcb->local_port) {
+        lock_release(&net_lock);
         return -1;
+    }
     pcb->state = TCP_LISTEN;
     pcb->accept_head = pcb->accept_tail = pcb->accept_len = 0;
+    lock_release(&net_lock);
     return 0;
 }
 
 int tcp_connect(struct TCP_PCB *pcb, uint32_t ip, uint16_t port) {
     extern NETIF g_netif;
+    lock_acquire(&net_lock);
     pcb->local_ip = g_netif.ip;
     if (!pcb->local_port) {
         uint32_t p = (uint16_t)((net_now_ms() ^ (uint32_t)&pcb) & 0x7FFF) + 1024;
@@ -178,52 +192,73 @@ int tcp_connect(struct TCP_PCB *pcb, uint32_t ip, uint16_t port) {
     pcb->tx_len = 0;
     pcb->tmo = net_now_ms() + TCP_INIT_RTO;
     pcb->retry = 0;
-    return tcp_emit(&g_netif, pcb, pcb->iss, 0, TCP_FLAG_SYN, 0, 0);
+    int rc = tcp_emit(&g_netif, pcb, pcb->iss, 0, TCP_FLAG_SYN, 0, 0);
+    lock_release(&net_lock);
+    return rc;
 }
 
 int tcp_send(struct TCP_PCB *pcb, const void *data, uint32_t len) {
     extern NETIF g_netif;
-    if (pcb->state != TCP_ESTABLISHED || !len)
+    lock_acquire(&net_lock);
+    if (pcb->state != TCP_ESTABLISHED || !len) {
+        lock_release(&net_lock);
         return -1;
-    if (TCP_SND_BUF - pcb->tx_len < len)
+    }
+    if (TCP_SND_BUF - pcb->tx_len < len) {
+        lock_release(&net_lock);
         return -1;
+    }
     memcpy(pcb->txb + pcb->tx_len, data, len);
     pcb->tx_len += len;
     tcp_fire(&g_netif, pcb);
+    lock_release(&net_lock);
     return (int)len;
 }
 
 int tcp_recv(struct TCP_PCB *pcb, void *buf, uint32_t len) {
+    lock_acquire(&net_lock);
     uint32_t avail = pcb->rx_tail - pcb->rx_head;
-    if (avail == 0)
+    if (avail == 0) {
+        lock_release(&net_lock);
         return -1;
+    }
     if (avail > len)
         avail = len;
     uint8_t *dst = (uint8_t *)buf;
     for (uint32_t i = 0; i < avail; i++)
         dst[i] = pcb->rx[pcb->rx_head++ & RCV_MASK];
     pcb->rcv_nxt += avail;
+    lock_release(&net_lock);
     return (int)avail;
 }
 
 int tcp_accept_ready(struct TCP_PCB *listener) {
-    if (listener->state != TCP_LISTEN || listener->accept_len == 0)
+    lock_acquire(&net_lock);
+    if (listener->state != TCP_LISTEN || listener->accept_len == 0) {
+        lock_release(&net_lock);
         return 0;
+    }
     uint32_t cnt = listener->accept_len;
     for (uint32_t k = 0; k < cnt; k++) {
         int idx = listener->accept_q[(listener->accept_head + k) % TCP_BACKLOG];
         if (idx < 0 || idx >= MAX_TCP_PCB)
             continue;
         struct TCP_PCB *c = &s_pcb[idx];
-        if (c->active && c->state == TCP_ESTABLISHED)
+        if (c->active && c->state == TCP_ESTABLISHED) {
+            lock_release(&net_lock);
             return 1;
+        }
     }
+    lock_release(&net_lock);
     return 0;
 }
 
 struct TCP_PCB *tcp_accept(struct TCP_PCB *listener) {
-    if (listener->state != TCP_LISTEN || listener->accept_len == 0)
+    lock_acquire(&net_lock);
+    if (listener->state != TCP_LISTEN || listener->accept_len == 0) {
+        lock_release(&net_lock);
         return 0;
+    }
     uint32_t cnt = listener->accept_len;
     for (uint32_t k = 0; k < cnt; k++) {
         int idx = listener->accept_q[(listener->accept_head + k) % TCP_BACKLOG];
@@ -240,13 +275,16 @@ struct TCP_PCB *tcp_accept(struct TCP_PCB *listener) {
         }
         listener->accept_tail =
             (listener->accept_tail + TCP_BACKLOG - 1) % TCP_BACKLOG;
+        lock_release(&net_lock);
         return c;
     }
+    lock_release(&net_lock);
     return 0;
 }
 
 int tcp_close(struct TCP_PCB *pcb) {
     extern NETIF g_netif;
+    lock_acquire(&net_lock);
     if (pcb->state == TCP_ESTABLISHED) {
         pcb->state = TCP_FIN_WAIT1;
         pcb->fin_sent = 1;
@@ -255,18 +293,22 @@ int tcp_close(struct TCP_PCB *pcb) {
         pcb->snd_nxt++;
         pcb->tmo = net_now_ms() + TCP_INIT_RTO;
         pcb->retry = 0;
+        lock_release(&net_lock);
         return 0;
     }
     if (pcb->state == TCP_SYN_SENT || pcb->state == TCP_CLOSED) {
         pcb->state = TCP_CLOSED;
         pcb->active = 0;
+        lock_release(&net_lock);
         return 0;
     }
+    lock_release(&net_lock);
     return -1;
 }
 
 int tcp_shutdown(struct TCP_PCB *pcb, int how) {
     extern NETIF g_netif;
+    lock_acquire(&net_lock);
     if (how & SHUT_WR) {
         if (pcb->state == TCP_ESTABLISHED) {
             pcb->fin_sent = 1;
@@ -288,6 +330,7 @@ int tcp_shutdown(struct TCP_PCB *pcb, int how) {
     }
     if (how & SHUT_RD)
         pcb->fin_rcvd = 1;
+    lock_release(&net_lock);
     return 0;
 }
 
@@ -406,10 +449,10 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     if (sum != 0)
         return;
 
-    asm_cli();
+    lock_acquire(&net_lock);
     struct TCP_PCB *pcb = pcb_find(ifp->ip, dport, src, sport);
     if (!pcb) {
-        asm_sti();
+        lock_release(&net_lock);
         return;
     }
 
@@ -417,7 +460,7 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         if ((flags & TCP_FLAG_SYN) && !(flags & TCP_FLAG_ACK)) {
             tcp_accept_child(ifp, pcb, src, sport, seq);
         }
-        asm_sti();
+        lock_release(&net_lock);
         return;
     }
 
@@ -433,7 +476,7 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
             tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
             tcp_input_established(ifp, pcb, seq + 1, flags, data, dlen, ack);
         }
-        asm_sti();
+        lock_release(&net_lock);
         return;
     }
 
@@ -446,7 +489,7 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
                 tcp_input_established(ifp, pcb, seq, flags, data, dlen, ack);
             }
         }
-        asm_sti();
+        lock_release(&net_lock);
         return;
     }
 
@@ -476,12 +519,12 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     } else if (pcb->state == TCP_LAST_ACK && (flags & TCP_FLAG_ACK)) {
         pcb->active = 0;
     }
-    asm_sti();
+    lock_release(&net_lock);
 }
 
 void tcp_tick(NETIF *ifp) {
     uint32_t now = net_now_ms();
-    asm_cli();
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_TCP_PCB; i++) {
         struct TCP_PCB *pcb = &s_pcb[i];
         if (!pcb->active)
@@ -557,5 +600,5 @@ void tcp_tick(NETIF *ifp) {
             pcb->active = 0;
         }
     }
-    asm_sti();
+    lock_release(&net_lock);
 }

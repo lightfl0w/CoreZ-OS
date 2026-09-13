@@ -23,6 +23,6 @@ struct LIST_ELEM *list_pop_front(struct LIST *list);
 struct LIST_ELEM *elem_find(struct LIST *list, struct LIST_ELEM *elem);
 
 #define list_entry(ptr, type, member)                                          \
-    ((type *)((uint32_t)(ptr) - offsetof(type, member)))
+    ((type *)((uintptr_t)(ptr) - offsetof(type, member)))
 
 #endif

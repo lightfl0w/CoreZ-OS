@@ -38,12 +38,15 @@ void sock_init(void) {
 }
 
 static struct SOCKET *sock_alloc(void) {
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_SOCKET; i++) {
         if (!s_sock[i].active) {
             s_sock[i].active = 1;
+            lock_release(&net_lock);
             return &s_sock[i];
         }
     }
+    lock_release(&net_lock);
     return 0;
 }
 
@@ -55,41 +58,62 @@ static struct SOCKET *sock_get(int fd) {
 }
 
 static int sock_readable(struct SOCKET *s) {
-    if (s->type == SOCK_DGRAM)
-        return udp_rx_ready(s->upcb);
-    struct TCP_PCB *p = s->pcb;
-    return (p->rx_tail - p->rx_head) > 0 || p->fin_rcvd || !p->active;
+    lock_acquire(&net_lock);
+    int r;
+    if (s->type == SOCK_DGRAM) {
+        r = udp_rx_ready(s->upcb);
+    } else {
+        struct TCP_PCB *p = s->pcb;
+        r = (p->rx_tail - p->rx_head) > 0 || p->fin_rcvd || !p->active;
+    }
+    lock_release(&net_lock);
+    return r;
 }
 
 static int sock_writable(struct SOCKET *s) {
-    if (s->type == SOCK_DGRAM)
-        return 1;
-    struct TCP_PCB *p = s->pcb;
-    if (!p->active)
-        return 1;
-    if (p->state != TCP_ESTABLISHED && p->state != TCP_CLOSE_WAIT)
-        return 0;
-    return (TCP_SND_BUF - p->tx_len) > 0;
+    lock_acquire(&net_lock);
+    int r;
+    if (s->type == SOCK_DGRAM) {
+        r = 1;
+    } else {
+        struct TCP_PCB *p = s->pcb;
+        if (!p->active)
+            r = 1;
+        else if (p->state != TCP_ESTABLISHED && p->state != TCP_CLOSE_WAIT)
+            r = 0;
+        else
+            r = (TCP_SND_BUF - p->tx_len) > 0;
+    }
+    lock_release(&net_lock);
+    return r;
 }
 
 static int sock_ready(struct SOCKET *s) {
-    if (s->type == SOCK_DGRAM)
-        return udp_rx_ready(s->upcb);
-    struct TCP_PCB *p = s->pcb;
-    if (s->wtype == SWAIT_CONNECT)
-        return p->state == TCP_ESTABLISHED || !p->active;
-    if (s->wtype == SWAIT_RECV)
-        return (p->rx_tail - p->rx_head) > 0 || p->fin_rcvd || !p->active;
-    if (s->wtype == SWAIT_SEND)
-        return TCP_SND_BUF - p->tx_len > 0 || !p->active;
-    if (s->wtype == SWAIT_ACCEPT)
-        return tcp_accept_ready(p);
-    return 0;
+    lock_acquire(&net_lock);
+    int r = 0;
+    if (s->type == SOCK_DGRAM) {
+        r = udp_rx_ready(s->upcb);
+    } else {
+        struct TCP_PCB *p = s->pcb;
+        if (s->wtype == SWAIT_CONNECT)
+            r = p->state == TCP_ESTABLISHED || !p->active;
+        else if (s->wtype == SWAIT_RECV)
+            r = (p->rx_tail - p->rx_head) > 0 || p->fin_rcvd || !p->active;
+        else if (s->wtype == SWAIT_SEND)
+            r = TCP_SND_BUF - p->tx_len > 0 || !p->active;
+        else if (s->wtype == SWAIT_ACCEPT)
+            r = tcp_accept_ready(p);
+    }
+    lock_release(&net_lock);
+    return r;
 }
 
 static int sock_block(struct SOCKET *s, uint8_t wtype, uint32_t timeout_ms) {
+    lock_acquire(&net_lock);
     s->wtype = wtype;
-    if (s->nonblock)
+    int nonblock = s->nonblock;
+    lock_release(&net_lock);
+    if (nonblock)
         return sock_ready(s) ? 0 : -EAGAIN;
     uint32_t deadline = timeout_ms ? net_now_ms() + timeout_ms : 0;
     for (;;) {
@@ -97,14 +121,19 @@ static int sock_block(struct SOCKET *s, uint8_t wtype, uint32_t timeout_ms) {
             return 0;
         if (timeout_ms && (int32_t)(net_now_ms() - deadline) >= 0)
             return -1;
+
+        lock_acquire(&net_lock);
         s->waiter = current;
+        lock_release(&net_lock);
         thread_block_with_status(TASK_BLOCKED);
+        lock_acquire(&net_lock);
         s->waiter = 0;
+        lock_release(&net_lock);
     }
 }
 
 void sock_poll(void) {
-    asm_cli();
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_SOCKET; i++) {
         struct SOCKET *s = &s_sock[i];
         if (!s->active || !s->waiter)
@@ -120,89 +149,131 @@ void sock_poll(void) {
         s->waiter = 0;
         thread_unblock(w);
     }
-    asm_sti();
+    lock_release(&net_lock);
 }
 
 int net_socket(int domain, int type, int proto) {
     if (domain != AF_INET || (type != SOCK_STREAM && type != SOCK_DGRAM))
         return -1;
     (void)proto;
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_alloc();
-    if (!s)
+    if (!s) {
+        lock_release(&net_lock);
         return -1;
+    }
     s->type = (uint8_t)type;
     if (type == SOCK_DGRAM) {
         s->upcb = udp_pcb_alloc();
         if (!s->upcb) {
             s->active = 0;
+            lock_release(&net_lock);
             return -1;
         }
+        lock_release(&net_lock);
         return (int)(s - s_sock);
     }
     s->pcb = tcp_pcb_alloc();
     if (!s->pcb) {
         s->active = 0;
+        lock_release(&net_lock);
         return -1;
     }
     s->pcb->local_port = 0;
+    lock_release(&net_lock);
     return (int)(s - s_sock);
 }
 
 int net_bind(int fd, uint32_t ip, uint16_t port) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
+    if (s == NULL) {
+        lock_release(&net_lock);
         return -1;
-    if (s->type == SOCK_DGRAM)
-        return udp_bind(s->upcb, ip, port);
-    return tcp_bind(s->pcb, ip, port);
+    }
+    int rc = (s->type == SOCK_DGRAM) ? udp_bind(s->upcb, ip, port)
+                                     : tcp_bind(s->pcb, ip, port);
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_listen(int fd, int backlog) {
-    struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
-        return -1;
     (void)backlog;
-    return tcp_listen(s->pcb);
+    lock_acquire(&net_lock);
+    struct SOCKET *s = sock_get(fd);
+    if (s == NULL) {
+        lock_release(&net_lock);
+        return -1;
+    }
+    int rc = tcp_listen(s->pcb);
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_connect(int fd, uint32_t ip, uint16_t port) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
+    if (s == NULL) {
+        lock_release(&net_lock);
         return -1;
+    }
     if (s->type == SOCK_DGRAM) {
         udp_connect(s->upcb, ip, port);
+        lock_release(&net_lock);
         return 0;
     }
-    if (tcp_connect(s->pcb, ip, port) < 0)
+    int rc = tcp_connect(s->pcb, ip, port);
+    int nonblock = s->nonblock;
+    lock_release(&net_lock);
+    if (rc < 0)
         return -1;
-    if (s->nonblock)
+    if (nonblock)
         return -EINPROGRESS;
+
     if (sock_block(s, SWAIT_CONNECT, SOCK_CONNECT_TMO))
         return -1;
-    return (s->pcb->active && s->pcb->state == TCP_ESTABLISHED) ? 0 : -1;
+    lock_acquire(&net_lock);
+    int ok = s->pcb->active && s->pcb->state == TCP_ESTABLISHED;
+    lock_release(&net_lock);
+    return ok ? 0 : -1;
 }
 
 int net_send(int fd, const void *buf, uint32_t len) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
+    if (s == NULL) {
+        lock_release(&net_lock);
         return -1;
+    }
     if (s->type == SOCK_DGRAM) {
         extern NETIF g_netif;
-        if (!s->upcb->remote_ip)
+        if (!s->upcb->remote_ip) {
+            lock_release(&net_lock);
             return -1;
-        return udp_sendto(&g_netif, s->upcb, buf, len, s->upcb->remote_ip,
-                          s->upcb->remote_port);
+        }
+        int rc = udp_sendto(&g_netif, s->upcb, buf, len, s->upcb->remote_ip,
+                            s->upcb->remote_port);
+        lock_release(&net_lock);
+        return rc;
     }
+    lock_release(&net_lock);
+
     if (sock_block(s, SWAIT_SEND, SOCK_CONNECT_TMO))
         return -1;
     return tcp_send(s->pcb, buf, len);
 }
 
 int net_recv(int fd, void *buf, uint32_t len) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
+    if (s == NULL) {
+        lock_release(&net_lock);
         return -1;
-    if (s->type == SOCK_DGRAM) {
+    }
+    int is_dgram = (s->type == SOCK_DGRAM);
+    lock_release(&net_lock);
+
+    if (is_dgram) {
         if (sock_block(s, SWAIT_RECV, 0))
             return -1;
         return udp_recv(s->upcb, buf, len, 0, 0);
@@ -210,51 +281,76 @@ int net_recv(int fd, void *buf, uint32_t len) {
     if (sock_block(s, SWAIT_RECV, 0))
         return -1;
     int n = tcp_recv(s->pcb, buf, len);
-    if (n < 0 && (s->pcb->fin_rcvd || !s->pcb->active))
-        return 0;
+    if (n < 0) {
+        lock_acquire(&net_lock);
+        int closed = s->pcb->fin_rcvd || !s->pcb->active;
+        lock_release(&net_lock);
+        if (closed)
+            return 0;
+    }
     return n;
 }
 
 int net_sendto(int fd, const void *buf, uint32_t len, uint32_t daddr,
                uint16_t dport) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL || s->type != SOCK_DGRAM)
+    if (s == NULL || s->type != SOCK_DGRAM) {
+        lock_release(&net_lock);
         return -1;
+    }
     extern NETIF g_netif;
-    return udp_sendto(&g_netif, s->upcb, buf, len, daddr, dport);
+    int rc = udp_sendto(&g_netif, s->upcb, buf, len, daddr, dport);
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_recvfrom(int fd, void *buf, uint32_t len, uint32_t *saddr,
                  uint16_t *sport) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL || s->type != SOCK_DGRAM)
+    if (s == NULL || s->type != SOCK_DGRAM) {
+        lock_release(&net_lock);
         return -1;
+    }
+    lock_release(&net_lock);
     if (sock_block(s, SWAIT_RECV, 0))
         return -1;
     return udp_recv(s->upcb, buf, len, saddr, sport);
 }
 
 int net_accept(int fd) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL || s->type != SOCK_STREAM || s->pcb->state != TCP_LISTEN)
+    if (s == NULL || s->type != SOCK_STREAM || s->pcb->state != TCP_LISTEN) {
+        lock_release(&net_lock);
         return -1;
+    }
+    lock_release(&net_lock);
     if (sock_block(s, SWAIT_ACCEPT, 0))
         return -1;
     struct TCP_PCB *np = tcp_accept(s->pcb);
     if (!np)
         return -1;
+    lock_acquire(&net_lock);
     struct SOCKET *n = sock_alloc();
-    if (!n)
+    if (!n) {
+        lock_release(&net_lock);
         return -1;
+    }
     n->type = SOCK_STREAM;
     n->pcb = np;
+    lock_release(&net_lock);
     return (int)(n - s_sock);
 }
 
 int net_close(int fd) {
+    lock_acquire(&net_lock);
     struct SOCKET *s = sock_get(fd);
-    if (s == NULL)
+    if (s == NULL) {
+        lock_release(&net_lock);
         return -1;
+    }
     if (s->type == SOCK_STREAM) {
         tcp_close(s->pcb);
         tcp_pcb_free(s->pcb);
@@ -265,6 +361,7 @@ int net_close(int fd) {
     s->waiter = 0;
     s->pcb = 0;
     s->upcb = 0;
+    lock_release(&net_lock);
     return 0;
 }
 
@@ -280,24 +377,33 @@ int net_is_socket(int fd) {
 int net_fcntl(int fd, int cmd, uint32_t arg) {
     if (!net_is_socket(fd))
         return -EBADF;
+    lock_acquire(&net_lock);
     struct SOCKET *s = &s_sock[fd];
+    int rc;
     switch (cmd) {
     case F_GETFL:
-        return s->nonblock ? O_NONBLOCK : 0;
+        rc = s->nonblock ? O_NONBLOCK : 0;
+        break;
     case F_SETFL:
         s->nonblock = (arg & O_NONBLOCK) ? 1 : 0;
-        return 0;
+        rc = 0;
+        break;
     case F_GETFD:
     case F_SETFD:
-        return 0;
+        rc = 0;
+        break;
     default:
-        return -EINVAL;
+        rc = -EINVAL;
+        break;
     }
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_getsockname(int fd, uint32_t *ip, uint16_t *port) {
     if (!net_is_socket(fd))
         return -EBADF;
+    lock_acquire(&net_lock);
     struct SOCKET *s = &s_sock[fd];
     if (s->type == SOCK_DGRAM) {
         if (ip)
@@ -310,29 +416,37 @@ int net_getsockname(int fd, uint32_t *ip, uint16_t *port) {
         if (port)
             *port = s->pcb->local_port;
     }
+    lock_release(&net_lock);
     return 0;
 }
 
 int net_getpeername(int fd, uint32_t *ip, uint16_t *port) {
     if (!net_is_socket(fd))
         return -EBADF;
+    lock_acquire(&net_lock);
     struct SOCKET *s = &s_sock[fd];
+    int rc = 0;
     if (s->type == SOCK_DGRAM) {
         if (!s->upcb->remote_ip)
-            return -ENOTCONN;
-        if (ip)
-            *ip = s->upcb->remote_ip;
-        if (port)
-            *port = s->upcb->remote_port;
+            rc = -ENOTCONN;
+        else {
+            if (ip)
+                *ip = s->upcb->remote_ip;
+            if (port)
+                *port = s->upcb->remote_port;
+        }
     } else {
         if (!s->pcb->remote_ip)
-            return -ENOTCONN;
-        if (ip)
-            *ip = s->pcb->remote_ip;
-        if (port)
-            *port = s->pcb->remote_port;
+            rc = -ENOTCONN;
+        else {
+            if (ip)
+                *ip = s->pcb->remote_ip;
+            if (port)
+                *port = s->pcb->remote_port;
+        }
     }
-    return 0;
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_getsockopt(int fd, int level, int optname, void *val, uint32_t *len) {
@@ -343,8 +457,10 @@ int net_getsockopt(int fd, int level, int optname, void *val, uint32_t *len) {
     struct SOCKET *s = &s_sock[fd];
     switch (optname) {
     case SO_ERROR: {
+        lock_acquire(&net_lock);
         uint32_t e = s->err;
         s->err = 0;
+        lock_release(&net_lock);
         if (val && len && *len >= sizeof(int32_t))
             *(int32_t *)val = (int32_t)e;
         return 0;
@@ -385,10 +501,15 @@ int net_setsockopt(int fd, int level, int optname, const void *val,
 int net_shutdown(int fd, int how) {
     if (!net_is_socket(fd))
         return -EBADF;
+    lock_acquire(&net_lock);
     struct SOCKET *s = &s_sock[fd];
+    int rc;
     if (s->type != SOCK_STREAM)
-        return -EOPNOTSUPP;
-    return tcp_shutdown(s->pcb, how);
+        rc = -EOPNOTSUPP;
+    else
+        rc = tcp_shutdown(s->pcb, how);
+    lock_release(&net_lock);
+    return rc;
 }
 
 int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
@@ -396,6 +517,7 @@ int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
     int limit = nfds < MAX_SOCKET ? nfds : MAX_SOCKET;
     uint32_t deadline = timeout_ms > 0 ? net_now_ms() + (uint32_t)timeout_ms : 0;
     for (;;) {
+        lock_acquire(&net_lock);
         for (int fd = 0; fd < limit; fd++) {
             struct SOCKET *s = &s_sock[fd];
             if (!s->active)
@@ -425,8 +547,10 @@ int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
             if (efds && ((efds[fd / 32] >> (fd % 32)) & 1u))
                 total++;
         }
+        lock_release(&net_lock);
         if (total)
             return total;
+
         if (timeout_ms >= 0 && (int32_t)(net_now_ms() - deadline) >= 0)
             return 0;
         mtime_sleep(1);

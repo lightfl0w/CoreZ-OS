@@ -8,6 +8,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/bitmap/bitmap.h"
 #include "kernel/mm/pool/pool.h"
+#include "kernel/fs/file.h"
 #include "kernel/userprog/exec.h"
 #define EFLAGS_MBS (1 << 1)
 #define EFLAGS_IF_1 (1 << 9)
@@ -120,10 +121,78 @@ uint32_t *create_page_dir(void) {
     return (uint32_t *)(uintptr_t)pml4_phys;
 }
 
-void free_user_space(struct TASK *t, uint32_t pml4_phys) {
-    if (t == NULL) {
+/*
+ * 地址空间引用计数：CLONE_VM 的线程共享同一份 PML4 与 vaddr 位图，
+ * 引用计数到 0 的那个任务负责释放整个地址空间（用户页、页表、PML4、位图）。
+ * 不变量：task->pml4_phys != 0 的任务恰好持有 1 个引用；为 0 的任务（内核
+ * 线程）不持有。表项按任务数上界分配，pml4 槽位随任务退出回收。
+ */
+struct MM_SPACE_REF {
+    uint32_t pml4;
+    uint32_t refs;
+};
+
+static struct MM_SPACE_REF space_ref_table[MAX_TASKS];
+
+static struct MM_SPACE_REF *space_ref_find(uint32_t pml4) {
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        if (space_ref_table[i].pml4 == pml4 && space_ref_table[i].refs != 0) {
+            return &space_ref_table[i];
+        }
+    }
+    return NULL;
+}
+
+void space_ref(uint32_t pml4) {
+    if (pml4 == 0) {
         return;
     }
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    struct MM_SPACE_REF *e = space_ref_find(pml4);
+    if (e != NULL) {
+        e->refs++;
+    } else {
+        for (uint32_t i = 0; i < MAX_TASKS; i++) {
+            if (space_ref_table[i].refs == 0) {
+                space_ref_table[i].pml4 = pml4;
+                space_ref_table[i].refs = 1;
+                break;
+            }
+        }
+    }
+    asm_restore_eflags(old);
+}
+
+/* 递减引用并返回剩余引用数；不负责释放，释放由调用方在归零时执行 */
+static uint32_t space_unref(uint32_t pml4) {
+    if (pml4 == 0) {
+        return 0;
+    }
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    struct MM_SPACE_REF *e = space_ref_find(pml4);
+    uint32_t left = 0;
+    if (e != NULL) {
+        e->refs--;
+        left = e->refs;
+        if (left == 0) {
+            e->pml4 = 0;
+        }
+    }
+    asm_restore_eflags(old);
+    return left;
+}
+
+/*
+ * 释放整个地址空间：遍历 PML4 释放用户页与页表页，最后释放 PML4 页；
+ * release_bitmap 为真时同时释放 owner 的 vaddr 位图页。
+ * 供两类调用方使用：
+ *   task_release_space —— 任务退出/被杀，释放自己持有的空间（含位图）；
+ *   free_user_space    —— fork/exec 失败回滚，显式指定要丢弃的 pml4。
+ */
+static void space_release_ex(uint32_t pml4_phys, struct TASK *owner,
+                             int release_bitmap) {
     if (pml4_phys != 0) {
         uint64_t *pml4 = phys_to_virt(pml4_phys);
         uint64_t pml4e = pml4[0];
@@ -153,15 +222,18 @@ void free_user_space(struct TASK *t, uint32_t pml4_phys) {
                         }
                         uint64_t vaddr =
                             ((uint64_t)pdp_idx << 30) +
-                            ((uint64_t)pd_idx << 21) + ((uint64_t)pte_idx << 12);
+                            ((uint64_t)pd_idx << 21) +
+                            ((uint64_t)pte_idx << 12);
                         uint32_t bit =
                             (uint32_t)((vaddr - USER_VADDR_START) / PAGE_SIZE);
-                        if (vaddr < USER_VADDR_START || vaddr >= 0xc0000000u ||
-                            bit >= t->userprog_v_addr.vaddr_bitmap
+                        if (owner == NULL || vaddr < USER_VADDR_START ||
+                            vaddr >= 0xc0000000u ||
+                            bit >= owner->userprog_v_addr.vaddr_bitmap
                                        .btmp_bytes_len *
                                        8 ||
-                            bitmap_scan_test(&t->userprog_v_addr.vaddr_bitmap,
-                                             bit) != 1) {
+                            bitmap_scan_test(
+                                &owner->userprog_v_addr.vaddr_bitmap, bit) !=
+                                1) {
                             pt_remaining++;
                             continue;
                         }
@@ -183,16 +255,84 @@ void free_user_space(struct TASK *t, uint32_t pml4_phys) {
         }
         pfree(&kernel_pool, pml4_phys);
     }
-    if (t->userprog_v_addr.vaddr_bitmap.bits != NULL) {
-        uint32_t bytes = t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len;
+    if (release_bitmap && owner != NULL &&
+        owner->userprog_v_addr.vaddr_bitmap.bits != NULL) {
+        uint32_t bytes = owner->userprog_v_addr.vaddr_bitmap.btmp_bytes_len;
         uint32_t pg_cnt = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
         for (uint32_t i = 0; i < pg_cnt; i++) {
             free_kernel_page(
-                (uint32_t)t->userprog_v_addr.vaddr_bitmap.bits + i * PAGE_SIZE);
+                (uint32_t)(uintptr_t)owner->userprog_v_addr.vaddr_bitmap.bits +
+                i * PAGE_SIZE);
         }
-        t->userprog_v_addr.vaddr_bitmap.bits = NULL;
+        owner->userprog_v_addr.vaddr_bitmap.bits = NULL;
+        owner->userprog_v_addr.vaddr_bitmap.btmp_bytes_len = 0;
     }
+}
+
+/*
+ * exec 语义：整个进程地址空间被替换。与 Linux 一致，共享该地址空间的其他
+ * 线程一并终止：摘除其空间引用（其位图指针随即失效），按引用计数归还其
+ * fd 持有的 FILE 引用，并标记 DIED 由调度器回收内核栈与任务槽。调用方随后
+ * 成为该空间的唯一持有者。注意这里不经过 close_file——它只对 current 生效。
+ */
+void space_detach_others(struct TASK *owner) {
+    uint32_t pml4 = owner->pml4_phys;
+    if (pml4 == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        struct TASK *t = &task_table[i];
+        if (t == owner || !t->slot_used || t->status == TASK_DIED) {
+            continue;
+        }
+        if (t->pml4_phys != pml4) {
+            continue;
+        }
+        t->pml4_phys = 0;
+        t->userprog_v_addr.vaddr_bitmap.bits = NULL;
+        t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len = 0;
+        space_unref(pml4);
+        /* 从可能挂着的等待队列摘下，避免 wake 路径撞上 DIED 状态的断言 */
+        list_unlink(&t->wait_tag);
+        for (uint32_t fd_idx = 3; fd_idx < MAX_FILES_OPEN_PER_PROC; fd_idx++) {
+            uint32_t g = t->fd_table[fd_idx];
+            if (g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
+                if (file_table[g].ref_cnt > 0) {
+                    file_table_unref(g);
+                }
+            }
+            t->fd_table[fd_idx] = (uint32_t)-1;
+        }
+        thread_exit(t, 0);
+    }
+}
+
+void task_release_space(struct TASK *t) {
+    if (t == NULL || t->pml4_phys == 0) {
+        return;
+    }
+    uint32_t pml4 = t->pml4_phys;
     t->pml4_phys = 0;
+    t->userprog_v_addr.vaddr_bitmap.bits = NULL;
+    t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len = 0;
+    if (space_unref(pml4) > 0) {
+        /* 空间仍被其他线程共享：页表与位图留给最后一个持有者释放 */
+        return;
+    }
+    space_release_ex(pml4, t, 1);
+}
+
+void free_user_space(struct TASK *t, uint32_t pml4_phys) {
+    if (t == NULL) {
+        return;
+    }
+    /* 仅当释放的正是任务当前绑定的空间时，才连带释放它的位图；
+     * exec 失败回滚丢弃的是旧 pml4，此时任务的新位图必须保留 */
+    int own = (t->pml4_phys == pml4_phys);
+    if (own) {
+        t->pml4_phys = 0;
+    }
+    space_release_ex(pml4_phys, t, own);
 }
 
 void create_user_vaddr_bitmap(struct TASK *user_prog) {
@@ -220,7 +360,13 @@ void process_execute(char *path, char *name) {
     ts->rbp = 0;
     ts->rip = kernel_thread_entry;
     create_user_vaddr_bitmap(thread);
-    thread->pml4_phys = (uint32_t)create_page_dir();
+    thread->pml4_phys = (uint32_t)(uintptr_t)create_page_dir();
+    if (thread->pml4_phys == 0) {
+        kprintf("[procexec] '%s' create_page_dir failed\n", path);
+        thread_exit(thread, 0);
+        return;
+    }
+    space_ref(thread->pml4_phys);
     thread->user_brk = 0;
     kprintf("[procexec] '%s' pid=%d pml4_phys=0x%x\n", path, thread->pid,
             thread->pml4_phys);

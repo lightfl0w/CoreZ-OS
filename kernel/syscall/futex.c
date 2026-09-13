@@ -1,6 +1,7 @@
 #include "kernel/syscall/futex.h"
 #include "kernel/asm_func.h"
 #include "kernel/assert.h"
+#include "drivers/char/console/io.h"
 #include "lib/list/list.h"
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
@@ -34,7 +35,7 @@ static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     spinlock_acquire(&b->lock);
-    if (*(volatile uint32_t *)uaddr != val) {
+    if (*(volatile uint32_t *)(uintptr_t)uaddr != val) {
         spinlock_release(&b->lock);
         asm_restore_eflags(old);
         return -EAGAIN;

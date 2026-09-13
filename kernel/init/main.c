@@ -119,10 +119,12 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     kprintf("[OK] long mode (CR0.PG=1 CR4.PAE=1 EFER.LME=1 CS.L=1)\n");
 
     kprintf("[init] apic\n");
+    /* 系统 tick 统一来自 PIT（固定 1.193182MHz 分频 PIT_HZ）：无论是否走 APIC
+     * 路径都需要它，因此先于 apic_init/pic_init 编程。 */
+    pit_init(PIT_HZ);
     if (apic_init() != 0) {
-        kprintf("[WARN] apic_init failed, fallback PIC+PIT\n");
+        kprintf("[WARN] apic_init failed, fallback PIC\n");
         pic_init();
-        pit_init(PIT_HZ);
     }
 
     kprintf("[init] acpi\n");

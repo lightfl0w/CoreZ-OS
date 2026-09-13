@@ -550,6 +550,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("futex_demo",  "futex_demo.c",  "_start", []),
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
         ("clone_demo",  "clone_demo.c",  "_start", []),
+        ("clone_stress","clone_stress.c","_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
@@ -590,13 +591,18 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         elf = BUILD_DIR / f"{prog_name}.elf"
         elf_task = task_link(
             f"{prog_name}.elf", elf, tools,
-            [BUILD_DIR / "up_start.o", prog_obj, *lib_objs],
+            [BUILD_DIR / "up_start.o", BUILD_DIR / "lc_clone.o", prog_obj,
+             *lib_objs],
             flags=elf_flags,
         )
         tasks.append(elf_task)
         user_elves.append(elf_task)
     tasks.append(task_assemble_elf64(
         "lc_start.o", APPS_DIR / "lc_crt0.asm", BUILD_DIR / "lc_start.o", tools,
+    ))
+    tasks.append(task_assemble_elf64(
+        "lc_clone.o", APPS_DIR / "lc_clone.asm", BUILD_DIR / "lc_clone.o",
+        tools,
     ))
     lc_libc = task_cc("lc_libc.o", ROOT / "libc" / "compat" / "lc_libc.c",
                       BUILD_DIR / "lc_libc.o", tools, LC_CFLAGS)
@@ -674,6 +680,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
+        "lc_clone.o",
         "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
         "udi_virtio.o", "udi_vmware.o", "font.o",
         "font_kernel.o", "shm.o", "guiserver.o",

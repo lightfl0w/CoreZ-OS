@@ -16,13 +16,8 @@
 #define LAPIC_LVT_PMC 0x340
 #define LAPIC_LVT_LINT0 0x350
 #define LAPIC_LVT_LINT1 0x360
-#define LAPIC_TIMER_INIT 0x380
-#define LAPIC_TIMER_CUR 0x390
-#define LAPIC_TIMER_DIV 0x3E0
 
-#define LAPIC_TIMER_PERIODIC (1u << 17)
 #define LVIT_MASK (1u << 16)
-#define LAPIC_DIV1 0xB
 
 #define IOAPIC_BASE 0xFEC00000u
 #define IOAPIC_VER 0x01
@@ -36,6 +31,7 @@
 #define IO_IR_TRIGGER (1u << 15)
 #define IO_IR_POLARITY (1u << 13)
 
+#define PIN_TIMER 2
 #define PIN_KEYBOARD 1
 #define PIN_MOUSE 12
 #define PIN_IDE 14
@@ -111,31 +107,6 @@ static void ioapic_write(uint32_t reg, uint32_t v) {
     ioapic[4] = v;
 }
 
-static void pit_start_oneshot(uint16_t count) {
-    outb(0x43, 0x30);
-    outb(0x40, (uint8_t)(count & 0xFF));
-    outb(0x40, (uint8_t)((count >> 8) & 0xFF));
-}
-
-static uint16_t pit_read_count0(void) {
-    outb(0x43, 0x00);
-    uint8_t lo = inb(0x40);
-    uint8_t hi = inb(0x40);
-    return (uint16_t)(lo | (hi << 8));
-}
-
-static uint32_t lapic_timer_calibrate(void) {
-    const uint16_t pit_count = 11932;
-    lapic_write(LAPIC_TIMER_DIV, LAPIC_DIV1);
-    lapic_write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
-    pit_start_oneshot(pit_count);
-    while (pit_read_count0() != 0) {
-        asm_pause();
-    }
-    uint32_t cur = lapic_read(LAPIC_TIMER_CUR);
-    return 0xFFFFFFFFu - cur;
-}
-
 static void ioapic_route(uint32_t pin, uint32_t vector) {
     uint32_t reg = IOREG_TABLE + 2 * pin;
 
@@ -156,6 +127,7 @@ static void ioapic_init(void) {
         ioapic_write(reg + 1, 0);
     }
 
+    ioapic_route(PIN_TIMER, VECTOR_BASE + 0);
     ioapic_route(PIN_KEYBOARD, VECTOR_BASE + PIN_KEYBOARD);
     ioapic_route(PIN_MOUSE, VECTOR_BASE + PIN_MOUSE);
     ioapic_route(PIN_IDE, VECTOR_BASE + PIN_IDE);
@@ -188,21 +160,17 @@ int apic_init(void) {
 
     lapic_write(LAPIC_SVR, (lapic_read(LAPIC_SVR) & ~0xFFu) | 0x100u | 0x2F);
 
-    uint32_t per_tick = lapic_timer_calibrate();
-    if (per_tick == 0) {
-        per_tick = 1;
-    }
-
-    lapic_write(LAPIC_LVT_T, VECTOR_BASE | LAPIC_TIMER_PERIODIC);
-    lapic_write(LAPIC_TIMER_DIV, LAPIC_DIV1);
-    lapic_write(LAPIC_TIMER_INIT, per_tick);
-    kprintf("[APIC] id=%u lvt=0x%x cur=0x%x per_tick=%u\n",
-            (unsigned)lapic_get_id(), (unsigned)lapic_read(LAPIC_LVT_T),
-            (unsigned)lapic_read(LAPIC_TIMER_CUR), (unsigned)per_tick);
+    /* LAPIC 自带定时器不再作为系统 tick 源：其频率需要用 PIT 校准，而校准依赖
+     * 逐口读 0x40 的轮询，在虚拟化下每次读都是 VM exit，导致测得的窗口远长于
+     * 10ms，tick 频率会低几个数量级且每次启动都不同。系统 tick 统一由 PIT
+     * （1.193182MHz 固定频率，分频 PIT_HZ）提供，见 main.c 的 pit_init。 */
+    lapic_write(LAPIC_LVT_T, VECTOR_BASE | LVIT_MASK);
 
     ioapic_init();
     disable_pic();
 
     s_apic_active = 1;
+    kprintf("[APIC] id=%u timer=irq0->vector%u (PIT)\n",
+            (unsigned)lapic_get_id(), (unsigned)(VECTOR_BASE + 0));
     return 0;
 }

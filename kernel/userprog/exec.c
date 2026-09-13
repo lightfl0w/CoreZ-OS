@@ -607,8 +607,16 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t aux_brk_base = 0;
     cur = current;
     old_pml4_phys = cur->pml4_phys;
+    if (cur->pml4_phys != 0) {
+        /* exec 替换整个地址空间：先终止共享该空间的其他线程 */
+        space_detach_others(cur);
+    }
     if (cur->pml4_phys == 0) {
         cur->pml4_phys = (uint32_t)create_page_dir();
+        if (cur->pml4_phys == 0) {
+            return -1;
+        }
+        space_ref(cur->pml4_phys);
         process_activate(cur);
     }
     if (cur->userprog_v_addr.vaddr_bitmap.bits != NULL) {

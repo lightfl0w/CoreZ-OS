@@ -241,8 +241,13 @@ int32_t futex(uint32_t uaddr, int op, uint32_t val, void *timeout) {
                              (uint32_t)timeout);
 }
 
-int32_t clone(uint32_t flags, void *child_stack) {
-    return (int32_t)syscall2(SYS_CLONE, flags, (uint32_t)child_stack);
+/* clone 包装：父子路径分叉由 __lc_clone_raw（apps/lc_clone.asm）完成。
+ * 子进程从新栈弹出 (fn, arg) 后跳入 fn；父进程返回 tid 或 -1。 */
+extern int32_t __lc_clone_raw(uint64_t nr, int (*fn)(void *), void *stack_top,
+                              uint32_t flags, void *arg);
+
+int32_t clone(int (*fn)(void *), void *child_stack, uint32_t flags, void *arg) {
+    return __lc_clone_raw((uint64_t)SYS_CLONE, fn, child_stack, flags, arg);
 }
 
 int32_t fstat(int32_t fd, struct FS_STAT *buf) {

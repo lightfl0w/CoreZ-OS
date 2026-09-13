@@ -112,6 +112,10 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->all_list_tag.prev = t->all_list_tag.next = NULL;
     t->futex_tag.prev = t->futex_tag.next = NULL;
     t->futex_ready = 0;
+    /* 槽位可能复用：必须清掉上一任任务的 vaddr 位图指针，避免误用旧位图 */
+    t->userprog_v_addr.vaddr_start = 0;
+    t->userprog_v_addr.vaddr_bitmap.bits = NULL;
+    t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len = 0;
 }
 
 static void reap_died_threads(void);
@@ -396,9 +400,10 @@ static void reap_died_threads(void) {
         struct TASK *t = list_entry(e, struct TASK, all_list_tag);
         struct LIST_ELEM *next = e->next;
         if (t->status == TASK_DIED && t != current) {
+            /* 正常退出的任务已在 proc_exit 里释放空间（pml4_phys==0）；
+             * 被直接杀死而未经 proc_exit 的任务在这里统一回收 */
             if (t->pml4_phys) {
-                pfree(&kernel_pool, t->pml4_phys);
-                t->pml4_phys = 0;
+                task_release_space(t);
             }
             if (t->kernel_stack_top) {
                 uint8_t *stack_base =
