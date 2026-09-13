@@ -2,7 +2,14 @@ KERNEL  equ     0x00280000
 KERNEL_VIRT equ 0xC0000000 + KERNEL
 KASLR_MIN  equ    0x00800000
 KASLR_SLOTS equ   124
-KERNEL_FIXED equ  0x00280000
+KERNEL_FIXED equ  0x00200000
+
+%if KERNEL_FIXED & 0x1FFFFF
+        %error "KERNEL_FIXED must be 2MB aligned: setup_hpd maps it as a 2MB page"
+%endif
+%if KASLR_MIN & 0x1FFFFF
+        %error "KASLR_MIN must be 2MB aligned"
+%endif
 
 MENU_ITEMS   equ  2
 MENU_TIMEOUT equ  5
@@ -826,10 +833,38 @@ mb_str_tag:
 pick_kphys:
         cmp     dword [l_kaslr], 0
         jne     .do_kaslr
+.fixed:
         mov     eax, KERNEL_FIXED
         mov     [l_kphys], eax
         ret
 .do_kaslr:
+        xor     eax, eax
+        mov     ebx, 0x6004
+        mov     ecx, [0x6000]
+.toploop:
+        test    ecx, ecx
+        jz      .topdone
+        cmp     dword [ebx+16], 1
+        jne     .topnext
+        mov     edx, [ebx]
+        add     edx, [ebx+4]
+        cmp     edx, eax
+        jbe     .topnext
+        mov     eax, edx
+.topnext:
+        add     ebx, 24
+        dec     ecx
+        jmp     .toploop
+.topdone:
+        sub     eax, KASLR_MIN
+        jc      .fixed
+        shr     eax, 21
+        jz      .fixed
+        cmp     eax, KASLR_SLOTS
+        jbe     .have_slots
+        mov     eax, KASLR_SLOTS
+.have_slots:
+        mov     ecx, eax
         rdtsc
         mov     ebx, eax
         rdtsc
@@ -845,7 +880,6 @@ pick_kphys:
         add     ebx, 12345
         mov     eax, ebx
         xor     edx, edx
-        mov     ecx, KASLR_SLOTS
         div     ecx
         mov     eax, edx
         shl     eax, 21
