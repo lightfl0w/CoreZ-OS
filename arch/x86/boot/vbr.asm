@@ -47,6 +47,7 @@ FAT_BUF equ 0x0A00
 
 start:
         cli
+        cld
         xor     ax, ax
         mov     ds, ax
         mov     es, ax

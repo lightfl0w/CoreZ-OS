@@ -1,5 +1,6 @@
         org     0x7C00
         cli
+        cld
         xor     ax, ax
         mov     ss, ax
         mov     sp, 0x7C00

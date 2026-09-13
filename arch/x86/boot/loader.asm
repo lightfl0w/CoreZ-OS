@@ -56,6 +56,7 @@ FAT_BUF   equ 0x3400
 kernel_addr:    dd      0x00010000
 
 start:
+        cld
         mov     al, byte [0x0FFE]
         mov     byte [l_drive], al
 
