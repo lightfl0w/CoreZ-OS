@@ -31,10 +31,10 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 
 | 模块       | 说明                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------ |
-| 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框，`palloc`/`pfree`/`palloc_pages`，`mem_lock` 保护                 |
+| 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框；`pool_lock`(物理位图) 与 `map_lock`(页表/虚拟位图) 分离，单页分配走每 CPU 缓存，空闲页数由原子计数 O(1) 读出                 |
 | 内核虚拟地址池  | `KERNEL_VADDR_START` 起的 vaddr 位图，`ioremap` 设备映射（NX/PCD）                                          |
 | 内核堆      | `get_kernel_pages`：高半区（`VIRT_OF = phys + 0xC0000000`）直接映射分配                                       |
-| COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时 `page_cow_resolve` 原子完成决策/拷贝/递减 |
+| COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时在 `map_lock` 下 `page_cow_resolve` 一次完成决策/拷贝/递减 |
 | 用户地址空间   | 每进程独立 PML4 + 用户 vaddr 位图；`mmap`/`brk` 堆扩展                                                        |
 
 ### 进程与调度
@@ -51,13 +51,13 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 
 | 模块       | 说明                                                                                                                          |
 | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| 同步原语     | `kernel/sched/sync`：信号量、可重入锁（`holder`/`holder_repeat_nr` 由信号量自带 spinlock 保护，多核安全）、自旋锁                                        |
+| 同步原语     | `kernel/sched/sync`：信号量、可重入锁（`holder`/`holder_repeat_nr` 由信号量自带 spinlock 保护，多核安全）、自旋锁、写者优先读写锁（`rwlock_*`）                                        |
 | 系统调用     | `kernel/syscall`：`int 0x80`（原生 ABI）+ `syscall` 指令路径 + musl 兼容层（`linux_compat.c`）；ring0 内核线程调用与 ring3 用户调用分别校验（`access_ok` 仅约束用户指针） |
 | 信号       | `kernel/syscall/signal`：SIGSEGV/SIGINT 等常用信号、`sigaction`/`sigprocmask`/`sigreturn`、Ctrl+C 终止前台进程                             |
 | futex    | `kernel/syscall/futex`：FUTEX\_WAIT/WAKE                                                                                      |
-| 文件系统     | `kernel/fs/ext2`：ext2 只读元数据 + 读写的完整实现（inode/块分配释放、目录项增删、间接块、truncate），全局可重入锁串行化元数据操作                                          |
+| 文件系统     | `kernel/fs/ext2`：ext2 只读元数据 + 读写的完整实现（inode/块分配释放、目录项增删、间接块、truncate），读写锁保护——只读路径并行、写路径排他                                          |
 | 伪文件系统    | `kernel/fs/proc`：`/proc/meminfo`                                                                                             |
-| 文件表      | `kernel/fs/file`：全局 file 表 + 每进程 fd 表，引用计数（fork/clone/dup 共享），`file_table_lock` 保护槽位分配                                        |
+| 文件表      | `kernel/fs/file`：全局 file 表 + 每进程 fd 表，引用计数（fork/clone/dup 共享）为原子操作，槽位分配走 CAS 位图（无需锁）                                        |
 | 管道       | `kernel/shell/pipe`：ioqueue 实现的匿名管道，`pipe`/`fd_redirect`，shell 支持 `cmd1 \| cmd2`                                              |
 | inode 缓存 | `kernel/fs/inode`：每分区红黑树缓存打开的 inode（`i_open_cnt` 引用计数，开/关中断对称保护）                                                             |
 
@@ -180,7 +180,9 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
   功能暂不可用；父进程路径与 COW 建页正常。与 exec 的 W^X / COW / NX 互作用有关。
 - e1000 初始化在大规模内存分配压力下可能缺页（`ioremap` 的映射丢失，原因待查），
   正常负载下网络工作正常。
-- ext2 与 file\_table 采用粗粒度全局锁，正确性优先、吞吐串行化。
+- 并发：物理页池按 `pool_lock`(位图)/`map_lock`(页表) 拆分，单页分配经每 CPU 缓存、
+  空闲页数用原子计数；ext2 元数据用读写锁（读并行/写排他）；file 表槽位分配与引用计数
+  无锁。SMP 调度尚未启用（AP 仅验证可启动），这些机制是为多核做的前置准备。
 
 ## 参考资料与致谢
 

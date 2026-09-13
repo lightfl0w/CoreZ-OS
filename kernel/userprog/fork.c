@@ -220,10 +220,9 @@ fork_fail:
     for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
         uint32_t g = child->fd_table[i];
         if (g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
-            lock_acquire(&file_table_lock);
-            if (file_table[g].ref_cnt > 0)
-                file_table[g].ref_cnt--;
-            lock_release(&file_table_lock);
+            if (file_table[g].ref_cnt > 0) {
+                file_table_unref(g);
+            }
         }
     }
     thread_exit(child, 0);

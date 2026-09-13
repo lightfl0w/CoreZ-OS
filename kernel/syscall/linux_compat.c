@@ -1077,12 +1077,7 @@ static int32_t compat_sysinfo(void *buf) {
     memset(&si, 0, sizeof(si));
     si.uptime = (int64_t)(tick / PIT_HZ);
     si.totalram = (uint64_t)kernel_pool.pool_size;
-    uint32_t used = 0;
-    for (uint32_t i = 0; i < kernel_pool.pool_bitmap.btmp_bytes_len * 8; i++) {
-        if (bitmap_scan_test(&kernel_pool.pool_bitmap, i))
-            used++;
-    }
-    si.freeram = si.totalram - (uint64_t)used * PAGE_SIZE;
+    si.freeram = (uint64_t)kernel_pool_free_count() * PAGE_SIZE;
     si.mem_unit = 1;
     si.procs = 1;
     memcpy(buf, &si, sizeof(si));

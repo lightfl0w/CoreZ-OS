@@ -365,15 +365,12 @@ int close_file(int fd) {
     if (global_fd_idx >= MAX_FILE_OPEN)
         return 0;
 
-    lock_acquire(&file_table_lock);
     struct FILE *file = file_get(global_fd_idx);
-    if (file->ref_cnt > 0)
-        file->ref_cnt--;
-
-    if (file->ref_cnt > 0) {
-        lock_release(&file_table_lock);
+    if (file == NULL || file->ref_cnt == 0)
         return 0;
-    }
+
+    if (file_table_unref(global_fd_idx) > 0)
+        return 0;
 
     if (file->fd_flag == PIPE_FLAG) {
         if (file->fd_inode != NULL) {
@@ -382,12 +379,8 @@ int close_file(int fd) {
     } else if (file->fd_inode != NULL) {
         inode_close(file->fd_inode);
     }
-    file->fd_inode = NULL;
-    file->fd_pos = 0;
-    file->fd_flag = 0;
-    file->proc_id = 0;
-    file->ref_cnt = 0;
-    lock_release(&file_table_lock);
+
+    file_table_free_slot((int)global_fd_idx);
     return 0;
 }
 

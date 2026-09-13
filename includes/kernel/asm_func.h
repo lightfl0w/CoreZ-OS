@@ -6,6 +6,8 @@
 #define asm_hlt cpu_hlt
 #define asm_pause cpu_pause
 #define asm_xchg cpu_xchg32
+#define asm_cmpxchg cpu_cmpxchg32
+#define asm_xadd cpu_xadd32
 #define outb cpu_outb
 #define inb cpu_inb
 #define outw cpu_outw
