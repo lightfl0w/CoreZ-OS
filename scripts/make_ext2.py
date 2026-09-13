@@ -145,7 +145,8 @@ def build(build_dir, out, smoke=False):
             pre[name] = src.read_bytes()
     names = [n for n in names if n in pre]
     if smoke:
-        pre["autoexec"] = (b"dev_demo.elf\nmusl_abi_test.elf\nfork_demo.elf\n"
+        pre["autoexec"] = (b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
+                           b"dev_demo.elf\ntoybox cat /proc/meminfo\n"
                            b"toybox echo TOYBOX_ECHO_OK\n"
                            b"toybox id\ntoybox ls -l /etc/passwd\n"
                            b"toybox su user -c id\ntoybox cat /proc/self/status\n"

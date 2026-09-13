@@ -3,7 +3,7 @@
 
 #include "drivers/char/ioqueue.h"
 
-extern struct ioqueue keyboard_ioq;
+extern struct TTY_IOQUEUE keyboard_ioq;
 
 #define KBD_MOD_SHIFT 1
 #define KBD_MOD_CTRL 2

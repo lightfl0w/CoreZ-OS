@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-struct super_block {
+struct FS_SUPER_BLOCK {
     uint32_t magic;
     uint32_t sec_cnt;
     uint32_t inode_cnt;

@@ -4,13 +4,13 @@
 #include <stdint.h>
 
 struct ACPI_RSDP {
-    char signature[8];        
+    char signature[8];
     uint8_t checksum;
     char oemid[6];
     uint8_t revision;
-    uint32_t rsdt_address;     
-    uint32_t len;           
-    uint64_t xsdt_address;     
+    uint32_t rsdt_address;
+    uint32_t len;
+    uint64_t xsdt_address;
     uint8_t extended_checksum;
     uint8_t reserved[3];
 };
@@ -29,12 +29,12 @@ struct ACPI_SDT_HEADER {
 
 struct ACPI_RSDT {
     struct ACPI_SDT_HEADER header;
-    uint32_t entry[1];        
+    uint32_t entry[1];
 };
 
 struct ACPI_XSDT {
     struct ACPI_SDT_HEADER header;
-    uint64_t entry[1];         
+    uint64_t entry[1];
 };
 
 typedef struct {
@@ -42,7 +42,7 @@ typedef struct {
     uint8_t bit_width;
     uint8_t bit_offset;
     uint8_t access_size;
-    uint64_t address;       
+    uint64_t address;
 } GENERIC_ADDRESS_STRUCT;
 
 struct ACPI_FADT {

@@ -21,25 +21,29 @@ static inline gfx_color gfx_alpha_mul(gfx_color c, int a) {
     int na = (GFX_A(c) * a + 127) / 255;
     return (c & 0x00FFFFFFu) | ((uint32_t)na << 24);
 }
-struct gfx_canvas {
+
+struct GFX_CANVAS {
     gfx_color *pixels;
     int pitch;
     int w, h;
     size_t bytes;
 };
 
-static inline int gfx_stride(const struct gfx_canvas *c) {
+static inline int gfx_stride(const struct GFX_CANVAS *c) {
     return c->pitch >> 2;
 }
-static inline gfx_color *gfx_row(struct gfx_canvas *c, int y) {
+
+static inline gfx_color *gfx_row(struct GFX_CANVAS *c, int y) {
     return (gfx_color *)(void *)((uint8_t *)c->pixels + (size_t)y *
                                                            (size_t)c->pitch);
 }
-static inline const gfx_color *gfx_row_c(const struct gfx_canvas *c, int y) {
+
+static inline const gfx_color *gfx_row_c(const struct GFX_CANVAS *c, int y) {
     return (const gfx_color *)(const void *)((const uint8_t *)c->pixels +
                                              (size_t)y * (size_t)c->pitch);
 }
-static inline size_t gfx_canvas_mapped_bytes(const struct gfx_canvas *c,
+
+static inline size_t gfx_canvas_mapped_bytes(const struct GFX_CANVAS *c,
                                              int *ok) {
     *ok = 1;
     if (c->bytes > 0)
@@ -52,32 +56,32 @@ static inline size_t gfx_canvas_mapped_bytes(const struct gfx_canvas *c,
     return s;
 }
 
-struct gfx_rect {
+struct GFX_RECT {
     int x, y, w, h;
 };
 
-struct gfx_fb_format {
+struct GFX_FB_FORMAT {
     int bpp;
     int r_pos, r_bits;
     int g_pos, g_bits;
     int b_pos, b_bits;
 };
-void gfx_set_fb_format(const struct gfx_fb_format *fmt);
+void gfx_set_fb_format(const struct GFX_FB_FORMAT *fmt);
 int gfx_fb_bpp(void);
 
 gfx_color gfx_over(gfx_color dst, gfx_color src, int alpha);
 
-void gfx_px(struct gfx_canvas *c, int x, int y, gfx_color color);
+void gfx_px(struct GFX_CANVAS *c, int x, int y, gfx_color color);
 
-void gfx_fill(struct gfx_canvas *c, int x, int y, int w, int h, gfx_color color);
-void gfx_rect(struct gfx_canvas *c, int x, int y, int w, int h, gfx_color color);
-void gfx_hline(struct gfx_canvas *c, int x, int y, int len, gfx_color color);
-void gfx_vline(struct gfx_canvas *c, int x, int y, int len, gfx_color color);
+void gfx_fill(struct GFX_CANVAS *c, int x, int y, int w, int h, gfx_color color);
+void gfx_rect(struct GFX_CANVAS *c, int x, int y, int w, int h, gfx_color color);
+void gfx_hline(struct GFX_CANVAS *c, int x, int y, int len, gfx_color color);
+void gfx_vline(struct GFX_CANVAS *c, int x, int y, int len, gfx_color color);
 
-void gfx_blit(struct gfx_canvas *dst, int dx, int dy,
-              const struct gfx_canvas *src, int sx, int sy, int w, int h);
-void gfx_blit_alpha(struct gfx_canvas *dst, int dx, int dy,
-                    const struct gfx_canvas *src, int sx, int sy, int w, int h,
+void gfx_blit(struct GFX_CANVAS *dst, int dx, int dy,
+              const struct GFX_CANVAS *src, int sx, int sy, int w, int h);
+void gfx_blit_alpha(struct GFX_CANVAS *dst, int dx, int dy,
+                    const struct GFX_CANVAS *src, int sx, int sy, int w, int h,
                     int alpha);
 
 #define GFX_CORNER_TL 1
@@ -88,19 +92,19 @@ void gfx_blit_alpha(struct gfx_canvas *dst, int dx, int dy,
     (GFX_CORNER_TL | GFX_CORNER_TR | GFX_CORNER_BL | GFX_CORNER_BR)
 
 uint8_t gfx_round_coverage(int px, int py, int w, int h, int rad, int corners);
-void gfx_fill_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_fill_round(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                     gfx_color color);
-void gfx_fill_round_a(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_fill_round_a(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                       gfx_color color, int alpha);
-void gfx_mask_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_mask_round(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                     gfx_color color, int corners);
-void gfx_blit_round(struct gfx_canvas *dst, int dx, int dy,
-                    const struct gfx_canvas *src, int sx, int sy, int w, int h,
+void gfx_blit_round(struct GFX_CANVAS *dst, int dx, int dy,
+                    const struct GFX_CANVAS *src, int sx, int sy, int w, int h,
                     int alpha, int rx, int ry, int rw, int rh, int rad,
                     int corners);
-int gfx_rect_intersect(struct gfx_rect a, struct gfx_rect b,
-                       struct gfx_rect *out);
-void gfx_present(struct gfx_canvas *dst, int dx, int dy,
-                 const struct gfx_canvas *src, int sx, int sy, int w, int h);
+int gfx_rect_intersect(struct GFX_RECT a, struct GFX_RECT b,
+                       struct GFX_RECT *out);
+void gfx_present(struct GFX_CANVAS *dst, int dx, int dy,
+                 const struct GFX_CANVAS *src, int sx, int sy, int w, int h);
 
 #endif

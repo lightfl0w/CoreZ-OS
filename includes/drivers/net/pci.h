@@ -9,6 +9,7 @@
 static inline void pci_outl(uint16_t port, uint32_t v) {
     __asm__ volatile("outl %0, %1" : : "a"(v), "Nd"(port));
 }
+
 static inline uint32_t pci_inl(uint16_t port) {
     uint32_t v;
     __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port));
@@ -22,6 +23,7 @@ static inline uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t reg) {
     pci_outl(PCI_CONFIG_ADDR, addr);
     return pci_inl(PCI_CONFIG_DATA);
 }
+
 static inline void pci_write32(uint8_t bus, uint8_t dev, uint8_t reg, uint32_t val) {
     uint32_t addr = 0x80000000u | ((uint32_t)bus << 16) |
                     ((uint32_t)(dev & 7) << 11) | ((uint32_t)dev & ~7u) |
@@ -34,6 +36,7 @@ static inline uint16_t pci_read16(uint8_t bus, uint8_t dev, uint8_t reg) {
     uint32_t v = pci_read32(bus, dev, reg & 0xFC);
     return (uint16_t)((reg & 2) ? (v >> 16) : v);
 }
+
 static inline void pci_write16(uint8_t bus, uint8_t dev, uint8_t reg, uint16_t val) {
     uint32_t old = pci_read32(bus, dev, reg & 0xFC);
     uint32_t v = (reg & 2) ? ((old & 0xFFFF) | ((uint32_t)val << 16))

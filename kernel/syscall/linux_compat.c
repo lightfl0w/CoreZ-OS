@@ -4,7 +4,7 @@
 #include "drivers/char/keyboard.h"
 #include "drivers/char/tty.h"
 #include "drivers/net/socket.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/fs/dir.h"
 #include "kernel/fs/ext2.h"
 #include "kernel/fs/file.h"
@@ -29,18 +29,17 @@
 #include "libc/user/syscall.h"
 
 uint32_t sys_brk(uint32_t addr);
-int32_t sys_clock_gettime(int32_t clk_id, struct timespec *tp);
-int32_t sys_gettimeofday(struct timeval *tv, void *tz);
-int32_t sys_nanosleep(const struct timespec *req, struct timespec *rem);
+int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp);
+int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz);
+int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem);
 int32_t sys_wait(int32_t *status);
-int32_t sys_sigaction(int sig, const struct sigaction *act,
-                      struct sigaction *old);
+int32_t sys_sigaction(int sig, const struct SYS_SIGACTION *act,
+                      struct SYS_SIGACTION *old);
 int32_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-uint64_t sys_sigreturn(struct Registers *r);
+uint64_t sys_sigreturn(struct X86_REGS *r);
 
 static int32_t compat_read(int32_t fd, void *buf, uint32_t count);
 static int32_t compat_write(int32_t fd, const void *buf, uint32_t count);
-
 
 #define DIRF_FLAG 0xFFFEu
 
@@ -52,7 +51,7 @@ static int32_t compat_dir_fd(const char *path) {
     int gfd = file_table_alloc_slot();
     if (gfd < 0)
         return -1;
-    struct file *f = file_get((uint32_t)gfd);
+    struct FILE *f = file_get((uint32_t)gfd);
     f->fd_inode = inode_open(cur_part, ino);
     if (f->fd_inode == NULL) {
         file_table_free_slot(gfd);
@@ -77,7 +76,7 @@ static int compat_fd_isdir(int32_t fd) {
     uint32_t gfd = fd_local2global((uint32_t)fd);
     if (gfd >= MAX_FILE_OPEN)
         return 0;
-    struct file *pf = file_get(gfd);
+    struct FILE *pf = file_get(gfd);
     return pf != NULL && pf->fd_flag == DIRF_FLAG;
 }
 
@@ -87,13 +86,13 @@ static int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
     if (!compat_fd_isdir(fd))
         return -LINUX_ENOTDIR;
     uint32_t gfd = fd_local2global((uint32_t)fd);
-    struct file *pf = file_get(gfd);
+    struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
     uint32_t pos = pf->fd_pos;
     uint32_t emitted = pos;
     uint32_t written = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     for (;;) {
         if (ext2_dir_next(pf->fd_inode, &pos, &de) != 0)
             break;
@@ -126,7 +125,7 @@ static int compat_fd_is_tty(int32_t fd) {
         return 1;
     if (fd < 0)
         return 0;
-    struct file *f = file_get(fd_local2global((uint32_t)fd));
+    struct FILE *f = file_get(fd_local2global((uint32_t)fd));
     return f != NULL && f->fd_inode != NULL && fs_is_chardev(f->fd_inode) &&
            (fs_chardev_dev(f->fd_inode) >> 8) == 5u;
 }
@@ -192,7 +191,7 @@ static int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
 static int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
     if (pid >= MAX_TASKS || pgid >= MAX_TASKS)
         return -LINUX_EINVAL;
-    struct task_struct *t = pid2thread((int32_t)pid);
+    struct TASK *t = pid2thread((int32_t)pid);
     if (t == NULL || t->status == TASK_DIED)
         return -LINUX_ESRCH;
     uint32_t want = pgid ? pgid : pid;
@@ -205,31 +204,33 @@ static int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
 static int32_t compat_getpgid(uint32_t pid) {
     if (pid >= MAX_TASKS)
         return -LINUX_EINVAL;
-    struct task_struct *t = pid2thread((int32_t)pid);
+    struct TASK *t = pid2thread((int32_t)pid);
     if (t == NULL)
         return -LINUX_ESRCH;
     return (int32_t)(t->pgid ? t->pgid : t->pid);
 }
 
-static int user_ptr_ok(struct Registers *r, uint64_t addr, uint32_t len,
+static int user_ptr_ok(struct X86_REGS *r, uint64_t addr, uint32_t len,
                        int writable);
-static int copy_user_str(struct Registers *r, char *dst, uint64_t user_ptr);
+static int copy_user_str(struct X86_REGS *r, char *dst, uint64_t user_ptr);
 static void ticks_to_timeval(struct LINUX_TIMEVAL *tv, uint32_t ticks) {
     uint64_t us = (uint64_t)ticks * (1000000ull / PIT_HZ);
     tv->tv_sec = (int64_t)(us / 1000000ull);
     tv->tv_usec = (int64_t)(us % 1000000ull);
 }
+
 static uint32_t timeval_to_ticks(const struct LINUX_TIMEVAL *tv) {
     uint64_t us = (uint64_t)tv->tv_sec * 1000000ull +
                   (uint64_t)tv->tv_usec;
     uint64_t tick_us = 1000000ull / PIT_HZ;
     return (uint32_t)((us + tick_us - 1) / tick_us);
 }
+
 static int32_t compat_setitimer(uint32_t which, uint64_t new_val,
                                 uint64_t old_val) {
     if (which != LINUX_ITIMER_REAL)
         return -LINUX_EINVAL;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     if (old_val) {
         struct LINUX_ITIMERVAL o;
         memset(&o, 0, sizeof(o));
@@ -257,10 +258,11 @@ static int32_t compat_setitimer(uint32_t which, uint64_t new_val,
     }
     return 0;
 }
+
 static int32_t compat_getitimer(uint32_t which, uint64_t cur_val) {
     if (which != LINUX_ITIMER_REAL || !cur_val)
         return which != LINUX_ITIMER_REAL ? -LINUX_EINVAL : 0;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     struct LINUX_ITIMERVAL o;
     memset(&o, 0, sizeof(o));
     if (cur->itimer_expire) {
@@ -272,6 +274,7 @@ static int32_t compat_getitimer(uint32_t which, uint64_t cur_val) {
     memcpy((void *)(uintptr_t)cur_val, &o, sizeof(o));
     return 0;
 }
+
 static int32_t compat_statfs_fill(uint64_t buf) {
     struct LINUX_STATFS sf;
     uint32_t bsize, blocks, bfree, files, ffree;
@@ -289,7 +292,8 @@ static int32_t compat_statfs_fill(uint64_t buf) {
     memcpy((void *)(uintptr_t)buf, &sf, sizeof(sf));
     return 0;
 }
-static int64_t lc_setitimer(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setitimer(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_ITIMERVAL), 0))
@@ -298,14 +302,16 @@ static int64_t lc_setitimer(struct Registers *r, uint64_t a, uint64_t b,
         return -LINUX_EFAULT;
     return compat_setitimer((uint32_t)a, b, c);
 }
-static int64_t lc_getitimer(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getitimer(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_ITIMERVAL), 1))
         return -LINUX_EFAULT;
     return compat_getitimer((uint32_t)a, b);
 }
-static int64_t lc_statfs(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_statfs(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -316,14 +322,16 @@ static int64_t lc_statfs(struct Registers *r, uint64_t a, uint64_t b,
         return -LINUX_EFAULT;
     return compat_statfs_fill(b);
 }
-static int64_t lc_fstatfs(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_fstatfs(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a;
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
         return -LINUX_EFAULT;
     return compat_statfs_fill(b);
 }
-static int64_t lc_getrusage(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getrusage(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a;
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_RUSAGE), 1))
@@ -335,24 +343,27 @@ static int64_t lc_getrusage(struct Registers *r, uint64_t a, uint64_t b,
     memcpy((void *)(uintptr_t)b, &ru, sizeof(ru));
     return 0;
 }
-static int64_t lc_getsid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getsid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    struct task_struct *t = a ? pid2thread((int32_t)a) : current;
+    struct TASK *t = a ? pid2thread((int32_t)a) : current;
     if (t == NULL)
         return -LINUX_ESRCH;
     return (int64_t)(t->sid ? t->sid : t->pid);
 }
-static int64_t lc_umask(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_umask(struct X86_REGS *r, uint64_t a, uint64_t b,
                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t old = cur->umask;
     cur->umask = (uint32_t)a & 0o7777u;
     return (int64_t)old;
 }
+
 #define LC_GETID(name, field)                                                \
-    static int64_t name(struct Registers *r, uint64_t a, uint64_t b,         \
+    static int64_t name(struct X86_REGS *r, uint64_t a, uint64_t b,         \
                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {    \
         (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;       \
         return (int64_t)current->field;                                      \
@@ -361,10 +372,10 @@ LC_GETID(lc_getuid, uid)
 LC_GETID(lc_getgid, gid)
 LC_GETID(lc_geteuid, euid)
 LC_GETID(lc_getegid, egid)
-static int64_t lc_setuid(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_setuid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t v = (uint32_t)a;
     if (cur->euid == 0) {
         cur->uid = cur->euid = cur->suid = v;
@@ -376,10 +387,11 @@ static int64_t lc_setuid(struct Registers *r, uint64_t a, uint64_t b,
     }
     return -LINUX_EPERM;
 }
-static int64_t lc_setgid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setgid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t v = (uint32_t)a;
     if (cur->egid == 0) {
         cur->gid = cur->egid = cur->sgid = v;
@@ -391,10 +403,11 @@ static int64_t lc_setgid(struct Registers *r, uint64_t a, uint64_t b,
     }
     return -LINUX_EPERM;
 }
-static int64_t lc_setreuid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setreuid(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)c; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t ru = (a == (uint64_t)-1) ? cur->uid : (uint32_t)a;
     uint32_t eu = (b == (uint64_t)-1) ? cur->euid : (uint32_t)b;
     if (cur->euid != 0 && ((ru != cur->uid && ru != cur->suid) ||
@@ -407,10 +420,11 @@ static int64_t lc_setreuid(struct Registers *r, uint64_t a, uint64_t b,
         cur->suid = eu;
     return 0;
 }
-static int64_t lc_setregid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setregid(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)c; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t rg = (a == (uint64_t)-1) ? cur->gid : (uint32_t)a;
     uint32_t eg = (b == (uint64_t)-1) ? cur->egid : (uint32_t)b;
     if (cur->egid != 0 && ((rg != cur->gid && rg != cur->sgid) ||
@@ -423,10 +437,11 @@ static int64_t lc_setregid(struct Registers *r, uint64_t a, uint64_t b,
         cur->sgid = eg;
     return 0;
 }
-static int64_t lc_setresuid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setresuid(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t ru = (a == (uint64_t)-1) ? cur->uid : (uint32_t)a;
     uint32_t eu = (b == (uint64_t)-1) ? cur->euid : (uint32_t)b;
     uint32_t su = (c == (uint64_t)-1) ? cur->suid : (uint32_t)c;
@@ -440,10 +455,11 @@ static int64_t lc_setresuid(struct Registers *r, uint64_t a, uint64_t b,
     cur->suid = su;
     return 0;
 }
-static int64_t lc_setresgid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setresgid(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)d; (void)e; (void)f;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t rg = (a == (uint64_t)-1) ? cur->gid : (uint32_t)a;
     uint32_t eg = (b == (uint64_t)-1) ? cur->egid : (uint32_t)b;
     uint32_t sg = (c == (uint64_t)-1) ? cur->sgid : (uint32_t)c;
@@ -457,7 +473,8 @@ static int64_t lc_setresgid(struct Registers *r, uint64_t a, uint64_t b,
     cur->sgid = sg;
     return 0;
 }
-static int64_t lc_getresuid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getresuid(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)d; (void)e; (void)f;
     if (!user_ptr_ok(r, a, 4, 1) || !user_ptr_ok(r, b, 4, 1) ||
@@ -468,7 +485,8 @@ static int64_t lc_getresuid(struct Registers *r, uint64_t a, uint64_t b,
     *(uint32_t *)(uintptr_t)c = current->suid;
     return 0;
 }
-static int64_t lc_getresgid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getresgid(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)d; (void)e; (void)f;
     if (!user_ptr_ok(r, a, 4, 1) || !user_ptr_ok(r, b, 4, 1) ||
@@ -479,39 +497,44 @@ static int64_t lc_getresgid(struct Registers *r, uint64_t a, uint64_t b,
     *(uint32_t *)(uintptr_t)c = current->sgid;
     return 0;
 }
-static int64_t lc_getgroups(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_getgroups(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
     return 0;
 }
-static int64_t lc_setgroups(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setgroups(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
     if (current->egid != 0 && current->euid != 0)
         return -LINUX_EPERM;
     return 0;
 }
-static int64_t lc_chown(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_chown(struct X86_REGS *r, uint64_t a, uint64_t b,
                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
     return sys_chown(kpath, (uint32_t)b, (uint32_t)c);
 }
-static int64_t lc_lchown(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_lchown(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     return lc_chown(r, a, b, c, d, e, f);
 }
-static int64_t lc_fchown(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_fchown(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     if (a < 3 || a >= MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EBADF;
     uint32_t gfd = fd_local2global((uint32_t)a);
-    struct file *pf = file_get(gfd);
+    struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(pf->fd_inode->i_no, &obj))
         return -LINUX_EIO;
     if (b != (uint64_t)-1)
@@ -520,7 +543,8 @@ static int64_t lc_fchown(struct Registers *r, uint64_t a, uint64_t b,
         obj.i_gid = (uint16_t)c;
     return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
-static int64_t lc_fchownat(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_fchownat(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a;
     char kpath[MAX_PATH_LEN];
@@ -528,22 +552,24 @@ static int64_t lc_fchownat(struct Registers *r, uint64_t a, uint64_t b,
         return -LINUX_EFAULT;
     return sys_chown(kpath, (uint32_t)c, (uint32_t)d);
 }
-static int64_t lc_fchmod(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_fchmod(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     if (a < 3 || a >= MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EBADF;
     uint32_t gfd = fd_local2global((uint32_t)a);
-    struct file *pf = file_get(gfd);
+    struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(pf->fd_inode->i_no, &obj))
         return -LINUX_EIO;
     obj.i_mode = (obj.i_mode & 0xF000u) | ((uint32_t)b & 0x0FFFu);
     return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
-static int64_t lc_fchmodat(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_fchmodat(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a; (void)d;
     char kpath[MAX_PATH_LEN];
@@ -551,7 +577,8 @@ static int64_t lc_fchmodat(struct Registers *r, uint64_t a, uint64_t b,
         return -LINUX_EFAULT;
     return sys_chmod(kpath, (uint32_t)c);
 }
-static int64_t lc_getid_field_dispatch(struct Registers *r, uint64_t a,
+
+static int64_t lc_getid_field_dispatch(struct X86_REGS *r, uint64_t a,
                                        uint64_t b, uint64_t c, uint64_t d,
                                        uint64_t e, uint64_t f);
 #define UNIX_FD_BASE 0x400
@@ -570,7 +597,7 @@ static int unix_fd_slot(uint64_t fd) {
     return (int)idx;
 }
 
-static int unix_path_ok(struct Registers *r, uint64_t addr, uint32_t addrlen) {
+static int unix_path_ok(struct X86_REGS *r, uint64_t addr, uint32_t addrlen) {
     if (addr == 0 || addrlen < 3)
         return 0;
     const char *p = (const char *)(uintptr_t)(addr + 2);
@@ -586,7 +613,7 @@ static int unix_path_ok(struct Registers *r, uint64_t addr, uint32_t addrlen) {
     return 1;
 }
 
-static int64_t lc_socket(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_socket(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)d; (void)e; (void)f;
     int domain = (int)a;
@@ -607,7 +634,7 @@ static int64_t lc_socket(struct Registers *r, uint64_t a, uint64_t b,
     return net_socket(domain, type, (int)c);
 }
 
-static int sockaddr_in_parts(struct Registers *r, uint64_t addr,
+static int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
                              uint64_t addrlen, uint32_t *ip,
                              uint16_t *port) {
     if (addr == 0 || addrlen < 6)
@@ -628,7 +655,7 @@ static int sockaddr_in_parts(struct Registers *r, uint64_t addr,
     return 0;
 }
 
-static int fill_sockaddr_in(struct Registers *r, uint64_t addr,
+static int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr,
                             uint64_t addrlen_ptr, uint32_t ip,
                             uint16_t port) {
     if (addr == 0 || addrlen_ptr == 0)
@@ -649,7 +676,7 @@ static int fill_sockaddr_in(struct Registers *r, uint64_t addr,
     return 0;
 }
 
-static int64_t lc_connect(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_connect(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -661,7 +688,7 @@ static int64_t lc_connect(struct Registers *r, uint64_t a, uint64_t b,
     return net_connect((int)a, ip, port);
 }
 
-static int64_t lc_bind(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_bind(struct X86_REGS *r, uint64_t a, uint64_t b,
                        uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -673,7 +700,7 @@ static int64_t lc_bind(struct Registers *r, uint64_t a, uint64_t b,
     return net_bind((int)a, ip, port);
 }
 
-static int64_t lc_listen(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_listen(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -681,7 +708,7 @@ static int64_t lc_listen(struct Registers *r, uint64_t a, uint64_t b,
     return net_listen((int)a, (int)b);
 }
 
-static int64_t lc_accept(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_accept(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -689,7 +716,7 @@ static int64_t lc_accept(struct Registers *r, uint64_t a, uint64_t b,
     return net_accept((int)a);
 }
 
-static int64_t lc_shutdown(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_shutdown(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -697,7 +724,7 @@ static int64_t lc_shutdown(struct Registers *r, uint64_t a, uint64_t b,
     return net_shutdown((int)a, (int)b);
 }
 
-static int64_t lc_sendto(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_sendto(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d;
     if (unix_fd_slot(a) >= 0)
@@ -715,7 +742,7 @@ static int64_t lc_sendto(struct Registers *r, uint64_t a, uint64_t b,
     return net_send((int)a, (const void *)(uintptr_t)b, (uint32_t)c);
 }
 
-static int64_t lc_recvfrom(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_recvfrom(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d;
     if (unix_fd_slot(a) >= 0)
@@ -734,7 +761,7 @@ static int64_t lc_recvfrom(struct Registers *r, uint64_t a, uint64_t b,
     return n;
 }
 
-static int64_t lc_getsockname(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getsockname(struct X86_REGS *r, uint64_t a, uint64_t b,
                               uint64_t c, uint64_t d, uint64_t e,
                               uint64_t f) {
     (void)d; (void)e; (void)f;
@@ -749,7 +776,7 @@ static int64_t lc_getsockname(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_getpeername(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getpeername(struct X86_REGS *r, uint64_t a, uint64_t b,
                               uint64_t c, uint64_t d, uint64_t e,
                               uint64_t f) {
     (void)d; (void)e; (void)f;
@@ -764,7 +791,7 @@ static int64_t lc_getpeername(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_setsockopt(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_setsockopt(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e,
                              uint64_t f) {
     (void)r; (void)f;
@@ -774,7 +801,7 @@ static int64_t lc_setsockopt(struct Registers *r, uint64_t a, uint64_t b,
                           (uint32_t)e);
 }
 
-static int64_t lc_getsockopt(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getsockopt(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e,
                              uint64_t f) {
     (void)r; (void)f;
@@ -798,7 +825,7 @@ struct LINUX_MSGHDR {
     int32_t flags;
 };
 
-static int64_t lc_sendmsg(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_sendmsg(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -837,7 +864,7 @@ static int64_t lc_sendmsg(struct Registers *r, uint64_t a, uint64_t b,
     return net_send((int)a, sbuf, total);
 }
 
-static int64_t lc_recvmsg(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_recvmsg(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
@@ -885,13 +912,13 @@ static int64_t lc_recvmsg(struct Registers *r, uint64_t a, uint64_t b,
     return (int64_t)copied;
 }
 
-static int64_t lc_socketpair(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_socketpair(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
     return -LINUX_EOPNOTSUPP;
 }
 
-static int64_t lc_close(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_close(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     int uslot = unix_fd_slot(a);
@@ -901,24 +928,27 @@ static int64_t lc_close(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     }
     return close_file((int32_t)a);
 }
-static int64_t lc_tkill(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_tkill(struct X86_REGS *r, uint64_t a, uint64_t b,
                         uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_kill((int)a, (int)b) < 0 ? -LINUX_EINVAL : 0;
 }
-static int64_t lc_tgkill(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_tgkill(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     (void)a;
     return sys_kill((int)b, (int)c) < 0 ? -LINUX_EINVAL : 0;
 }
-static int64_t lc_setsid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_setsid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     (void)a;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        struct task_struct *t = &task_table[i];
+        struct TASK *t = &task_table[i];
         if (t == cur || !t->slot_used || t->status == TASK_DIED)
             continue;
         if (t->pgid == cur->pid) {
@@ -929,7 +959,8 @@ static int64_t lc_setsid(struct Registers *r, uint64_t a, uint64_t b,
     cur->pgid = cur->pid;
     return (int64_t)cur->pid;
 }
-static int64_t lc_waitid(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_waitid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (c && !user_ptr_ok(r, c, sizeof(struct LINUX_SIGINFO), 1))
         return -LINUX_EFAULT;
@@ -937,10 +968,11 @@ static int64_t lc_waitid(struct Registers *r, uint64_t a, uint64_t b,
                         (uint32_t)d);
     return rc == 0 ? 0 : -LINUX_ECHILD;
 }
-static int64_t lc_sigaltstack(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_sigaltstack(struct X86_REGS *r, uint64_t a, uint64_t b,
                               uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     if (b) {
         struct LINUX_STACK_T o;
         o.ss_sp = cur->sigalt_sp;
@@ -970,13 +1002,14 @@ static int64_t lc_sigaltstack(struct Registers *r, uint64_t a, uint64_t b,
     }
     return 0;
 }
-static int64_t lc_sigsuspend(struct Registers *r, uint64_t a, uint64_t b,
+
+static int64_t lc_sigsuspend(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, a, 4, 0))
         return -LINUX_EFAULT;
     uint32_t mask;
     memcpy(&mask, (const void *)(uintptr_t)a, 4);
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t old = cur->signal_mask;
     cur->signal_mask = (mask << 1) & ~((1u << SIGKILL) | (1u << SIGSTOP));
     for (;;) {
@@ -988,6 +1021,7 @@ static int64_t lc_sigsuspend(struct Registers *r, uint64_t a, uint64_t b,
     cur->signal_mask = old;
     return -LINUX_EINTR;
 }
+
 static int32_t compat_readv(int32_t fd, struct LINUX_IOVEC *iov,
                             int32_t iovcnt) {
     if (iovcnt < 0 || iovcnt > 16)
@@ -1070,14 +1104,13 @@ static int32_t compat_ftruncate(int32_t fd, int32_t length) {
     if (fd < 3 || fd >= (int32_t)MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EINVAL;
     uint32_t gfd = fd_local2global((uint32_t)fd);
-    struct file *pf = file_get(gfd);
+    struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL || pf->fd_flag == PIPE_FLAG)
         return -LINUX_EINVAL;
     ext2_truncate_inode(pf->fd_inode);
     ext2_write_inode(pf->fd_inode->i_no, pf->fd_inode);
     return 0;
 }
-
 
 static int32_t compat_flags_linux2native(uint32_t lflags) {
     int32_t nflags = (int32_t)(lflags & 3u);
@@ -1133,7 +1166,7 @@ static int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, 0, 0, LINUX_S_IFCHR | 0600u, 0, 0);
     } else if (compat_fd_isdir(fd)) {
         uint32_t gfd = fd_local2global((uint32_t)fd);
-        struct file *pf = file_get(gfd);
+        struct FILE *pf = file_get(gfd);
         compat_stat_fill(&ls, pf->fd_inode->i_no, (int64_t)pf->fd_inode->i_size,
                          pf->fd_inode->i_mode, pf->fd_inode->i_uid,
                          pf->fd_inode->i_gid);
@@ -1141,7 +1174,7 @@ static int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, 0, 0, LINUX_S_IFIFO | 0600u, 0, 0);
     } else {
         uint32_t gfd = fd_local2global((uint32_t)fd);
-        struct file *pf = file_get(gfd);
+        struct FILE *pf = file_get(gfd);
         if (pf == NULL || pf->fd_inode == NULL)
             return -LINUX_EBADF;
         compat_stat_fill(&ls, pf->fd_inode->i_no,
@@ -1156,7 +1189,7 @@ static int32_t compat_openat(int32_t dirfd, const char *kpath,
                              uint32_t lflags) {
     if (dirfd != LINUX_AT_FDCWD)
         return -LINUX_EINVAL;
-    struct stat pst;
+    struct FS_STAT pst;
     uint32_t ino = 0;
     int is_dir = 0;
     if (ext2_lookup(kpath, &ino, &is_dir) == 0 && is_dir) {
@@ -1184,8 +1217,7 @@ static int32_t compat_openat(int32_t dirfd, const char *kpath,
     return fd;
 }
 
-
-static void lc_seterrno(struct task_struct *cur, int32_t val) {
+static void lc_seterrno(struct TASK *cur, int32_t val) {
     cur->errno = val;
     if (cur->tls_selector == SELECTOR_TLS && cur->tls_base != 0) {
         *(volatile int32_t *)cur->tls_base = val;
@@ -1223,7 +1255,7 @@ static int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
 static int32_t compat_set_thread_area(uint32_t base) {
     if (base == 0 || !user_range_writable(base, sizeof(int32_t)))
         return -LINUX_EFAULT;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     cur->tls_base = base;
     cur->tls_selector = SELECTOR_TLS;
     cur->tls_msr = 0;
@@ -1248,40 +1280,40 @@ static int32_t sys_compat_writev(int32_t fd, struct LINUX_IOVEC *iov,
     return (int32_t)total;
 }
 
-static int user_ptr_ok(struct Registers *r, uint64_t ptr, uint32_t len,
+static int user_ptr_ok(struct X86_REGS *r, uint64_t ptr, uint32_t len,
                        int wr) {
     return (r->cs & 3) != 3 || access_ok((const void *)(uintptr_t)ptr, len, wr);
 }
 
-static int copy_user_str(struct Registers *r, char *dst, uint64_t ptr) {
+static int copy_user_str(struct X86_REGS *r, char *dst, uint64_t ptr) {
     return (r->cs & 3) != 3 ||
            copy_str_from_user(dst, (const char *)(uintptr_t)ptr,
                               MAX_PATH_LEN) == 0;
 }
 
-typedef int64_t (*LcFn)(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+typedef int64_t (*LcFn)(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f);
 
-static int64_t lc_getpid(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getpid(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return (int64_t)current->pid;
 }
 
-static int64_t lc_getppid(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getppid(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     return cur->parent_pid >= 0 ? (int64_t)cur->parent_pid : 0;
 }
 
-static int64_t lc_getid(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_getid(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return 0;
 }
 
-static int64_t lc_write(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_write(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, (uint32_t)c, 0))
         return -LINUX_EFAULT;
@@ -1289,7 +1321,7 @@ static int64_t lc_write(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return n < 0 ? -n : n;
 }
 
-static int64_t lc_read(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_read(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, (uint32_t)c, 1))
         return -LINUX_EFAULT;
@@ -1297,14 +1329,14 @@ static int64_t lc_read(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return n < 0 ? -n : n;
 }
 
-static int64_t lc_exit(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_exit(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     sys_exit((int32_t)a);
     return 0;
 }
 
-__attribute__((noreturn)) static int64_t lc_exit_group(struct Registers *r,
+__attribute__((noreturn)) static int64_t lc_exit_group(struct X86_REGS *r,
                                                        uint64_t a, uint64_t b,
                                                        uint64_t c, uint64_t d,
                                                        uint64_t e, uint64_t f) {
@@ -1314,46 +1346,46 @@ __attribute__((noreturn)) static int64_t lc_exit_group(struct Registers *r,
     }
 }
 
-static int64_t lc_brk(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_brk(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                       uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return (int64_t)sys_brk((uint32_t)a);
 }
 
-static int64_t lc_mmap(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_mmap(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
-    struct mmap_args m = {(uint32_t)a, (uint32_t)b, (uint32_t)c, (uint32_t)d,
+    struct SYS_MMAP_ARGS m = {(uint32_t)a, (uint32_t)b, (uint32_t)c, (uint32_t)d,
                           (uint32_t)e,
                           (uint32_t)(f & ~(uint32_t)(PAGE_SIZE - 1u))};
     int64_t ret = (int32_t)sys_mmap(&m);
     return ret;
 }
 
-static int64_t lc_munmap(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_munmap(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_munmap((uint32_t)a, (uint32_t)b);
 }
 
-static int64_t lc_set_thread_area(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_set_thread_area(struct X86_REGS *r, uint64_t a, uint64_t b,
                                   uint64_t c, uint64_t d, uint64_t e,
                                   uint64_t f) {
     (void)r;
     return compat_set_thread_area((uint32_t)a);
 }
 
-static int64_t lc_set_tid_address(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_set_tid_address(struct X86_REGS *r, uint64_t a, uint64_t b,
                                   uint64_t c, uint64_t d, uint64_t e,
                                   uint64_t f) {
     (void)r;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     if (a)
         *(volatile int32_t *)a = (int32_t)cur->pid;
     return (int64_t)cur->pid;
 }
 
-static int64_t lc_writev(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_writev(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, (uint32_t)c * 8u, 0))
         return -LINUX_EFAULT;
@@ -1362,7 +1394,7 @@ static int64_t lc_writev(struct Registers *r, uint64_t a, uint64_t b,
     return n < 0 ? -n : n;
 }
 
-static int64_t lc0_writev(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc0_writev(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if ((b == 0 && c > 0) || c > 1024 ||
         !user_ptr_ok(r, b, (uint32_t)c * 8u, 0))
@@ -1387,14 +1419,14 @@ static int64_t lc0_writev(struct Registers *r, uint64_t a, uint64_t b,
     return total;
 }
 
-static int64_t lc_fstat(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_fstat(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_STAT), 1))
         return -LINUX_EFAULT;
     return compat_fstat_linux((int32_t)a, b);
 }
 
-static int64_t lc_stat(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_stat(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a) ||
@@ -1403,19 +1435,19 @@ static int64_t lc_stat(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return compat_stat_linux(kpath, b);
 }
 
-static int64_t lc_lseek(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_lseek(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_lseek((int32_t)a, (int32_t)b, (uint8_t)(c + 1u));
 }
 
-static int64_t lc_fcntl(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_fcntl(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_fcntl((int32_t)a, (int32_t)b, c);
 }
 
-static int64_t lc_readlink(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_readlink(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a) || !user_ptr_ok(r, b, (uint32_t)c, 1))
@@ -1423,7 +1455,7 @@ static int64_t lc_readlink(struct Registers *r, uint64_t a, uint64_t b,
     return sys_readlink(kpath, (char *)b, c);
 }
 
-static int64_t lc_chdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_chdir(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1431,14 +1463,14 @@ static int64_t lc_chdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return sys_chdir(kpath);
 }
 
-static int64_t lc_getcwd(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getcwd(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, a, (uint32_t)b, 1))
         return -LINUX_EFAULT;
     return sys_getcwd((char *)a, (uint32_t)b) ? (int64_t)a : -LINUX_ENOENT;
 }
 
-static int64_t lc_mkdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_mkdir(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1446,7 +1478,7 @@ static int64_t lc_mkdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return sys_mkdir(kpath);
 }
 
-static int64_t lc_rmdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_rmdir(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1454,7 +1486,7 @@ static int64_t lc_rmdir(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return sys_rmdir(kpath);
 }
 
-static int64_t lc_unlink(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_unlink(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1462,7 +1494,7 @@ static int64_t lc_unlink(struct Registers *r, uint64_t a, uint64_t b,
     return sys_unlink(kpath);
 }
 
-static int64_t lc_rename(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_rename(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     char kpath2[MAX_PATH_LEN];
@@ -1471,7 +1503,7 @@ static int64_t lc_rename(struct Registers *r, uint64_t a, uint64_t b,
     return sys_rename(kpath, kpath2);
 }
 
-static int64_t lc_chmod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_chmod(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1479,7 +1511,7 @@ static int64_t lc_chmod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return sys_chmod(kpath, b);
 }
 
-static int64_t lc_mknod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_mknod(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1487,7 +1519,7 @@ static int64_t lc_mknod(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return sys_mknod(kpath, (uint32_t)b, (uint32_t)c);
 }
 
-static int64_t lc_symlink(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_symlink(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char ktarget[MAX_PATH_LEN];
     char kpath[MAX_PATH_LEN];
@@ -1496,7 +1528,7 @@ static int64_t lc_symlink(struct Registers *r, uint64_t a, uint64_t b,
     return sys_symlink(ktarget, kpath);
 }
 
-static int64_t lc_symlinkat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_symlinkat(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a;
     char ktarget[MAX_PATH_LEN];
@@ -1506,7 +1538,7 @@ static int64_t lc_symlinkat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_symlink(ktarget, kpath);
 }
 
-static int64_t lc_mknodat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_mknodat(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)a;
     char kpath[MAX_PATH_LEN];
@@ -1515,7 +1547,7 @@ static int64_t lc_mknodat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_mknod(kpath, (uint32_t)c, (uint32_t)d);
 }
 
-static int64_t lc_access(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_access(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1523,20 +1555,20 @@ static int64_t lc_access(struct Registers *r, uint64_t a, uint64_t b,
     return sys_access(kpath, (int32_t)b);
 }
 
-static int64_t lc_kill(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_kill(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_kill((int)a, (int)b);
 }
 
-static int64_t lc_futex(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_futex(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, a, 4, 0))
         return -LINUX_EFAULT;
     return sys_futex(a, b, c, d);
 }
 
-static int64_t lc_gettimeofday(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_gettimeofday(struct X86_REGS *r, uint64_t a, uint64_t b,
                                uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     struct LINUX_TIMEVAL tv;
     tv.tv_sec = (int64_t)(tick / PIT_HZ);
@@ -1552,7 +1584,7 @@ static int64_t lc_gettimeofday(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_nanosleep(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_nanosleep(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     struct LINUX_TIMESPEC req;
     memset(&req, 0, sizeof(req));
@@ -1572,7 +1604,7 @@ static int64_t lc_nanosleep(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_clock_gettime(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_clock_gettime(struct X86_REGS *r, uint64_t a, uint64_t b,
                                 uint64_t c, uint64_t d, uint64_t e,
                                 uint64_t f) {
     struct LINUX_TIMESPEC ts;
@@ -1585,7 +1617,7 @@ static int64_t lc_clock_gettime(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_clock_getres(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_clock_getres(struct X86_REGS *r, uint64_t a, uint64_t b,
                                uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_TIMESPEC), 1))
         return -LINUX_EFAULT;
@@ -1598,13 +1630,13 @@ static int64_t lc_clock_getres(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_mprotect(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_mprotect(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_mprotect(a, b, c);
 }
 
-static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_rt_sigaction(struct X86_REGS *r, uint64_t a, uint64_t b,
                                uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     int32_t sig = (int32_t)a;
     if (sig <= 0 || sig >= 32)
@@ -1616,7 +1648,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
     }
     if (b)
         memcpy(&lsa, (const void *)(uintptr_t)b, sizeof(lsa));
-    struct sigaction nat;
+    struct SYS_SIGACTION nat;
     memset(&nat, 0, sizeof(nat));
     nat.sa_handler = (void (*)(int))(uintptr_t)lsa.sa_handler;
     nat.sa_mask = (uint32_t)(lsa.sa_mask << 1);
@@ -1624,7 +1656,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
     nat.sa_restorer = (void *)(uintptr_t)lsa.sa_restorer;
     if (d != 8)
         return -LINUX_EINVAL;
-    struct sigaction oldnat;
+    struct SYS_SIGACTION oldnat;
     memset(&oldnat, 0, sizeof(oldnat));
     int rr = sys_sigaction(sig, b ? &nat : NULL, &oldnat);
     if (rr < 0)
@@ -1643,7 +1675,7 @@ static int64_t lc_rt_sigaction(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_rt_sigprocmask(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_rt_sigprocmask(struct X86_REGS *r, uint64_t a, uint64_t b,
                                  uint64_t c, uint64_t d, uint64_t e,
                                  uint64_t f) {
     sigset_t kset = 0;
@@ -1673,20 +1705,20 @@ static int64_t lc_rt_sigprocmask(struct Registers *r, uint64_t a, uint64_t b,
     return 0;
 }
 
-static int64_t lc_getdents64(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getdents64(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, (uint32_t)c, 1))
         return -LINUX_EFAULT;
     return compat_getdents64((int32_t)a, (void *)(uintptr_t)b, (uint32_t)c);
 }
 
-static int64_t lc_ioctl(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_ioctl(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_ioctl((int32_t)a, (uint32_t)b, c);
 }
 
-static int64_t lc_readv(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_readv(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, b, (uint32_t)c * 8u, 0))
         return -LINUX_EFAULT;
@@ -1694,60 +1726,60 @@ static int64_t lc_readv(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
                         (int32_t)c);
 }
 
-static int64_t lc_wait4(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_wait4(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (b && !user_ptr_ok(r, b, 4, 1))
         return -LINUX_EFAULT;
     return compat_wait4((int32_t *)b);
 }
 
-static int64_t lc_uname(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_uname(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_uname((void *)a);
 }
 
-static int64_t lc_sysinfo(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_sysinfo(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_sysinfo((void *)a);
 }
 
-static int64_t lc_times(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_times(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return (int64_t)(uint32_t)compat_times((void *)a);
 }
 
-static int64_t lc_ftruncate(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_ftruncate(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_ftruncate((int32_t)a, (int32_t)c);
 }
 
-static int64_t lc_rt_sigreturn(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_rt_sigreturn(struct X86_REGS *r, uint64_t a, uint64_t b,
                                uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     return (int64_t)sys_sigreturn(r);
 }
 
-static int64_t lc_setpgid(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_setpgid(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_setpgid(a, b);
 }
 
-static int64_t lc_getpgid(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getpgid(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return compat_getpgid(a);
 }
 
-static int64_t lc_arch_prctl(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_arch_prctl(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     const uint64_t MSR_FS_BASE = 0xC0000100;
     const uint64_t MSR_GS_BASE = 0xC0000101;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     switch (a) {
     case 0x1002u:
         cur->tls_base = (uint32_t)b;
@@ -1767,13 +1799,13 @@ static int64_t lc_arch_prctl(struct Registers *r, uint64_t a, uint64_t b,
     }
 }
 
-static int64_t lc_sched_yield(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_sched_yield(struct X86_REGS *r, uint64_t a, uint64_t b,
                               uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return 0;
 }
 
-static int64_t lc_execve(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_execve(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1782,52 +1814,52 @@ static int64_t lc_execve(struct Registers *r, uint64_t a, uint64_t b,
                       (const char **)(uintptr_t)c, r);
 }
 
-static int64_t lc_fork(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_fork(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     return sys_fork(r);
 }
 
-static int64_t lc_clone(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_clone(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (a & CLONE_VM)
         return -LINUX_ENOSYS;
     return sys_fork(r);
 }
 
-static int64_t lc_pipe(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_pipe(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     if (a == 0 || !user_ptr_ok(r, a, 8, 1))
         return -LINUX_EFAULT;
     return sys_pipe((int32_t *)(uintptr_t)a);
 }
 
-static int64_t lc_pipe2(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_pipe2(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     if (b != 0)
         return -LINUX_EINVAL;
     return lc_pipe(r, a, 0, 0, 0, 0, 0);
 }
 
-static int64_t lc_dup(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_dup(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                       uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_dup((int32_t)a);
 }
 
-static int64_t lc_dup2(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_dup2(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
     return sys_dup2((int32_t)a, (int32_t)b);
 }
 
-static int64_t lc_dup3(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_dup3(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     if ((int32_t)a == (int32_t)b || d != 0)
         return -LINUX_EINVAL;
     return sys_dup2((int32_t)a, (int32_t)b);
 }
 
-static int64_t lc_open(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc_open(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -1835,7 +1867,7 @@ static int64_t lc_open(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
     return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)b);
 }
 
-static int64_t lc_openat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_openat(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, b))
@@ -1843,7 +1875,7 @@ static int64_t lc_openat(struct Registers *r, uint64_t a, uint64_t b,
     return compat_openat((int32_t)a, kpath, (uint32_t)c);
 }
 
-static int64_t lc_newfstatat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_newfstatat(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (!user_ptr_ok(r, c, sizeof(struct LINUX_STAT), 1))
         return -LINUX_EFAULT;
@@ -1856,7 +1888,7 @@ static int64_t lc_newfstatat(struct Registers *r, uint64_t a, uint64_t b,
     return compat_stat_linux(kpath, c);
 }
 
-static int64_t lc_unlinkat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_unlinkat(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, b))
@@ -1864,7 +1896,7 @@ static int64_t lc_unlinkat(struct Registers *r, uint64_t a, uint64_t b,
     return (d & LINUX_AT_REMOVEDIR) ? sys_rmdir(kpath) : sys_unlink(kpath);
 }
 
-static int64_t lc_mkdirat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_mkdirat(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, b))
@@ -1872,7 +1904,7 @@ static int64_t lc_mkdirat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_mkdir(kpath);
 }
 
-static int64_t lc_renameat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_renameat(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     char kpath2[MAX_PATH_LEN];
@@ -1881,14 +1913,14 @@ static int64_t lc_renameat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_rename(kpath, kpath2);
 }
 
-static int64_t lc_renameat2(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_renameat2(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (e != 0)
         return -LINUX_EINVAL;
     return lc_renameat(r, b, d, 0, 0, 0, 0);
 }
 
-static int64_t lc_readlinkat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_readlinkat(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, b) || !user_ptr_ok(r, c, (uint32_t)d, 1))
@@ -1896,7 +1928,7 @@ static int64_t lc_readlinkat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_readlink(kpath, (char *)(uintptr_t)c, d);
 }
 
-static int64_t lc_faccessat(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_faccessat(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, b))
@@ -1904,7 +1936,7 @@ static int64_t lc_faccessat(struct Registers *r, uint64_t a, uint64_t b,
     return sys_access(kpath, (int32_t)c);
 }
 
-static int64_t lc_getrandom(struct Registers *r, uint64_t a, uint64_t b,
+static int64_t lc_getrandom(struct X86_REGS *r, uint64_t a, uint64_t b,
                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     if (b == 0)
         return 0;
@@ -1925,7 +1957,7 @@ static int64_t lc_getrandom(struct Registers *r, uint64_t a, uint64_t b,
     return (int64_t)b;
 }
 
-static int64_t lc0_open(struct Registers *r, uint64_t a, uint64_t b, uint64_t c,
+static int64_t lc0_open(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
@@ -2058,8 +2090,8 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_getrandom] = lc_getrandom,
 };
 
-int64_t linux_compat_handler(struct Registers *r) {
-    struct task_struct *cur = current;
+int64_t linux_compat_handler(struct X86_REGS *r) {
+    struct TASK *cur = current;
     uint32_t nr = r->eax;
     int64_t ret = -LINUX_ENOSYS;
 

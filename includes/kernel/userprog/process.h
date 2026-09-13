@@ -8,7 +8,7 @@
 #define USER_STACK3_VADDR (0xc0000000 - 0x1000)
 #define USER_HEAP_BASE 0xA0000000
 #define USER_LOW_CEILING 0x40000000u
-#define USER_HIGH_MMIO_END 0x80200000u 
+#define USER_HIGH_MMIO_END 0x80200000u
 #define USER_STACK_TOP 0xc0000000u
 #define USER_STACK_PAGES 16
 #define USER_STACK_BOTTOM (USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE)
@@ -18,10 +18,10 @@
 extern void intr_exit(void);
 
 void start_process(void *arg);
-void page_dir_activate(struct task_struct *task);
-void process_activate(struct task_struct *task);
+void page_dir_activate(struct TASK *task);
+void process_activate(struct TASK *task);
 uint32_t *create_page_dir(void);
-void create_user_vaddr_bitmap(struct task_struct *user_prog);
+void create_user_vaddr_bitmap(struct TASK *user_prog);
 void process_execute(char *path, char *name);
 
 #endif

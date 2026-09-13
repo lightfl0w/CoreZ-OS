@@ -16,7 +16,7 @@ static void expect(int cond, const char *msg) {
 int main(void) {
     printf("dev_demo: start\n");
 
-    struct stat st;
+    struct FS_STAT st;
     expect(stat("/dev/null", &st) == 0, "stat /dev/null");
     expect(st.st_filetype == FT_CHARDEVICE, "/dev/null is chardev");
 

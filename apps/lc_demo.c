@@ -23,7 +23,7 @@ int main(int argc, char **argv, char **envp) {
     lc_puts(")\n");
 
     lc_puts("  writev([\"con-\",\"cat\",\"-enated\"]) -> ");
-    struct lc_iovec iov[3];
+    struct LC_IOVEC iov[3];
     iov[0].base = (uint32_t)"con-";
     iov[0].len = 4;
     iov[1].base = (uint32_t)"cat";

@@ -2,7 +2,7 @@
 #include "drivers/driver_ops.h"
 #include "drivers/char/tty.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/sched/thread.h"
 
 #define KEYBOARD_DATA 0x60
@@ -25,6 +25,7 @@ void keyboard_init(void) {
     ioq_init(&keyboard_ioq);
     keyboard_flush_pending();
 }
+
 #define SC_SHIFT_L_DOWN 0x2A
 #define SC_SHIFT_R_DOWN 0x36
 #define SC_SHIFT_L_UP 0xAA
@@ -39,7 +40,7 @@ void keyboard_init(void) {
 #define KBD_CHAR_CTRL_U (1)
 #define KBD_CHAR_CTRL_L (12)
 
-struct ioqueue keyboard_ioq;
+struct TTY_IOQUEUE keyboard_ioq;
 
 static const char keymap[2][128] = {
     {0,   0x1b, '1',  '2', '3',  '4', '5', '6', '7', '8', '9', '0', '-',

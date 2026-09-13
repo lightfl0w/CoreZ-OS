@@ -5,7 +5,7 @@
 #include "lib/rbtree/rbtree.h"
 #include <stdint.h>
 
-struct inode {
+struct FS_INODE {
     uint32_t i_no;
     uint32_t i_size;
     uint32_t i_mode;
@@ -17,9 +17,9 @@ struct inode {
     struct RB_NODE inode_rb_node;
 };
 
-struct partition;
+struct DISK_PARTITION;
 
-struct inode *inode_open(struct partition *part, uint32_t inode_no);
-void inode_close(struct inode *inode);
+struct FS_INODE *inode_open(struct DISK_PARTITION *part, uint32_t inode_no);
+void inode_close(struct FS_INODE *inode);
 
 #endif

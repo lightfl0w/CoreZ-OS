@@ -11,28 +11,29 @@
 #include "kernel/gui/theme.h"
 #include "kernel/gui/wm.h"
 
-struct demo_client {
-    struct wl_client *conn;
-    struct wl_surface *surf;
-    struct shm_pool *pool;
+struct COMP_DEMO_CLIENT {
+    struct WL_CLIENT *conn;
+    struct WL_SURFACE *surf;
+    struct WL_SHM_POOL *pool;
     int w, h;
     uint32_t frame_interval;
     uint32_t last_frame;
-    void (*render)(struct demo_client *dc);
-    void (*on_key)(struct demo_client *dc, int scancode, int mods);
+    void (*render)(struct COMP_DEMO_CLIENT *dc);
+    void (*on_key)(struct COMP_DEMO_CLIENT *dc, int scancode, int mods);
 };
 
 extern void (*log_hook)(const char *s);
 
 #define UI_FONT_PX 13
-static void canvas_of(struct gfx_canvas *cv, struct demo_client *dc) {
+static void canvas_of(struct GFX_CANVAS *cv, struct COMP_DEMO_CLIENT *dc) {
     cv->pixels = (gfx_color *)dc->pool->data;
     cv->pitch = dc->w * 4;
     cv->w = dc->w;
     cv->h = dc->h;
     cv->bytes = (size_t)dc->w * (size_t)dc->h * 4u;
 }
-static int buffer_resize(struct demo_client *dc, int w, int h) {
+
+static int buffer_resize(struct COMP_DEMO_CLIENT *dc, int w, int h) {
     if (w <= 0 || h <= 0)
         return -1;
     if (dc->pool && dc->w == w && dc->h == h)
@@ -48,16 +49,16 @@ static int buffer_resize(struct demo_client *dc, int w, int h) {
     return 0;
 }
 
-static void attach_commit(struct demo_client *dc) {
+static void attach_commit(struct COMP_DEMO_CLIENT *dc) {
     if (!dc->pool)
         return;
     wl_surface_attach(dc->surf, dc->pool, dc->w, dc->h);
     wl_surface_commit(dc->surf);
 }
 
-static void client_main(struct demo_client *dc) {
+static void client_main(struct COMP_DEMO_CLIENT *dc) {
     for (;;) {
-        struct wl_event ev;
+        struct WL_EVENT ev;
         if (wl_display_dispatch(dc->conn, &ev) != 0)
             break;
         switch (ev.type) {
@@ -132,8 +133,8 @@ static void term_log_hook(const char *s) {
     term_putc('\n');
 }
 
-static void term_render(struct demo_client *dc) {
-    struct gfx_canvas cv;
+static void term_render(struct COMP_DEMO_CLIENT *dc) {
+    struct GFX_CANVAS cv;
     canvas_of(&cv, dc);
     gfx_fill(&cv, 0, 0, dc->w, dc->h, GFX_RGB(12, 15, 20));
     gfx_fill(&cv, 0, 0, dc->w, 2, TH_ACCENT);
@@ -176,7 +177,7 @@ static void term_render(struct demo_client *dc) {
     }
 }
 
-static void term_on_key(struct demo_client *dc, int scancode, int mods) {
+static void term_on_key(struct COMP_DEMO_CLIENT *dc, int scancode, int mods) {
     (void)mods;
     char ch = keyboard_translate((uint8_t)scancode, mods & MOD_SHIFT);
     if (!ch)
@@ -193,7 +194,7 @@ static void term_on_key(struct demo_client *dc, int scancode, int mods) {
 
 static void term_thread(void *arg) {
     (void)arg;
-    struct demo_client dc;
+    struct COMP_DEMO_CLIENT dc;
     memset(&dc, 0, sizeof(dc));
     dc.conn = wl_display_connect("term");
     if (!dc.conn) {
@@ -216,8 +217,8 @@ static void term_thread(void *arg) {
     log_hook = 0;
 }
 
-static void clock_render(struct demo_client *dc) {
-    struct gfx_canvas cv;
+static void clock_render(struct COMP_DEMO_CLIENT *dc) {
+    struct GFX_CANVAS cv;
     canvas_of(&cv, dc);
     gfx_fill(&cv, 0, 0, dc->w, dc->h, GFX_RGB(10, 12, 24));
 
@@ -255,7 +256,7 @@ static void clock_render(struct demo_client *dc) {
 
 static void clock_thread(void *arg) {
     (void)arg;
-    struct demo_client dc;
+    struct COMP_DEMO_CLIENT dc;
     memset(&dc, 0, sizeof(dc));
     dc.conn = wl_display_connect("clock");
     if (!dc.conn) {
@@ -274,8 +275,8 @@ static void clock_thread(void *arg) {
     client_main(&dc);
 }
 
-static void sysmon_render(struct demo_client *dc) {
-    struct gfx_canvas cv;
+static void sysmon_render(struct COMP_DEMO_CLIENT *dc) {
+    struct GFX_CANVAS cv;
     canvas_of(&cv, dc);
     gfx_fill(&cv, 0, 0, dc->w, dc->h, GFX_RGB(18, 20, 26));
 
@@ -321,7 +322,7 @@ static void sysmon_render(struct demo_client *dc) {
 
 static void sysmon_thread(void *arg) {
     (void)arg;
-    struct demo_client dc;
+    struct COMP_DEMO_CLIENT dc;
     memset(&dc, 0, sizeof(dc));
     dc.conn = wl_display_connect("sysmon");
     if (!dc.conn) {
@@ -340,8 +341,8 @@ static void sysmon_thread(void *arg) {
     client_main(&dc);
 }
 
-static void plasma_render(struct demo_client *dc) {
-    struct gfx_canvas cv;
+static void plasma_render(struct COMP_DEMO_CLIENT *dc) {
+    struct GFX_CANVAS cv;
     canvas_of(&cv, dc);
     gfx_color *buf = cv.pixels;
     int phase = (int)(tick / 3);
@@ -371,7 +372,7 @@ static void plasma_render(struct demo_client *dc) {
 
 static void plasma_thread(void *arg) {
     (void)arg;
-    struct demo_client dc;
+    struct COMP_DEMO_CLIENT dc;
     memset(&dc, 0, sizeof(dc));
     dc.conn = wl_display_connect("plasma");
     if (!dc.conn) {
@@ -413,7 +414,7 @@ void clients_spawn_initial(void) {
 
 void clients_broadcast_close(void) {
     int n = 0;
-    struct wl_surface **list = comp_surfaces(&n);
+    struct WL_SURFACE **list = comp_surfaces(&n);
     for (int i = 0; i < n; i++)
         comp_send_close(list[i]);
 }

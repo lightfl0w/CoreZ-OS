@@ -10,7 +10,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "drivers/net/socket.h"
 #include "kernel/sched/thread.h"
-struct linux_dirent {
+struct LINUX_DIRENT {
     uint32_t d_ino;
     uint32_t d_off;
     uint16_t d_reclen;
@@ -21,7 +21,7 @@ struct linux_dirent {
 #define F_SETFD 2
 #define F_GETFL 3
 #define F_SETFL 4
-static struct file *fd_lookup(int32_t fd) {
+static struct FILE *fd_lookup(int32_t fd) {
     if (fd < 0 || fd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return NULL;
     }
@@ -36,11 +36,11 @@ int32_t sys_fstat(int32_t fd, void *buf) {
     if (buf == NULL) {
         return -1;
     }
-    struct file *pf = fd_lookup(fd);
+    struct FILE *pf = fd_lookup(fd);
     if (pf == NULL || (pf->fd_inode == NULL && pf->proc_id == 0)) {
         return -1;
     }
-    struct stat *st = (struct stat *)buf;
+    struct FS_STAT *st = (struct FS_STAT *)buf;
     memset(st, 0, sizeof(*st));
     if (pf->proc_id != 0) {
         return proc_fstat(pf, st);
@@ -50,8 +50,9 @@ int32_t sys_fstat(int32_t fd, void *buf) {
     st->st_filetype = FT_REGULAR;
     return 0;
 }
+
 int32_t sys_dup(int32_t oldfd) {
-    struct file *pf = fd_lookup(oldfd);
+    struct FILE *pf = fd_lookup(oldfd);
     if (pf == NULL) {
         return -1;
     }
@@ -66,6 +67,7 @@ int32_t sys_dup(int32_t oldfd) {
     lock_release(&file_table_lock);
     return newfd;
 }
+
 int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     if (newfd < 0 || newfd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return -1;
@@ -73,7 +75,7 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     if (oldfd == newfd) {
         return newfd;
     }
-    struct file *pf = fd_lookup(oldfd);
+    struct FILE *pf = fd_lookup(oldfd);
     if (pf == NULL) {
         return -1;
     }
@@ -88,10 +90,11 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     lock_release(&file_table_lock);
     return newfd;
 }
+
 int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
     if (net_is_socket(fd))
         return net_fcntl(fd, cmd, arg);
-    struct file *pf = fd_lookup(fd);
+    struct FILE *pf = fd_lookup(fd);
     if (pf == NULL) {
         return -1;
     }
@@ -116,16 +119,17 @@ int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
         return -1;
     }
 }
+
 int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     if (dirp == NULL) {
         return -1;
     }
-    struct file *pf = fd_lookup(fd);
+    struct FILE *pf = fd_lookup(fd);
     if (pf == NULL || pf->fd_inode == NULL) {
         return -1;
     }
     uint32_t pos = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     uint32_t written = 0;
     while (ext2_dir_next(pf->fd_inode, &pos, &de) == 0) {
         uint32_t name_len = strlen(de.filename);
@@ -133,8 +137,8 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
         if (written + reclen > count) {
             break;
         }
-        struct linux_dirent *ld =
-            (struct linux_dirent *)((uint8_t *)dirp + written);
+        struct LINUX_DIRENT *ld =
+            (struct LINUX_DIRENT *)((uint8_t *)dirp + written);
         ld->d_ino = de.i_no;
         ld->d_off = written + reclen;
         ld->d_reclen = reclen;
@@ -143,6 +147,7 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     }
     return (int32_t)written;
 }
+
 int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     if (path == NULL || buf == NULL || bufsiz == 0) {
         return -1;
@@ -163,6 +168,7 @@ int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     memcpy(buf, kbuf, n);
     return (int32_t)n;
 }
+
 int32_t sys_access(const char *path, int32_t mode) {
     if (path == NULL) {
         return -1;
@@ -176,7 +182,7 @@ int32_t sys_access(const char *path, int32_t mode) {
         current->errno = 2;
         return -1;
     }
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino_no, &obj)) {
         return -1;
     }
@@ -187,18 +193,21 @@ int32_t sys_access(const char *path, int32_t mode) {
     }
     return 0;
 }
+
 int32_t sys_rename(const char *oldpath, const char *newpath) {
     (void)oldpath;
     (void)newpath;
     current->errno = 30;
     return -1;
 }
+
 int32_t sys_truncate(const char *path, int32_t length) {
     (void)path;
     (void)length;
     current->errno = 30;
     return -1;
 }
+
 int32_t sys_chmod(const char *path, uint32_t mode) {
     if (path == NULL) {
         return -1;
@@ -212,7 +221,7 @@ int32_t sys_chmod(const char *path, uint32_t mode) {
         current->errno = 2;
         return -1;
     }
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino_no, &obj)) {
         return -1;
     }

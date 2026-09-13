@@ -1,9 +1,8 @@
-
 #include "kernel/init/apic/apic.h"
 
 #include <stdint.h>
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "drivers/char/console/io.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/init/pit/pit.h"
@@ -64,6 +63,7 @@ static void wrmsr(uint32_t msr, uint32_t lo) {
 static void lapic_write(uint32_t off, uint32_t v) {
     lapic[off / 4] = v;
 }
+
 static uint32_t lapic_read(uint32_t off) {
     return lapic[off / 4];
 }
@@ -105,6 +105,7 @@ static uint32_t ioapic_read(uint32_t reg) {
     ioapic[0] = reg;
     return ioapic[4];
 }
+
 static void ioapic_write(uint32_t reg, uint32_t v) {
     ioapic[0] = reg;
     ioapic[4] = v;

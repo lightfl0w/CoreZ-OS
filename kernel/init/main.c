@@ -2,7 +2,7 @@
 #include "drivers/char/keyboard.h"
 #include "drivers/char/mouse.h"
 #include "kernel/fs/fs.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/apic/apic.h"
@@ -33,9 +33,9 @@
 #define VRAM_VIRT 0x80000000UL
 
 void drivers_init(int min_level, int max_level) {
-    struct driver_ops table[16];
+    struct DRIVER_OPS table[16];
     int n = 0;
-    for (const struct driver_ops *d = __drivers_start;
+    for (const struct DRIVER_OPS *d = __drivers_start;
          d != __drivers_end && n < 16; ++d) {
         if (d->level < min_level || d->level > max_level)
             continue;
@@ -62,8 +62,8 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     rand_init();
 
     mb2_init(magic, mbi_ptr);
-    const struct mb2_info *mi = mb2_get();
-    struct mb2_tag_framebuffer fb = {0};
+    const struct MB2_INFO *mi = mb2_get();
+    struct MB2_TAG_FRAMEBUFFER fb = {0};
     if (mi->has_framebuffer)
         fb = mi->framebuffer;
     int fw = (int)fb.framebuffer_width;
@@ -78,7 +78,7 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     uintptr_t vram_virt =
         (uintptr_t)VRAM_VIRT + ((uintptr_t)fb.framebuffer_addr & 0x1FFFFFUL);
     io_init((uint8_t *)vram_virt, fw, fh, bytes, fpitch, fbpp);
-    struct gfx_fb_format fmt = {
+    struct GFX_FB_FORMAT fmt = {
         fbpp,
         fb.color_info[0], fb.color_info[1],
         fb.color_info[2], fb.color_info[3],
@@ -103,7 +103,7 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
 
     kprintf("[init] percpu\n");
     percpu_init();
-    set_current((struct task_struct *)0);
+    set_current((struct TASK *)0);
 
     kprintf("[init] tss\n");
     tss_init();

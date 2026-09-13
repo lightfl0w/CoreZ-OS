@@ -1,6 +1,6 @@
 #include "drivers/net/socket.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/sched/thread.h"
 #include "drivers/net/net.h"
@@ -23,7 +23,7 @@ struct SOCKET {
     uint8_t nonblock;
     uint8_t sel_rd;
     uint8_t sel_wr;
-    struct task_struct *waiter;
+    struct TASK *waiter;
     struct TCP_PCB *pcb;
     struct UDP_PCB *upcb;
     uint32_t err;
@@ -116,7 +116,7 @@ void sock_poll(void) {
         } else if (!sock_ready(s)) {
             continue;
         }
-        struct task_struct *w = s->waiter;
+        struct TASK *w = s->waiter;
         s->waiter = 0;
         thread_unblock(w);
     }

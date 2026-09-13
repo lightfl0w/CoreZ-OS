@@ -2,7 +2,7 @@
 
 #include "drivers/char/keyboard.h"
 #include "drivers/char/mouse.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "drivers/char/console/io.h"
 #include "kernel/fs/fs.h"
 #include "kernel/init/pit/pit.h"
@@ -31,8 +31,9 @@ static void load_embedded_font(void) {
     else
         comp_log("font: embedded font init failed");
 }
+
 static void load_disk_font(void) {
-    struct stat st;
+    struct FS_STAT st;
     if (sys_stat("/font_subset.ttf", &st) != 0 || st.st_size == 0 ||
         st.st_size > FONT_DISK_MAX)
         return;
@@ -56,6 +57,7 @@ static void load_disk_font(void) {
     else
         comp_log("font: disk font invalid, keeping embedded");
 }
+
 int gui_session_run(void) {
     if (running)
         return -1;

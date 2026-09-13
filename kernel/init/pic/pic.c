@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 
 int pic_init(void) {
     uint8_t a1 = inb(PIC1_DATA);

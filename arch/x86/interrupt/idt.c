@@ -1,10 +1,10 @@
 #include "arch/x86/interrupt/idt.h"
 
 #include "kernel/asm/stub.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/init/gdt/gdt.h"
 
-struct IDTEntry idt[256];
+struct IDT_ENTRY idt[256];
 
 struct IDTR {
     uint16_t limit;

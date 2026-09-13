@@ -1,6 +1,6 @@
 #include "drivers/net/e1000.h"
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "drivers/net/netif.h"
@@ -68,6 +68,7 @@ static uint32_t s_rx_cur;
 static inline uint32_t e1000_reg_read(uint32_t off) {
     return *(volatile uint32_t *)(s_regs + off);
 }
+
 static inline void e1000_reg_write(uint32_t off, uint32_t v) {
     *(volatile uint32_t *)(s_regs + off) = v;
 }

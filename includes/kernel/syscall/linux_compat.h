@@ -8,6 +8,6 @@
 
 #include "kernel/syscall/linux_abi.h"
 
-int64_t linux_compat_handler(struct Registers *r);
+int64_t linux_compat_handler(struct X86_REGS *r);
 
 #endif

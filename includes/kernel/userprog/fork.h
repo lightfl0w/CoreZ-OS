@@ -5,6 +5,6 @@
 #include "kernel/sched/thread.h"
 #include <stdint.h>
 
-pid_t sys_fork(struct Registers *r);
+pid_t sys_fork(struct X86_REGS *r);
 
 #endif

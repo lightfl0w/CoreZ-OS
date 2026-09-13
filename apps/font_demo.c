@@ -2,7 +2,7 @@
 #include "lib/str/str.h"
 #include "syscall.h"
 
-struct stat {
+struct FS_STAT {
     uint32_t st_ino;
     uint32_t st_size;
     int32_t st_filetype;
@@ -12,13 +12,16 @@ static int my_ifloor(float x) {
     int i = (int)x;
     return ((float)i > x) ? i - 1 : i;
 }
+
 static int my_iceil(float x) {
     int i = (int)x;
     return ((float)i < x) ? i + 1 : i;
 }
+
 static float my_fabsf(float x) {
     return x < 0 ? -x : x;
 }
+
 static float my_sqrtf(float x) {
     if (x <= 0)
         return 0;
@@ -31,6 +34,7 @@ static float my_sqrtf(float x) {
     }
     return g;
 }
+
 static float my_fmodf(float x, float y) {
     if (y == 0)
         return 0;
@@ -42,6 +46,7 @@ static float my_fmodf(float x, float y) {
         r -= y;
     return r;
 }
+
 static float my_cosf(float x) {
     const float pi = 3.14159265f;
     while (x > pi)
@@ -52,6 +57,7 @@ static float my_cosf(float x) {
     return 1.0f - x2 / 2.0f + x2 * x2 / 24.0f - x2 * x2 * x2 / 720.0f +
            x2 * x2 * x2 * x2 / 40320.0f - x2 * x2 * x2 * x2 * x2 / 3628800.0f;
 }
+
 static float my_acosf(float x) {
     const float pi = 3.14159265f;
     if (x >= 1.0f)
@@ -65,6 +71,7 @@ static float my_acosf(float x) {
     float r = pi / 2.0f - as;
     return x < 0 ? pi - r : r;
 }
+
 static float my_cuberoot(float x) {
     if (x == 0)
         return 0;
@@ -79,6 +86,7 @@ static float my_cuberoot(float x) {
     }
     return neg ? -g : g;
 }
+
 static float my_powf(float b, float e) {
     if (b == 0)
         return 0;
@@ -117,6 +125,7 @@ static void *my_malloc(int size) {
     g_heap_used += (uint32_t)size;
     return p;
 }
+
 #define STBTT_malloc(x, u) my_malloc(x)
 #define STBTT_free(x, u) ((void)0)
 #define STBTT_assert(x) ((void)0)
@@ -127,7 +136,7 @@ static void *my_malloc(int size) {
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "lib/stb_truetype.h"
 
-struct boot_info {
+struct BOOT_INFO {
     uint8_t cyls, leds, vmode, pad;
     uint16_t scrnx, scrny;
     uint32_t vram;
@@ -182,12 +191,12 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    struct boot_info *bi = (struct boot_info *)0x0FF0;
+    struct BOOT_INFO *bi = (struct BOOT_INFO *)0x0FF0;
     uint8_t *vram = (uint8_t *)bi->vram;
     int scrnx = bi->scrnx, scrny = bi->scrny;
     int pitch = scrnx;
 
-    struct stat st;
+    struct FS_STAT st;
     if (stat("/font_subset.ttf", &st) == -1) {
         printf("font: /font_subset.ttf not found\n");
         exit(-1);

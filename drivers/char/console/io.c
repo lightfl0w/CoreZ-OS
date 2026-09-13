@@ -2,7 +2,7 @@
 
 #include <stdarg.h>
 
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 
 static uint8_t *vram = (uint8_t *)0;
 static int scrnx = 0;
@@ -24,21 +24,27 @@ static const uint32_t ansi16[16] = {
 uint32_t io_ansi_color(int idx) {
     return ansi16[idx & 15];
 }
+
 uint8_t *io_get_vram(void) {
     return vram;
 }
+
 int io_get_scrnx(void) {
     return scrnx;
 }
+
 int io_get_scrny(void) {
     return scrny;
 }
+
 int io_get_pitch(void) {
     return pitch;
 }
+
 int io_get_bpp(void) {
     return bpp;
 }
+
 size_t io_get_vram_bytes(void) {
     return vram_bytes;
 }
@@ -82,6 +88,7 @@ void set_cursor(int x, int y) {
 int get_cursor_x(void) {
     return cursor_x;
 }
+
 int get_cursor_y(void) {
     return cursor_y;
 }
@@ -227,7 +234,6 @@ static void print_signed(int v, int width, int pad0) {
         putc(buf[n]);
 }
 
-
 void kprintf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -305,7 +311,6 @@ void console_putc(char c) {
     putc(c);
 }
 
-
 void io_clear_screen(void) {
     vram_zero_all();
     cursor_x = 0;
@@ -326,6 +331,7 @@ static inline void store_px(uint8_t *p, uint32_t color) {
         *p = (uint8_t)color;
     }
 }
+
 void show_char(uint8_t *vram_ptr, int p, int x, int y, int sw, int sh, char c,
                uint32_t color, int bg) {
     if (!vram_ptr)

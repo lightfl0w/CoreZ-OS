@@ -48,7 +48,7 @@ long lc_set_thread_area(void *base) {
                                0);
 }
 
-long lc_writev(int fd, const struct lc_iovec *iov, int iovcnt) {
+long lc_writev(int fd, const struct LC_IOVEC *iov, int iovcnt) {
     return (long)__lc_syscall6(LC_WRITEV, (uint64_t)fd, (uintptr_t)iov,
                                (uint64_t)iovcnt, 0, 0, 0);
 }

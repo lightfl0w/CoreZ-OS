@@ -21,6 +21,7 @@ int32_t sys_chmod(const char *path, uint32_t mode);
 
 #ifdef __cplusplus
 }
+
 #endif
 
 #endif

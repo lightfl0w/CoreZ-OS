@@ -8,43 +8,43 @@
 #include "kernel/sched/sync.h"
 #include <stdint.h>
 
-struct partition {
+struct DISK_PARTITION {
     uint32_t start_lba;
     uint32_t sec_cnt;
-    struct disk *my_disk;
-    struct list_elem part_tag;
+    struct DISK *my_disk;
+    struct LIST_ELEM part_tag;
     char name[8];
-    struct super_block *sb;
-    struct bitmap block_bitmap;
-    struct bitmap inode_bitmap;
+    struct FS_SUPER_BLOCK *sb;
+    struct MM_BITMAP block_bitmap;
+    struct MM_BITMAP inode_bitmap;
     struct RB_ROOT open_inodes_rb;
 };
 
-struct disk {
+struct DISK {
     char name[8];
-    struct ide_channel *my_channel;
+    struct IDE_CHANNEL *my_channel;
     uint8_t dev_no;
     uint32_t max_lba;
-    struct partition prim_parts[4];
-    struct partition logic_parts[8];
+    struct DISK_PARTITION prim_parts[4];
+    struct DISK_PARTITION logic_parts[8];
 };
 
-struct ide_channel {
+struct IDE_CHANNEL {
     char name[8];
     uint16_t port_base;
     uint8_t irq_no;
-    struct lock lock;
+    struct SCHED_LOCK lock;
     int expecting_intr;
-    struct semaphore disk_done;
-    struct disk devices[2];
+    struct SCHED_SEMAPHORE disk_done;
+    struct DISK devices[2];
 };
 
-void ide_read(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
-void ide_write(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
+void ide_read(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
+void ide_write(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
 void intr_hd_handler(uint8_t irq_no);
 void ide_init(void);
 
-extern struct ide_channel channels[2];
-extern struct list partition_list;
+extern struct IDE_CHANNEL channels[2];
+extern struct LIST partition_list;
 
 #endif

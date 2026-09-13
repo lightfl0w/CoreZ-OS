@@ -19,7 +19,6 @@ static struct {
     uint8_t cc_vtime;
 } tty_termios;
 
-
 int tty_write(const char *buf, uint32_t n) {
     for (uint32_t i = 0; i < n; i++)
         console_putc(buf[i]);
@@ -34,7 +33,7 @@ static void tty_echo(char c) {
     console_putc(c);
 }
 
-static char ioq_getchar_sync(struct ioqueue *q) {
+static char ioq_getchar_sync(struct TTY_IOQUEUE *q) {
     uint32_t f = cpu_eflags();
     cpu_cli();
     char c = ioq_getchar(q);
@@ -161,7 +160,7 @@ void tty_sigint_foreground(void) {
     if (pgid == 0)
         pgid = foreground_pid;
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        struct task_struct *t = &task_table[i];
+        struct TASK *t = &task_table[i];
         if (!t->slot_used || t->status == TASK_DIED)
             continue;
         if (t->pid != pgid)
@@ -170,7 +169,7 @@ void tty_sigint_foreground(void) {
     }
 }
 
-const struct tty_ops TTY = {
+const struct TTY_OPS TTY = {
     .read = tty_read,
     .write = tty_write,
     .ioctl = tty_ioctl,
@@ -183,7 +182,6 @@ static int tty_drv(void) {
 }
 
 DRIVER_REGISTER("tty", 12, tty_drv);
-
 
 void tty_init(void) {
     tty_termios.iflag = TTY_ICANON | TTY_IECHO;

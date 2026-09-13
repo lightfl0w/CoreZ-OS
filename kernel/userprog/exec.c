@@ -3,7 +3,7 @@
 #include "arch/x86/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "kernel/asm/stub.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/auxv.h"
 #include "kernel/fs/fs.h"
@@ -31,7 +31,7 @@ static const char **exec_env_defaults(void) {
 #define MAX_ARG_STR_LEN 256
 #define HEAP_ASLR_PAGES 2048
 
-struct Elf64_Nhdr {
+struct LINUX_ELF64_NHDR {
     uint32_t namesz;
     uint32_t descsz;
     uint32_t type;
@@ -40,35 +40,33 @@ struct Elf64_Nhdr {
 #define NT_GNU_ABI_TAG 1
 #define EM_X86_64 62
 #define EM_386 3
-typedef uint32_t Elf32_Word, Elf32_Addr, Elf32_Off;
-typedef uint16_t Elf32_Half;
-struct Elf32_Ehdr {
+struct LINUX_ELF32_EHDR {
     unsigned char e_ident[16];
-    Elf32_Half e_type;
-    Elf32_Half e_machine;
-    Elf32_Word e_version;
-    Elf32_Addr e_entry;
-    Elf32_Off e_phoff;
-    Elf32_Off e_shoff;
-    Elf32_Word e_flags;
-    Elf32_Half e_ehsize;
-    Elf32_Half e_phentsize;
-    Elf32_Half e_phnum;
-    Elf32_Half e_shentsize;
-    Elf32_Half e_shnum;
-    Elf32_Half e_shstrndx;
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint32_t e_entry;
+    uint32_t e_phoff;
+    uint32_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
 };
-struct Elf32_Phdr {
-    Elf32_Word p_type;
-    Elf32_Off p_offset;
-    Elf32_Addr p_vaddr;
-    Elf32_Addr p_paddr;
-    Elf32_Word p_filesz;
-    Elf32_Word p_memsz;
-    Elf32_Word p_flags;
-    Elf32_Word p_align;
+struct LINUX_ELF32_PHDR {
+    uint32_t p_type;
+    uint32_t p_offset;
+    uint32_t p_vaddr;
+    uint32_t p_paddr;
+    uint32_t p_filesz;
+    uint32_t p_memsz;
+    uint32_t p_flags;
+    uint32_t p_align;
 };
-enum segment_type {
+enum LINUX_SEG_TYPE {
     PT_NULL,
     PT_LOAD,
     PT_DYNAMIC,
@@ -77,42 +75,39 @@ enum segment_type {
     PT_SHLIB,
     PT_PHDR
 };
-typedef uint64_t Elf64_Addr, Elf64_Off, Elf64_Xword;
-typedef uint32_t Elf64_Word;
-typedef uint16_t Elf64_Half;
-struct Elf64_Ehdr {
+struct LINUX_ELF64_EHDR {
     unsigned char e_ident[16];
-    Elf64_Half e_type;
-    Elf64_Half e_machine;
-    Elf64_Word e_version;
-    Elf64_Addr e_entry;
-    Elf64_Off e_phoff;
-    Elf64_Off e_shoff;
-    Elf64_Word e_flags;
-    Elf64_Half e_ehsize;
-    Elf64_Half e_phentsize;
-    Elf64_Half e_phnum;
-    Elf64_Half e_shentsize;
-    Elf64_Half e_shnum;
-    Elf64_Half e_shstrndx;
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
 };
-struct Elf64_Phdr {
-    Elf64_Word p_type;
-    Elf64_Word p_flags;
-    Elf64_Off p_offset;
-    Elf64_Addr p_vaddr;
-    Elf64_Addr p_paddr;
-    Elf64_Xword p_filesz;
-    Elf64_Xword p_memsz;
-    Elf64_Xword p_align;
+struct LINUX_ELF64_PHDR {
+    uint32_t p_type;
+    uint32_t p_flags;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
 };
-struct Elf64_Dyn {
+struct LINUX_ELF64_DYN {
     int64_t d_tag;
     uint64_t d_val;
 };
-struct Elf64_Rela {
-    Elf64_Addr r_offset;
-    Elf64_Xword r_info;
+struct LINUX_ELF64_RELA {
+    uint64_t r_offset;
+    uint64_t r_info;
     int64_t r_addend;
 };
 #define DT_NULL 0
@@ -125,7 +120,7 @@ struct Elf64_Rela {
 #define ELF64_R_TYPE(i) ((i) & 0xffffffffu)
 #define R_X86_64_RELATIVE 8
 
-struct wx_range {
+struct MM_WX_RANGE {
     uint32_t base;
     uint32_t pages;
 };
@@ -144,8 +139,8 @@ static void apply_rx(uint32_t base, uint32_t pages) {
 static void apply_relocs(uint32_t bias, uint32_t dyn_vaddr) {
     if (bias == 0 || dyn_vaddr == 0)
         return;
-    struct Elf64_Dyn *d = (struct Elf64_Dyn *)(uintptr_t)(bias + dyn_vaddr);
-    uint64_t rela = 0, relasz = 0, relaent = sizeof(struct Elf64_Rela);
+    struct LINUX_ELF64_DYN *d = (struct LINUX_ELF64_DYN *)(uintptr_t)(bias + dyn_vaddr);
+    uint64_t rela = 0, relasz = 0, relaent = sizeof(struct LINUX_ELF64_RELA);
     uint64_t relr = 0, relrsz = 0;
     for (int i = 0; d[i].d_tag != DT_NULL; i++) {
         if (d[i].d_tag == DT_RELA)
@@ -161,8 +156,8 @@ static void apply_relocs(uint32_t bias, uint32_t dyn_vaddr) {
     }
     if (rela != 0 && relasz != 0) {
         for (uint64_t off = 0; off < relasz; off += relaent) {
-            struct Elf64_Rela *r =
-                (struct Elf64_Rela *)(uintptr_t)(bias + rela + off);
+            struct LINUX_ELF64_RELA *r =
+                (struct LINUX_ELF64_RELA *)(uintptr_t)(bias + rela + off);
             if (ELF64_R_TYPE(r->r_info) == R_X86_64_RELATIVE)
                 *(uint64_t *)(uintptr_t)(bias + r->r_offset) =
                     bias + r->r_addend;
@@ -226,8 +221,8 @@ static void scan_note_abi(int32_t fd, uint32_t base_off, uint32_t filesz,
                           int *is_linux) {
     sys_lseek(fd, base_off, SEEK_SET);
     uint32_t remaining = filesz;
-    while (remaining >= sizeof(struct Elf64_Nhdr)) {
-        struct Elf64_Nhdr nh;
+    while (remaining >= sizeof(struct LINUX_ELF64_NHDR)) {
+        struct LINUX_ELF64_NHDR nh;
         if (read_file(fd, &nh, sizeof(nh)) != sizeof(nh))
             break;
         uint32_t sz = sizeof(nh) + ((nh.namesz + 3) & ~3u) +
@@ -250,9 +245,9 @@ static void scan_note_abi(int32_t fd, uint32_t base_off, uint32_t filesz,
     }
 }
 
-static void fill_entry_regs(struct Registers *r, uint32_t entry, int is64,
+static void fill_entry_regs(struct X86_REGS *r, uint32_t entry, int is64,
                             uint32_t rsp, uint32_t argc, uint32_t argv_base) {
-    memset(r, 0, sizeof(struct Registers));
+    memset(r, 0, sizeof(struct X86_REGS));
     r->rip = entry;
     r->cs = is64 ? SELECTOR_USER64_CODE : SELECTOR_U_CODE;
     r->rflags = EFLAGS_IOPL_0 | EFLAGS_MBS | EFLAGS_IF_1;
@@ -310,7 +305,7 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
     int32_t fd = open_file(pathname, O_RDONLY);
     {
         uint32_t gfd = fd_local2global((uint32_t)fd);
-        struct file *xf = file_get(gfd);
+        struct FILE *xf = file_get(gfd);
         if (xf == NULL || xf->fd_inode == NULL ||
             fs_check_perm(xf->fd_inode, 1u)) {
             if (fd >= 0)
@@ -334,7 +329,7 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
     *is_linux = 0;
     sys_lseek(fd, 0, SEEK_SET);
     if (*is64) {
-        struct Elf64_Ehdr elf64_header;
+        struct LINUX_ELF64_EHDR elf64_header;
         memset(&elf64_header, 0, sizeof(elf64_header));
         if (read_file(fd, &elf64_header, sizeof(elf64_header)) !=
             sizeof(elf64_header)) {
@@ -344,7 +339,7 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         if ((elf64_header.e_type != 2 && !is_dyn) ||
             elf64_header.e_machine != EM_X86_64 ||
             elf64_header.e_version != 1 || elf64_header.e_phnum > 1024 ||
-            elf64_header.e_phentsize != sizeof(struct Elf64_Phdr)) {
+            elf64_header.e_phentsize != sizeof(struct LINUX_ELF64_PHDR)) {
             goto done;
         }
 
@@ -352,9 +347,9 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         uint32_t dyn_vaddr = 0;
         if (is_dyn) {
             uint32_t min_v = 0xffffffffu, max_e = 0;
-            Elf64_Off pho = elf64_header.e_phoff;
+            uint64_t pho = elf64_header.e_phoff;
             for (uint32_t i = 0; i < elf64_header.e_phnum; i++) {
-                struct Elf64_Phdr ph;
+                struct LINUX_ELF64_PHDR ph;
                 sys_lseek(fd, pho, SEEK_SET);
                 if (read_file(fd, &ph, sizeof(ph)) != sizeof(ph))
                     goto done;
@@ -376,12 +371,12 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
             bias = USER_VADDR_START + off;
         }
 
-        struct wx_range wx[16];
+        struct MM_WX_RANGE wx[16];
         int wxn = 0;
-        Elf64_Off prog_header_offset = elf64_header.e_phoff;
+        uint64_t prog_header_offset = elf64_header.e_phoff;
         for (uint32_t prog_idx = 0; prog_idx < elf64_header.e_phnum;
              prog_idx++) {
-            struct Elf64_Phdr prog64_header;
+            struct LINUX_ELF64_PHDR prog64_header;
             memset(&prog64_header, 0, sizeof(prog64_header));
             sys_lseek(fd, prog_header_offset, SEEK_SET);
             if (read_file(fd, &prog64_header, sizeof(prog64_header)) !=
@@ -398,7 +393,7 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
                 sys_lseek(fd,
                           prog_header_offset +
                               prog_idx * elf64_header.e_phentsize +
-                              sizeof(struct Elf64_Phdr),
+                              sizeof(struct LINUX_ELF64_PHDR),
                           SEEK_SET);
             }
 
@@ -460,11 +455,11 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         *bias_out = bias;
         {
             uint32_t gfd2 = fd_local2global((uint32_t)fd);
-            struct file *xf = file_get(gfd2);
+            struct FILE *xf = file_get(gfd2);
             if (xf != NULL && xf->fd_inode != NULL &&
                 (xf->fd_inode->i_mode & 0xF000u) == 0x8000u) {
                 uint32_t xm = xf->fd_inode->i_mode;
-                struct task_struct *xt = current;
+                struct TASK *xt = current;
                 if (xm & 0x800u) {
                     xt->euid = xf->fd_inode->i_uid;
                     xt->suid = xt->euid;
@@ -481,8 +476,8 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         }
         *brk_base_out = pick_brk_base(image_end);
     } else {
-        struct Elf32_Ehdr elf_header;
-        struct Elf32_Phdr prog_header;
+        struct LINUX_ELF32_EHDR elf_header;
+        struct LINUX_ELF32_PHDR prog_header;
         memset(&elf_header, 0, sizeof(elf_header));
         if (read_file(fd, &elf_header, sizeof(elf_header)) !=
             sizeof(elf_header)) {
@@ -491,11 +486,11 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
         if (memcmp(elf_header.e_ident, "\177ELF\1\1\1", 7) ||
             elf_header.e_type != 2 || elf_header.e_machine != EM_386 ||
             elf_header.e_version != 1 || elf_header.e_phnum > 1024 ||
-            elf_header.e_phentsize != sizeof(struct Elf32_Phdr)) {
+            elf_header.e_phentsize != sizeof(struct LINUX_ELF32_PHDR)) {
             goto done;
         }
 
-        Elf32_Off prog_header_offset = elf_header.e_phoff;
+        uint32_t prog_header_offset = elf_header.e_phoff;
         for (uint32_t prog_idx = 0; prog_idx < elf_header.e_phnum; prog_idx++) {
             memset(&prog_header, 0, sizeof(prog_header));
             sys_lseek(fd, prog_header_offset, SEEK_SET);
@@ -510,7 +505,7 @@ static int32_t load(const char *pathname, int *is64, int *is_linux,
                 sys_lseek(fd,
                           prog_header_offset +
                               prog_idx * elf_header.e_phentsize +
-                              sizeof(struct Elf32_Phdr),
+                              sizeof(struct LINUX_ELF32_PHDR),
                           SEEK_SET);
             }
 
@@ -563,6 +558,7 @@ done:
     close_file(fd);
     return ret;
 }
+
 static int count_strs(const char *const *strs, uint32_t *lens, int kcaller) {
     int n = 0;
     if (strs == NULL)
@@ -587,10 +583,10 @@ static int count_strs(const char *const *strs, uint32_t *lens, int kcaller) {
 }
 
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
-                   struct Registers *regs) {
+                   struct X86_REGS *regs) {
     uint32_t argc;
     int32_t entry_point;
-    struct task_struct *cur;
+    struct TASK *cur;
     uint32_t old_pml4_phys;
     uint32_t ustack_ptr;
     uint32_t argv_user_addrs[MAX_ARG_NR];
@@ -600,7 +596,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t argv_user_base;
     int32_t i;
     uint32_t slen;
-    struct Registers *ps;
+    struct X86_REGS *ps;
     int is64 = 0;
     int is_linux = 0;
     uint32_t aux_phdr_vaddr = 0;
@@ -806,7 +802,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     }
 
     ps =
-        (struct Registers *)(cur->kernel_stack_top - THREAD_STACK_SIZE + 0x100);
+        (struct X86_REGS *)(cur->kernel_stack_top - THREAD_STACK_SIZE + 0x100);
     fill_entry_regs(ps, (uint32_t)entry_point, is64, ustack_ptr, argc,
                     argv_user_base);
 
@@ -818,6 +814,6 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
 }
 
 int32_t sys_execv(const char *path, const char *argv[],
-                  struct Registers *regs) {
+                  struct X86_REGS *regs) {
     return sys_execve(path, argv, NULL, regs);
 }

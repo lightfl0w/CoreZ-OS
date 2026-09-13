@@ -45,7 +45,7 @@ static void wash_path(char *old_abs_path, char *new_abs_path) {
 
 void make_clear_abs_path(char *path, char *final_path) {
     char abs_path[MAX_PATH_LEN] = {0};
-    
+
     if (path[0] != '/') {
         if (getcwd(abs_path, MAX_PATH_LEN) != NULL) {
             if (!((abs_path[0] == '/') && (abs_path[1] == 0))) {
@@ -90,7 +90,7 @@ char *buildin_cd(int32_t argc, char **argv) {
 
 void buildin_ls(int32_t argc, char **argv) {
     char *pathname = NULL;
-    struct stat file_stat;
+    struct FS_STAT file_stat;
     int long_info = 0;
     int arg_path_nr = 0;
     int32_t arg_idx = 1;
@@ -138,12 +138,12 @@ void buildin_ls(int32_t argc, char **argv) {
     }
 
     if (file_stat.st_filetype == FT_DIRECTORY) {
-        struct dir *dir = opendir(pathname);
+        struct FS_DIR *dir = opendir(pathname);
         if (dir == NULL) {
             printf("ls: cannot open directory %s\n", pathname);
             return;
         }
-        struct dir_entry *dir_e = NULL;
+        struct FS_DIRENT *dir_e = NULL;
         char sub_pathname[MAX_PATH_LEN] = {0};
         uint32_t pathname_len = strlen(pathname);
         uint32_t last_char_idx = pathname_len - 1;

@@ -1,5 +1,4 @@
 
-
 #ifndef USER_SYSCALL_H
 #define USER_SYSCALL_H
 
@@ -7,19 +6,19 @@
 #include "kernel/syscall_nr.h"
 #include "kernel/nt_ping_reply.h"
 
-struct stat;
-struct dir;
-struct dir_entry;
+struct FS_STAT;
+struct FS_DIR;
+struct FS_DIRENT;
 
-struct timespec {
+struct SYS_TIMESPEC {
     int32_t tv_sec;
     int32_t tv_nsec;
 };
-struct timeval {
+struct SYS_TIMEVAL {
     int32_t tv_sec;
     int32_t tv_usec;
 };
-struct linux_dirent {
+struct LINUX_DIRENT {
     uint32_t d_ino;
     uint32_t d_off;
     uint16_t d_reclen;
@@ -62,11 +61,11 @@ int32_t  mkdir(const char* pathname);
 int32_t  rmdir(const char* pathname);
 int32_t  chdir(const char* path);
 char*    getcwd(char* buf, uint32_t size);
-int32_t  stat(const char* path, struct stat* buf);
-struct dir* opendir(const char* name);
-int32_t  closedir(struct dir* dir);
-struct dir_entry* readdir(struct dir* dir);
-void     rewinddir(struct dir* dir);
+int32_t  stat(const char* path, struct FS_STAT* buf);
+struct FS_DIR* opendir(const char* name);
+int32_t  closedir(struct FS_DIR* dir);
+struct FS_DIRENT* readdir(struct FS_DIR* dir);
+void     rewinddir(struct FS_DIR* dir);
 void     ps(void);
 int32_t  execv(const char* path, const char* argv[]);
 void     exit(int32_t status);
@@ -83,19 +82,19 @@ int32_t  mprotect(void* addr, uint32_t len, int prot);
 int32_t  futex(uint32_t uaddr, int op, uint32_t val, void* timeout);
 int32_t  clone(uint32_t flags, void* child_stack);
 
-int32_t  fstat(int32_t fd, struct stat* buf);
+int32_t  fstat(int32_t fd, struct FS_STAT* buf);
 int32_t  dup(int32_t oldfd);
 int32_t  dup2(int32_t oldfd, int32_t newfd);
 int32_t  fcntl(int32_t fd, int32_t cmd, uint32_t arg);
-int32_t  getdents(int32_t fd, struct linux_dirent* dirp, uint32_t count);
+int32_t  getdents(int32_t fd, struct LINUX_DIRENT* dirp, uint32_t count);
 int32_t  readlink(const char* path, char* buf, uint32_t bufsiz);
 int32_t  access(const char* path, int32_t mode);
 int32_t  rename(const char* oldpath, const char* newpath);
 int32_t  truncate(const char* path, int32_t length);
 int32_t  chmod(const char* path, uint32_t mode);
-int32_t  clock_gettime(int32_t clk_id, struct timespec* tp);
-int32_t  gettimeofday(struct timeval* tv, void* tz);
-int32_t  nanosleep(const struct timespec* req, struct timespec* rem);
+int32_t  clock_gettime(int32_t clk_id, struct SYS_TIMESPEC* tp);
+int32_t  gettimeofday(struct SYS_TIMEVAL* tv, void* tz);
+int32_t  nanosleep(const struct SYS_TIMESPEC* req, struct SYS_TIMESPEC* rem);
 uint32_t getuid(void);
 uint32_t getgid(void);
 uint32_t geteuid(void);
@@ -103,7 +102,7 @@ uint32_t getegid(void);
 void     exit_group(int32_t status);
 
 int32_t  icmp_send(uint32_t dst, uint16_t id, uint16_t seq);
-int32_t  icmp_recv(struct nt_ping_reply* buf, int32_t max);
+int32_t  icmp_recv(struct NET_PING_REPLY* buf, int32_t max);
 
 int32_t  socket(int32_t domain, int32_t type, int32_t proto);
 int32_t  sock_bind(int32_t fd, uint32_t ip, uint16_t port);

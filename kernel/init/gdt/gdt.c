@@ -1,14 +1,14 @@
 #include "kernel/init/gdt/gdt.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "kernel/sched/percpu.h"
 
-struct gdt_desc gdt[GDT_ENTRIES];
-struct gdtr {
+struct GDT_DESC gdt[GDT_ENTRIES];
+struct GDT_REG {
     uint16_t limit;
     uint64_t base;
 } __attribute__((packed)) gdtr0;
 
-static void desc_init(struct gdt_desc *d, uint64_t base, uint32_t limit,
+static void desc_init(struct GDT_DESC *d, uint64_t base, uint32_t limit,
                       uint8_t attr_low, uint8_t attr_high) {
     d->limit_low = limit & 0xFFFF;
     d->base_low = base & 0xFFFF;
@@ -18,7 +18,7 @@ static void desc_init(struct gdt_desc *d, uint64_t base, uint32_t limit,
     d->base_high = (base >> 24) & 0xFF;
 }
 
-void tss_desc_init(struct gdt_desc *d, uint64_t base, uint32_t limit) {
+void tss_desc_init(struct GDT_DESC *d, uint64_t base, uint32_t limit) {
     uint8_t *p = (uint8_t *)d;
     p[0] = limit & 0xFF;
     p[1] = (limit >> 8) & 0xFF;

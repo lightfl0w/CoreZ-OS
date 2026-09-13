@@ -1,29 +1,29 @@
 #include "kernel/fs/inode.h"
 
 #include "drivers/block/ide.h"
-#include "kernel/asmFunc.h"
+#include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/ext2.h"
 #include "kernel/fs/fs.h"
 
-struct inode *inode_open(struct partition *part, uint32_t inode_no) {
+struct FS_INODE *inode_open(struct DISK_PARTITION *part, uint32_t inode_no) {
     uint32_t old;
     struct RB_NODE *found;
-    struct inode *inode;
+    struct FS_INODE *inode;
 
     old = asm_save_eflags();
     asm_cli();
     found = rb_find(&part->open_inodes_rb, inode_no);
     if (found != NULL) {
-        inode = rb_entry(found, struct inode, inode_rb_node);
+        inode = rb_entry(found, struct FS_INODE, inode_rb_node);
         inode->i_open_cnt++;
         asm_restore_eflags(old);
         return inode;
     }
     asm_restore_eflags(old);
 
-    inode = (struct inode *)get_kernel_pages(1);
+    inode = (struct FS_INODE *)get_kernel_pages(1);
     if (inode == NULL) {
         return NULL;
     }
@@ -40,7 +40,7 @@ struct inode *inode_open(struct partition *part, uint32_t inode_no) {
     asm_cli();
     found = rb_find(&part->open_inodes_rb, inode_no);
     if (found != NULL) {
-        struct inode *existing = rb_entry(found, struct inode, inode_rb_node);
+        struct FS_INODE *existing = rb_entry(found, struct FS_INODE, inode_rb_node);
         existing->i_open_cnt++;
         asm_restore_eflags(old);
         free_kernel_page((uint32_t)inode);
@@ -51,7 +51,7 @@ struct inode *inode_open(struct partition *part, uint32_t inode_no) {
     return inode;
 }
 
-void inode_close(struct inode *inode) {
+void inode_close(struct FS_INODE *inode) {
     if (inode == NULL || inode->i_open_cnt == 0) {
         return;
     }

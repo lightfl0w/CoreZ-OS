@@ -1,7 +1,7 @@
 #ifndef SYSCALL_NR_H
 #define SYSCALL_NR_H
 
-enum syscall_nr {
+enum SYS_NR {
     SYS_GETPID,
     SYS_WRITE,
     SYS_READ,

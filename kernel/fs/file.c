@@ -6,9 +6,9 @@
 #include "kernel/fs/inode.h"
 #include "drivers/char/tty.h"
 #include "lib/str/str.h"
-struct file file_table[MAX_FILE_OPEN];
+struct FILE file_table[MAX_FILE_OPEN];
 
-struct lock file_table_lock;
+struct SCHED_LOCK file_table_lock;
 
 void file_table_init(void) {
     lock_init(&file_table_lock);
@@ -44,7 +44,7 @@ void file_table_free_slot(int idx) {
     lock_release(&file_table_lock);
 }
 
-struct file *file_get(uint32_t gfd) {
+struct FILE *file_get(uint32_t gfd) {
     if (gfd >= MAX_FILE_OPEN) {
         return NULL;
     }
@@ -59,6 +59,7 @@ void file_table_ref(uint32_t gfd) {
     file_table[gfd].ref_cnt++;
     lock_release(&file_table_lock);
 }
+
 int fd_install(int32_t global_fd_idx) {
     uint32_t local_fd = 3;
     while (local_fd < MAX_FILES_OPEN_PER_PROC) {
@@ -70,6 +71,7 @@ int fd_install(int32_t global_fd_idx) {
     }
     return -1;
 }
+
 int fd_release(uint32_t local_fd) {
     if (local_fd >= MAX_FILES_OPEN_PER_PROC) {
         return -1;
@@ -77,16 +79,19 @@ int fd_release(uint32_t local_fd) {
     current->fd_table[local_fd] = (uint32_t)-1;
     return 0;
 }
+
 uint32_t fd_local2global(uint32_t local_fd) {
     if (local_fd >= MAX_FILES_OPEN_PER_PROC) {
         return (uint32_t)-1;
     }
     return current->fd_table[local_fd];
 }
-static int chardev_tty(const struct inode *ino) {
+
+static int chardev_tty(const struct FS_INODE *ino) {
     return (ino->i_block[0] >> 8) == 5u;
 }
-static uint32_t chardev_read(const struct inode *ino, void *buf,
+
+static uint32_t chardev_read(const struct FS_INODE *ino, void *buf,
                              uint32_t count) {
     if (ino->i_block[0] >> 8 == 5u)
         return (uint32_t)TTY.read((char *)buf, count);
@@ -94,20 +99,23 @@ static uint32_t chardev_read(const struct inode *ino, void *buf,
         memset(buf, 0, count);
     return ino->i_block[0] == 0x0105u ? count : 0;
 }
-static uint32_t chardev_write(const struct inode *ino, const void *buf,
+
+static uint32_t chardev_write(const struct FS_INODE *ino, const void *buf,
                               uint32_t count) {
     if (ino->i_block[0] >> 8 == 5u)
         return (uint32_t)TTY.write((const char *)buf, count);
     return count;
 }
-uint32_t file_read(struct file *file, void *buf, uint32_t count) {
+
+uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
         return chardev_read(file->fd_inode, buf, count);
     int r = ext2_read_from_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
 }
-uint32_t file_write(struct file *file, const void *buf, uint32_t count) {
+
+uint32_t file_write(struct FILE *file, const void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
         return chardev_write(file->fd_inode, buf, count);
     int r = ext2_write_to_inode(file->fd_inode, file->fd_pos, buf, count);

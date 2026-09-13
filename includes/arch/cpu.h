@@ -1,4 +1,6 @@
-#pragma once
+#ifndef ARCH_CPU_H
+#define ARCH_CPU_H
+
 #include <stdint.h>
 
 static inline void cpu_cli(void) {
@@ -86,3 +88,5 @@ static inline void cpu_outs(uint16_t port, const void *buf, int count, int width
     else
         __asm__ volatile("rep outsb" : "+S"(buf), "+c"(count) : "d"(port) : "memory");
 }
+
+#endif /* ARCH_CPU_H */

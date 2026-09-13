@@ -14,7 +14,7 @@ struct RB_NODE {
     struct RB_NODE *left;
     struct RB_NODE *right;
     enum RB_COLOR color;
-    uint64_t key;           
+    uint64_t key;
 };
 
 struct RB_ROOT {

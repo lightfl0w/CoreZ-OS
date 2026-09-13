@@ -45,7 +45,7 @@ typedef int32_t pid_t;
 
 typedef uint32_t sigset_t;
 
-struct sigaction {
+struct SYS_SIGACTION {
     void (*sa_handler)(int);
     uint32_t sa_mask;
     uint32_t sa_flags;
@@ -54,7 +54,7 @@ struct sigaction {
 
 void __restore(void);
 
-int sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+int sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int kill(pid_t pid, int sig);
 void (*signal(int sig, void (*handler)(int)))(int);

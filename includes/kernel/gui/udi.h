@@ -4,7 +4,7 @@
 #include "kernel/gui/gfx.h"
 #include <stdint.h>
 
-struct udi_buffer {
+struct GUI_UDI_BUFFER {
     uint64_t handle;
     void *vmem;
     uint32_t w;
@@ -13,19 +13,19 @@ struct udi_buffer {
     uint32_t size;
 };
 
-struct udi_ops {
+struct GUI_UDI_OPS {
     const char *name;
     int (*probe)(void);
     int (*init)(uint32_t *w, uint32_t *h, uint32_t bpp);
     int (*alloc_buffer)(uint32_t w, uint32_t h, uint32_t bpp,
-                        struct udi_buffer *out);
+                        struct GUI_UDI_BUFFER *out);
     void (*free_buffer)(uint64_t handle);
-    int (*commit)(uint64_t handle, struct gfx_rect *rects, int n);
+    int (*commit)(uint64_t handle, struct GFX_RECT *rects, int n);
     void (*wait_vblank)(void);
 };
 
 int udi_init(uint32_t *w, uint32_t *h, uint32_t bpp);
-struct udi_ops *udi_active(void);
-void udi_register(struct udi_ops *ops);
+struct GUI_UDI_OPS *udi_active(void);
+void udi_register(struct GUI_UDI_OPS *ops);
 
 #endif

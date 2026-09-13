@@ -37,11 +37,11 @@ enum {
     VGPU_FORMAT_B8G8R8A8_UNORM = 1,
 };
 
-struct vgpu_rect {
+struct VGPU_RECT {
     uint32_t x, y, w, h;
 };
 
-struct vgpu_ctrl_hdr {
+struct VGPU_CTRL_HDR {
     uint32_t type;
     uint32_t flags;
     uint64_t fence_id;
@@ -50,59 +50,59 @@ struct vgpu_ctrl_hdr {
     uint8_t padding[3];
 } __attribute__((packed));
 
-struct vgpu_ctrl_resp {
-    struct vgpu_ctrl_hdr hdr;
+struct VGPU_CTRL_RESP {
+    struct VGPU_CTRL_HDR hdr;
 } __attribute__((packed));
 
-struct vgpu_resource_create_2d {
-    struct vgpu_ctrl_hdr hdr;
+struct VGPU_RESOURCE_CREATE_2D {
+    struct VGPU_CTRL_HDR hdr;
     uint32_t resource_id;
     uint32_t format;
     uint32_t width;
     uint32_t height;
 } __attribute__((packed));
 
-struct vgpu_resource_unref {
-    struct vgpu_ctrl_hdr hdr;
+struct VGPU_RESOURCE_UNREF {
+    struct VGPU_CTRL_HDR hdr;
     uint32_t resource_id;
     uint32_t padding;
 } __attribute__((packed));
 
-struct vgpu_set_scanout {
-    struct vgpu_ctrl_hdr hdr;
-    struct vgpu_rect r;
+struct VGPU_SET_SCANOUT {
+    struct VGPU_CTRL_HDR hdr;
+    struct VGPU_RECT r;
     uint32_t scanout_id;
     uint32_t resource_id;
 } __attribute__((packed));
 
-struct vgpu_resource_flush {
-    struct vgpu_ctrl_hdr hdr;
-    struct vgpu_rect r;
+struct VGPU_RESOURCE_FLUSH {
+    struct VGPU_CTRL_HDR hdr;
+    struct VGPU_RECT r;
     uint32_t resource_id;
     uint32_t padding;
 } __attribute__((packed));
 
-struct vgpu_transfer_to_host_2d {
-    struct vgpu_ctrl_hdr hdr;
-    struct vgpu_rect r;
+struct VGPU_TRANSFER_TO_HOST_2D {
+    struct VGPU_CTRL_HDR hdr;
+    struct VGPU_RECT r;
     uint64_t offset;
     uint32_t resource_id;
     uint32_t padding;
 } __attribute__((packed));
 
-struct vgpu_attach_backing {
-    struct vgpu_ctrl_hdr hdr;
+struct VGPU_ATTACH_BACKING {
+    struct VGPU_CTRL_HDR hdr;
     uint32_t resource_id;
     uint32_t nr_entries;
 } __attribute__((packed));
 
-struct vgpu_mem_entry {
+struct VGPU_MEM_ENTRY {
     uint64_t addr;
     uint32_t length;
     uint32_t padding;
 } __attribute__((packed));
 
-struct vgpu_vq {
+struct VGPU_VQ {
     volatile struct {
         uint64_t addr;
         uint32_t len;
@@ -128,13 +128,13 @@ struct vgpu_vq {
     uint16_t free_count;
 };
 
-static struct vgpu_dev {
+static struct VGPU_DEV {
     volatile uint8_t *common;
     volatile uint8_t *notify;
     uint32_t notify_mult;
     uint16_t notify_off;
     uint32_t queue_size;
-    struct vgpu_vq ctrlq;
+    struct VGPU_VQ ctrlq;
     uint64_t qdesc_phys;
     uint32_t ready;
     uint32_t next_resource;
@@ -252,7 +252,7 @@ static uint64_t vg_v2p(const void *v) {
     return PTE_PHYS(e) | (va & 0xFFFull);
 }
 
-static int vg_alloc_vq(struct vgpu_vq *q, uint16_t size) {
+static int vg_alloc_vq(struct VGPU_VQ *q, uint16_t size) {
     uint32_t bytes = 16 * size + 6 + 2 * size;
     uint32_t pages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE + 1;
     uint8_t *mem = (uint8_t *)get_kernel_pages(pages);
@@ -289,7 +289,7 @@ static int vg_kick_and_wait(void) {
 static uint8_t vg_req_stage[128];
 
 static int vg_cmd(const void *req, uint32_t reqlen, uint32_t cmd_type) {
-    struct vgpu_vq *q = &vg.ctrlq;
+    struct VGPU_VQ *q = &vg.ctrlq;
     if (q->free_count < 2 || reqlen > sizeof(vg_req_stage))
         return -1;
     memcpy(vg_req_stage, req, reqlen);
@@ -304,7 +304,7 @@ static int vg_cmd(const void *req, uint32_t reqlen, uint32_t cmd_type) {
     q->desc[d0].next = d1;
     (void)cmd_type;
 
-    static struct vgpu_ctrl_resp resp;
+    static struct VGPU_CTRL_RESP resp;
     q->desc[d1].addr = vg_v2p(&resp);
     q->desc[d1].len = sizeof(resp);
     q->desc[d1].flags = VIRTQ_DESC_F_WRITE;
@@ -400,16 +400,16 @@ static int vg_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
     return 0;
 }
 
-struct vgpu_fb {
+struct VGPU_FB {
     uint64_t rid;
     uint8_t *mem;
     uint32_t w, h, size;
 };
 
-static struct vgpu_fb vfb;
+static struct VGPU_FB vfb;
 
 static int vg_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
-                           struct udi_buffer *out) {
+                           struct GUI_UDI_BUFFER *out) {
     if (vg.ready == 0) {
         return -1;
     }
@@ -422,7 +422,7 @@ static int vg_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
     memset(mem, 0, pages * PAGE_SIZE);
 
     uint32_t rid = vg_next_resource();
-    struct vgpu_resource_create_2d create;
+    struct VGPU_RESOURCE_CREATE_2D create;
     memset(&create, 0, sizeof(create));
     create.hdr.type = VGPU_CMD_RESOURCE_CREATE_2D;
     create.resource_id = rid;
@@ -435,8 +435,8 @@ static int vg_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
     }
 
     struct {
-        struct vgpu_attach_backing a;
-        struct vgpu_mem_entry e;
+        struct VGPU_ATTACH_BACKING a;
+        struct VGPU_MEM_ENTRY e;
     } attach;
     memset(&attach, 0, sizeof(attach));
     attach.a.hdr.type = VGPU_CMD_ATTACH_BACKING;
@@ -449,7 +449,7 @@ static int vg_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
         return -1;
     }
 
-    struct vgpu_set_scanout ss;
+    struct VGPU_SET_SCANOUT ss;
     memset(&ss, 0, sizeof(ss));
     ss.hdr.type = VGPU_CMD_SET_SCANOUT;
     ss.r.w = w;
@@ -477,21 +477,21 @@ static int vg_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
 }
 
 static void vg_free_buffer(uint64_t handle) {
-    struct vgpu_resource_unref un;
+    struct VGPU_RESOURCE_UNREF un;
     memset(&un, 0, sizeof(un));
     un.hdr.type = VGPU_CMD_RESOURCE_UNREF;
     un.resource_id = (uint32_t)handle;
     vg_cmd(&un, sizeof(un), un.hdr.type);
 }
 
-static int vg_commit(uint64_t handle, struct gfx_rect *rects, int n) {
+static int vg_commit(uint64_t handle, struct GFX_RECT *rects, int n) {
     (void)handle;
     if (vfb.rid == 0)
         return -1;
     int count = (n > 0) ? n : 0;
     for (int i = 0; i < count; i++) {
-        struct gfx_rect *r = &rects[i];
-        struct vgpu_transfer_to_host_2d t;
+        struct GFX_RECT *r = &rects[i];
+        struct VGPU_TRANSFER_TO_HOST_2D t;
         memset(&t, 0, sizeof(t));
         t.hdr.type = VGPU_CMD_TRANSFER_TO_HOST_2D;
         t.r.x = r->x;
@@ -503,7 +503,7 @@ static int vg_commit(uint64_t handle, struct gfx_rect *rects, int n) {
         if (vg_cmd(&t, sizeof(t), t.hdr.type) != 0)
             return -1;
     }
-    struct vgpu_resource_flush f;
+    struct VGPU_RESOURCE_FLUSH f;
     memset(&f, 0, sizeof(f));
     f.hdr.type = VGPU_CMD_RESOURCE_FLUSH;
     f.r.w = vfb.w;
@@ -516,7 +516,7 @@ static void vg_wait_vblank(void) {
     mtime_sleep(16);
 }
 
-struct udi_ops udi_virtio_ops = {
+struct GUI_UDI_OPS udi_virtio_ops = {
     "virtio-gpu", vg_probe,  vg_init,       vg_alloc_buffer,
     vg_free_buffer, vg_commit, vg_wait_vblank,
 };

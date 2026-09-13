@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-struct IDTEntry {
+struct IDT_ENTRY {
     uint16_t offset_low;
     uint16_t selector;
     uint8_t ist;
@@ -14,6 +14,6 @@ struct IDTEntry {
 #define IDT_TYPE_TRAP_GATE64 0x8F
 #define IDT_TYPE_TRAP_GATE3 0xEF
 
-extern struct IDTEntry idt[256];
+extern struct IDT_ENTRY idt[256];
 
 void idt_init(void);

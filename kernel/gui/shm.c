@@ -6,7 +6,7 @@
 
 #define SHM_MAX_POOLS 32
 
-static struct wl_buffer {
+static struct WL_BUFFER {
     uint8_t *data;
     uint32_t size;
     uint32_t pages;
@@ -14,7 +14,7 @@ static struct wl_buffer {
     uint32_t state;
 } buffers[SHM_MAX_POOLS];
 
-static struct lock shm_lock;
+static struct SCHED_LOCK shm_lock;
 
 void shm_init(void) {
     lock_init(&shm_lock);
@@ -26,7 +26,7 @@ int wl_buffer_create(uint32_t size) {
         return -1;
     lock_acquire(&shm_lock);
     for (int i = 0; i < SHM_MAX_POOLS; i++) {
-        struct wl_buffer *b = &buffers[i];
+        struct WL_BUFFER *b = &buffers[i];
         if (b->refcnt != 0)
             continue;
         uint32_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -67,7 +67,7 @@ void wl_buffer_release(int id) {
     if (id < 0 || id >= SHM_MAX_POOLS)
         return;
     lock_acquire(&shm_lock);
-    struct wl_buffer *b = &buffers[id];
+    struct WL_BUFFER *b = &buffers[id];
     if (b->refcnt == 0) {
         lock_release(&shm_lock);
         return;
@@ -99,8 +99,8 @@ void wl_buffer_set_state(int id, uint32_t st) {
     lock_release(&shm_lock);
 }
 
-struct shm_pool *shm_pool_create(uint32_t size) {
-    static struct shm_pool pools[SHM_MAX_POOLS];
+struct WL_SHM_POOL *shm_pool_create(uint32_t size) {
+    static struct WL_SHM_POOL pools[SHM_MAX_POOLS];
     int id = wl_buffer_create(size);
     if (id < 0)
         return 0;
@@ -120,7 +120,7 @@ struct shm_pool *shm_pool_create(uint32_t size) {
     return 0;
 }
 
-void shm_pool_destroy(struct shm_pool *pool) {
+void shm_pool_destroy(struct WL_SHM_POOL *pool) {
     if (pool == 0 || !pool->in_use)
         return;
     wl_buffer_release(pool->buf_id);

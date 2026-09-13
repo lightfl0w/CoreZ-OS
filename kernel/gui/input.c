@@ -2,7 +2,7 @@
 
 #define INPUT_RING 64
 
-static volatile struct input_event ring[INPUT_RING];
+static volatile struct GUI_INPUT_EVENT ring[INPUT_RING];
 static volatile uint32_t head;
 static volatile uint32_t tail;
 
@@ -24,7 +24,7 @@ int input_post(uint32_t dev, uint32_t code, int32_t value) {
     return 0;
 }
 
-int input_get(struct input_event *ev) {
+int input_get(struct GUI_INPUT_EVENT *ev) {
     if (tail == head)
         return 0;
     ev->dev = ring[tail].dev;

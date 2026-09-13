@@ -5,27 +5,27 @@
 #include <stdint.h>
 
 struct ISO9660_DIRECTORY_RECORD {
-    uint8_t  length;                
-    uint8_t  ext_attr_length;        
+    uint8_t  length;
+    uint8_t  ext_attr_length;
     uint8_t  extent_location[4];
     uint8_t data_length[4];
-    uint8_t  rec_date[7];            
-    uint8_t  file_flags;            
-    uint8_t  file_unit_size;         
-    uint8_t  interleave_gap;       
-    uint8_t  volume_seq_number[2];  
-    uint8_t  name_len;               
-    char     name[1];             
+    uint8_t  rec_date[7];
+    uint8_t  file_flags;
+    uint8_t  file_unit_size;
+    uint8_t  interleave_gap;
+    uint8_t  volume_seq_number[2];
+    uint8_t  name_len;
+    char     name[1];
 } __attribute__((packed));
 
 struct ISO9660_PRIMARY_DESC {
-    uint8_t  type;                  
-    char     id[5];                
-    uint8_t  version;              
-    uint8_t  unused1;            
-    char     system_id[32];       
-    char     volume_id[32];       
-    uint8_t  unused2[8];          
+    uint8_t  type;
+    char     id[5];
+    uint8_t  version;
+    uint8_t  unused1;
+    char     system_id[32];
+    char     volume_id[32];
+    uint8_t  unused2[8];
     uint8_t  volume_space_size[8];
     uint8_t  volume_set_size[4];
     uint8_t  volume_sequence_number[4];
