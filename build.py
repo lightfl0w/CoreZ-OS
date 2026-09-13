@@ -36,8 +36,6 @@ LINKER_DIR = ROOT / "linker"
 SCRIPTS    = ROOT / "scripts"
 MUSL_SRC   = ROOT / "third_modules" / "musl"
 MUSL_ARCH  = "x86_64"
-SHELL_SRC  = ROOT / "third_modules" / "mr_micro_shell"
-NRSHELL    = APPS_DIR / "nr_shell"
 CFLAGS_BASE = [
     "-ffreestanding", "-fno-builtin", "-fno-sanitize=all",
     "-I", str(ROOT / "includes"),
@@ -626,27 +624,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                "-z", "pack-relative-relocs"])
     tasks.append(gui_elf)
     user_elves.append(gui_elf)
-    shell_cflags = UP_CFLAGS_64 + [
-        "-I", str(SHELL_SRC / "inc"),
-        "-I", str(NRSHELL),
-    ]
-    shell_objs = [
-        ("shell_core.o",    SHELL_SRC / "src" / "nr_micro_shell_core.c"),
-        ("shell_cmds.o",    SHELL_SRC / "src" / "nr_micro_shell_cmds.c"),
-        ("nr_shell_main.o", NRSHELL / "nr_shell_main.c"),
-    ]
-    for stem, src in shell_objs:
-        tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, shell_cflags))
-
-    nr_shell_elf = task_link("nr_shell.elf", BUILD_DIR / "nr_shell.elf", tools,
-        [BUILD_DIR / "up_start.o",
-         BUILD_DIR / "shell_core.o", BUILD_DIR / "shell_cmds.o",
-         BUILD_DIR / "nr_shell_main.o", *lib_objs],
-        flags=["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"), "-e", "_start",
-               "-static", "-pie", "--no-dynamic-linker",
-               "-z", "pack-relative-relocs"])
-    tasks.append(nr_shell_elf)
-    user_elves.append(nr_shell_elf)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [

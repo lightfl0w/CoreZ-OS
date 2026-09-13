@@ -93,7 +93,6 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | `cwd_test`                                  | `getcwd` 边界                  |
 | `cat`                                       | 文件读取（支持 `/proc/meminfo`）     |
 | `ping` / `udp_echo`                         | ICMP ping / UDP 回显服务         |
-| `nr_shell`                                  | 移植的 nr\_micro\_shell         |
 | `font_demo`                                 | TTF 字体渲染                     |
 | `gui_launch`                                | GUI 合成器入口                    |
 | `lc_demo` / `musl_demo` / `libc_tests_main` | 自带 libc / musl ABI / libc 测试套件 |
@@ -130,7 +129,7 @@ libc-testsuite）、mr\_micro\_shell、toybox。
 ├── lib/                    # str/list/rbtree/rand
 ├── libc/                   # 自带 mini-libc（user/）与 compat 层
 ├── apps/                   # 用户程序（见上表）
-└── third_modules/          # musl / libc-testsuite / mr_micro_shell / toybox
+└── third_modules/          # musl / libc-testsuite / toybox
 ```
 
 ## 构建与运行
