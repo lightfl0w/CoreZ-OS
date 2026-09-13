@@ -16,7 +16,7 @@
 
 #define MAP_FAILED ((void *)-1)
 
-struct mmap_args {
+struct SYS_MMAP_ARGS {
     uint32_t addr;
     uint32_t len;
     uint32_t prot;
@@ -25,7 +25,7 @@ struct mmap_args {
     uint32_t offset;
 };
 
-uint32_t sys_mmap(const struct mmap_args *args);
+uint32_t sys_mmap(const struct SYS_MMAP_ARGS *args);
 uint32_t sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags,
                    uint32_t fd, uint32_t offset);
 int32_t sys_munmap(uint32_t addr, uint32_t len);

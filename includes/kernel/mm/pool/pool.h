@@ -8,28 +8,28 @@
 #define MEMORY_BASE 0x100000
 #define MAX_PHYS_MEM 0x20000000
 
-struct pool {
-    struct bitmap pool_bitmap;
+struct MM_POOL {
+    struct MM_BITMAP pool_bitmap;
     uint32_t phy_addr_start;
     uint32_t pool_size;
 };
 
-struct virtual_addr {
-    struct bitmap vaddr_bitmap;
+struct MM_VADDR {
+    struct MM_BITMAP vaddr_bitmap;
     uint32_t vaddr_start;
 };
 
-extern struct pool kernel_pool;
-extern struct virtual_addr kernel_vaddr;
+extern struct MM_POOL kernel_pool;
+extern struct MM_VADDR kernel_vaddr;
 extern uint64_t kernel_pml4;
 extern uint32_t kernel_kphys;
 
 void pae_init(void);
 void mm_init(void);
-void *palloc(struct pool *pool);
+void *palloc(struct MM_POOL *pool);
 uint32_t kernel_pool_free_count(void);
-void pfree(struct pool *pool, uint32_t phy_addr);
-uint32_t palloc_pages(struct pool *pool, uint32_t cnt);
+void pfree(struct MM_POOL *pool, uint32_t phy_addr);
+uint32_t palloc_pages(struct MM_POOL *pool, uint32_t cnt);
 
 #define COW_FLAG (1u << 9)
 

@@ -132,8 +132,8 @@ static void cmd_execute(int32_t argc, char **argv) {
     } else {
         make_clear_abs_path(argv[0], final_path);
         char *prog_path = final_path;
-        struct stat file_stat;
-        memset(&file_stat, 0, sizeof(struct stat));
+        struct FS_STAT file_stat;
+        memset(&file_stat, 0, sizeof(struct FS_STAT));
         if (stat(prog_path, &file_stat) == -1 && !strchr(argv[0], '.') &&
             strlen(prog_path) + 4 < MAX_PATH_LEN) {
             strcat(prog_path, ".elf");

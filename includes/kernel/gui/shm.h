@@ -4,13 +4,13 @@
 #include "kernel/sched/sync.h"
 #include <stdint.h>
 
-enum wlbuf_state {
+enum WL_BUF_STATE {
     WLBUF_FREE = 0,
     WLBUF_READY = 1,
     WLBUF_DIRTY = 2,
 };
 
-struct shm_pool {
+struct WL_SHM_POOL {
     uint8_t *data;
     uint32_t size;
     uint32_t pages;
@@ -19,8 +19,8 @@ struct shm_pool {
 };
 
 void shm_init(void);
-struct shm_pool *shm_pool_create(uint32_t size);
-void shm_pool_destroy(struct shm_pool *pool);
+struct WL_SHM_POOL *shm_pool_create(uint32_t size);
+void shm_pool_destroy(struct WL_SHM_POOL *pool);
 
 int wl_buffer_create(uint32_t size);
 void *wl_buffer_map(int id);

@@ -3,19 +3,19 @@
 #include <stdint.h>
 #define PER_CPU_BASE 0x00100000u
 #define NR_CPU 4
-struct task_struct;
-struct percpu_data {
-    struct task_struct *current_task;
+struct TASK;
+struct SCHED_PERCPU {
+    struct TASK *current_task;
     uint32_t cpu_id;
 };
 #define SELECTOR_PER_CPU 0x40
-static inline struct task_struct *get_current(void) {
-    struct task_struct *cur;
+static inline struct TASK *get_current(void) {
+    struct TASK *cur;
     __asm__ volatile("movq %%gs:0, %0" : "=r"(cur) : : "memory");
     return cur;
 }
 
-static inline void set_current(struct task_struct *t) {
+static inline void set_current(struct TASK *t) {
     __asm__ volatile("movq %0, %%gs:0" : : "r"(t) : "memory");
 }
 

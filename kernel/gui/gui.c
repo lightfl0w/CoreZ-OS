@@ -33,7 +33,7 @@ static void load_embedded_font(void) {
 }
 
 static void load_disk_font(void) {
-    struct stat st;
+    struct FS_STAT st;
     if (sys_stat("/font_subset.ttf", &st) != 0 || st.st_size == 0 ||
         st.st_size > FONT_DISK_MAX)
         return;

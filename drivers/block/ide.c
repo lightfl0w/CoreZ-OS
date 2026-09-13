@@ -41,13 +41,13 @@
 #define MAX_LBA28 (0x0FFFFFFF)
 
 uint8_t channel_cnt;
-struct ide_channel channels[2];
+struct IDE_CHANNEL channels[2];
 
 uint32_t ext_lba_base = 0;
 uint8_t p_no = 0, l_no = 0;
-struct list partition_list;
+struct LIST partition_list;
 
-struct partition_table_entry {
+struct DISK_PART_ENTRY {
     uint8_t bootable;
     uint8_t start_head;
     uint8_t start_sec;
@@ -60,17 +60,17 @@ struct partition_table_entry {
     uint32_t sec_cnt;
 } __attribute__((packed));
 
-struct boot_sector {
+struct DISK_BOOT_SECTOR {
     uint8_t other[446];
-    struct partition_table_entry partition_table[4];
+    struct DISK_PART_ENTRY partition_table[4];
     uint16_t signature;
 } __attribute__((packed));
 
-_Static_assert(sizeof(struct partition_table_entry) == 16,
+_Static_assert(sizeof(struct DISK_PART_ENTRY) == 16,
                "partition_table_entry must be exactly 16 bytes (MBR spec)");
-_Static_assert(sizeof(struct boot_sector) == 512,
+_Static_assert(sizeof(struct DISK_BOOT_SECTOR) == 512,
                "boot_sector must be exactly 512 bytes (one sector)");
-_Static_assert(offsetof(struct boot_sector, partition_table) == 446,
+_Static_assert(offsetof(struct DISK_BOOT_SECTOR, partition_table) == 446,
                "partition_table must start at offset 446 in boot_sector");
 
 static void ide_panic(const char *msg) {
@@ -82,7 +82,7 @@ static void ide_panic(const char *msg) {
     }
 }
 
-static void select_disk(struct disk *hd) {
+static void select_disk(struct DISK *hd) {
     uint8_t reg_device = BIT_DEV_MBS | BIT_DEV_LBA;
     if (hd->dev_no == 1) {
         reg_device |= BIT_DEV_DEV;
@@ -90,9 +90,9 @@ static void select_disk(struct disk *hd) {
     outb(reg_dev(hd->my_channel), reg_device);
 }
 
-static void select_sector(struct disk *hd, uint32_t lba, uint8_t sec_cnt) {
+static void select_sector(struct DISK *hd, uint32_t lba, uint8_t sec_cnt) {
     ASSERT(lba <= hd->max_lba);
-    struct ide_channel *channel = hd->my_channel;
+    struct IDE_CHANNEL *channel = hd->my_channel;
     outb(reg_sect_cnt(channel), sec_cnt);
     outb(reg_lba_l(channel), lba);
     outb(reg_lba_m(channel), lba >> 8);
@@ -103,29 +103,29 @@ static void select_sector(struct disk *hd, uint32_t lba, uint8_t sec_cnt) {
                                (uint8_t)(lba >> 24));
 }
 
-static void wait_bsy_clear(struct ide_channel *channel) {
+static void wait_bsy_clear(struct IDE_CHANNEL *channel) {
     while (inb(reg_status(channel)) & BIT_ALT_STAT_BSY) {
     }
 }
 
-static void channel_send_cmd(struct ide_channel *channel, uint8_t cmd) {
+static void channel_send_cmd(struct IDE_CHANNEL *channel, uint8_t cmd) {
     wait_bsy_clear(channel);
     channel->expecting_intr = 1;
     outb(reg_cmd(channel), cmd);
 }
 
-static void read_from_sector(struct disk *hd, void *buf, uint8_t sec_cnt) {
+static void read_from_sector(struct DISK *hd, void *buf, uint8_t sec_cnt) {
     uint32_t words = sec_cnt ? (uint32_t)sec_cnt << 8 : 256 << 8;
     insw(reg_data(hd->my_channel), buf, words);
 }
 
-static void write_to_sector(struct disk *hd, void *buf, uint8_t sec_cnt) {
+static void write_to_sector(struct DISK *hd, void *buf, uint8_t sec_cnt) {
     uint32_t words = sec_cnt ? (uint32_t)sec_cnt << 8 : 256 << 8;
     outsw(reg_data(hd->my_channel), buf, words);
 }
 
-static int busy_wait(struct disk *hd) {
-    struct ide_channel *channel = hd->my_channel;
+static int busy_wait(struct DISK *hd) {
+    struct IDE_CHANNEL *channel = hd->my_channel;
     uint32_t timeout = 30 * 1000 * 100;
     while (timeout--) {
         uint8_t st = inb(reg_status(channel));
@@ -136,7 +136,7 @@ static int busy_wait(struct disk *hd) {
     return 0;
 }
 
-void ide_read(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
+void ide_read(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
     ASSERT(lba <= hd->max_lba);
     ASSERT(sec_cnt > 0);
     lock_acquire(&hd->my_channel->lock);
@@ -165,7 +165,7 @@ void ide_read(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
     lock_release(&hd->my_channel->lock);
 }
 
-void ide_write(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
+void ide_write(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
     ASSERT(lba <= hd->max_lba);
     ASSERT(sec_cnt > 0);
     lock_acquire(&hd->my_channel->lock);
@@ -198,7 +198,7 @@ void ide_write(struct disk *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
 void intr_hd_handler(uint8_t irq_no) {
     ASSERT(irq_no == 0x2e || irq_no == 0x2f);
     uint32_t no = irq_no - 0x2e;
-    struct ide_channel *channel = &channels[no];
+    struct IDE_CHANNEL *channel = &channels[no];
     ASSERT(channel->irq_no == irq_no);
     channel->expecting_intr = 0;
     inb(reg_status(channel));
@@ -215,7 +215,7 @@ static void swap_pairs_bytes(const char *dst, char *buf, uint32_t len) {
     buf[idx] = '\0';
 }
 
-static void identify_disk(struct disk *hd) {
+static void identify_disk(struct DISK *hd) {
     char id_info[512];
     select_disk(hd);
     channel_send_cmd(hd->my_channel, CMD_IDENTIFY);
@@ -245,14 +245,14 @@ static void identify_disk(struct disk *hd) {
     }
 }
 
-static void partition_scan(struct disk *hd, uint32_t ext_lba) {
-    struct boot_sector *bs = (struct boot_sector *)get_kernel_pages(1);
+static void partition_scan(struct DISK *hd, uint32_t ext_lba) {
+    struct DISK_BOOT_SECTOR *bs = (struct DISK_BOOT_SECTOR *)get_kernel_pages(1);
     if (bs == NULL) {
         return;
     }
     ide_read(hd, ext_lba, bs, 1);
     uint8_t part_idx = 0;
-    struct partition_table_entry *p = bs->partition_table;
+    struct DISK_PART_ENTRY *p = bs->partition_table;
 
     while (part_idx++ < 4) {
         if (p->fs_type == 0x5) {
@@ -290,9 +290,9 @@ static void partition_scan(struct disk *hd, uint32_t ext_lba) {
 }
 
 static void print_partition_info(void) {
-    struct list_elem *e = partition_list.head.next;
+    struct LIST_ELEM *e = partition_list.head.next;
     while (e != &partition_list.tail) {
-        struct partition *part = list_entry(e, struct partition, part_tag);
+        struct DISK_PARTITION *part = list_entry(e, struct DISK_PARTITION, part_tag);
         kprintf("    %s start_lba:0x%x, sec_cnt:0x%x\n", part->name,
                 part->start_lba, part->sec_cnt);
         e = e->next;
@@ -300,17 +300,17 @@ static void print_partition_info(void) {
 }
 
 static int block_read(void *dev, uint32_t lba, void *buf, uint32_t count) {
-    ide_read((struct disk *)dev, lba, buf, count);
+    ide_read((struct DISK *)dev, lba, buf, count);
     return 0;
 }
 
 static int block_write(void *dev, uint32_t lba, const void *buf,
                        uint32_t count) {
-    ide_write((struct disk *)dev, lba, buf, count);
+    ide_write((struct DISK *)dev, lba, buf, count);
     return 0;
 }
 
-const struct block_ops BLOCK = {
+const struct BLOCK_OPS BLOCK = {
     .read_sectors = block_read,
     .write_sectors = block_write,
 };
@@ -332,7 +332,7 @@ void ide_init(void) {
     }
 
     channel_cnt = (uint8_t)DIV_ROUND_UP(hd_cnt, 2);
-    struct ide_channel *channel;
+    struct IDE_CHANNEL *channel;
     uint8_t channel_no = 0, dev_no = 0;
     uint8_t global_dev = 0;
     list_init(&partition_list);
@@ -352,7 +352,7 @@ void ide_init(void) {
         sema_init(&channel->disk_done, 0);
 
         while (dev_no < 2 && global_dev < hd_cnt) {
-            struct disk *hd = &channel->devices[dev_no];
+            struct DISK *hd = &channel->devices[dev_no];
             hd->my_channel = channel;
             hd->dev_no = dev_no;
             sprintf(hd->name, "sd%c", 'a' + channel_no * 2 + dev_no);

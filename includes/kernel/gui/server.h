@@ -6,14 +6,14 @@
 #include "kernel/gui/theme.h"
 #include <stdint.h>
 
-struct shm_pool;
+struct WL_SHM_POOL;
 
 #define WL_MAX_CLIENTS 8
 #define WL_MAX_SURFACES 12
 #define WL_CLIENT_QUEUE 16
 #define WL_MAX_WS 4
 
-enum wl_event_type {
+enum WL_EVENT_TYPE {
     WL_EV_NONE = 0,
     WL_EV_CONFIGURE,
     WL_EV_FRAME,
@@ -21,7 +21,7 @@ enum wl_event_type {
     WL_EV_CLOSE
 };
 
-struct wl_event {
+struct WL_EVENT {
     int type;
     int32_t a, b, c;
 };
@@ -30,19 +30,19 @@ struct wl_event {
 #define MOD_CTRL 2
 #define MOD_ALT 4
 
-struct wl_client {
+struct WL_CLIENT {
     int used;
     char name[16];
-    struct wl_event queue[WL_CLIENT_QUEUE];
+    struct WL_EVENT queue[WL_CLIENT_QUEUE];
     int qhead, qtail;
-    struct semaphore sema;
-    struct lock lock;
-    struct wl_surface *surf;
+    struct SCHED_SEMAPHORE sema;
+    struct SCHED_LOCK lock;
+    struct WL_SURFACE *surf;
 };
 
-struct wl_surface {
+struct WL_SURFACE {
     int used;
-    struct wl_client *client;
+    struct WL_CLIENT *client;
     char title[24];
 
     int x, y, w, h;
@@ -54,33 +54,33 @@ struct wl_surface {
     int frame_pending;
 };
 
-struct wl_client *wl_display_connect(const char *name);
-void wl_display_disconnect(struct wl_client *c);
-struct wl_surface *wl_compositor_create_surface(struct wl_client *c,
+struct WL_CLIENT *wl_display_connect(const char *name);
+void wl_display_disconnect(struct WL_CLIENT *c);
+struct WL_SURFACE *wl_compositor_create_surface(struct WL_CLIENT *c,
                                                 const char *title);
-int wl_surface_attach(struct wl_surface *s, struct shm_pool *pool, int w,
+int wl_surface_attach(struct WL_SURFACE *s, struct WL_SHM_POOL *pool, int w,
                       int h);
-void wl_surface_commit(struct wl_surface *s);
-void wl_surface_destroy(struct wl_surface *s);
-int wl_display_dispatch(struct wl_client *c, struct wl_event *ev);
+void wl_surface_commit(struct WL_SURFACE *s);
+void wl_surface_destroy(struct WL_SURFACE *s);
+int wl_display_dispatch(struct WL_CLIENT *c, struct WL_EVENT *ev);
 
 void comp_init(void);
 void comp_run(void);
 void comp_request_exit(void);
 void comp_damage_rect(int x, int y, int w, int h);
-void comp_damage_surface(struct wl_surface *s);
+void comp_damage_surface(struct WL_SURFACE *s);
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods);
 void comp_post_mouse(int dx, int dy, uint8_t buttons);
 void comp_log(const char *s);
 
-struct wl_surface **comp_surfaces(int *count);
+struct WL_SURFACE **comp_surfaces(int *count);
 int comp_screen_w(void);
 int comp_screen_h(void);
-void comp_send_configure(struct wl_surface *s, int w, int h);
-void comp_send_close(struct wl_surface *s);
-void comp_send_key(struct wl_surface *s, int scancode, int pressed, int mods);
+void comp_send_configure(struct WL_SURFACE *s, int w, int h);
+void comp_send_close(struct WL_SURFACE *s);
+void comp_send_key(struct WL_SURFACE *s, int scancode, int pressed, int mods);
 
-void comp_destroy_surface_pool(struct wl_surface *s, struct shm_pool **pool);
+void comp_destroy_surface_pool(struct WL_SURFACE *s, struct WL_SHM_POOL **pool);
 
 #define COMP_BAR_H 22
 #define COMP_TITLE_H 18

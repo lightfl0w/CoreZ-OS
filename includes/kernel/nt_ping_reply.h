@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-struct nt_ping_reply {
+struct NET_PING_REPLY {
     uint32_t src;
     uint16_t id;
     uint16_t seq;

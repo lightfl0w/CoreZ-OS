@@ -14,7 +14,7 @@ static int vmw_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
 }
 
 static int vmw_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
-                            struct udi_buffer *out) {
+                            struct GUI_UDI_BUFFER *out) {
     (void)w;
     (void)h;
     (void)bpp;
@@ -26,7 +26,7 @@ static void vmw_free_buffer(uint64_t handle) {
     (void)handle;
 }
 
-static int vmw_commit(uint64_t handle, struct gfx_rect *rects, int n) {
+static int vmw_commit(uint64_t handle, struct GFX_RECT *rects, int n) {
     (void)handle;
     (void)rects;
     (void)n;
@@ -36,7 +36,7 @@ static int vmw_commit(uint64_t handle, struct gfx_rect *rects, int n) {
 static void vmw_wait_vblank(void) {
 }
 
-struct udi_ops udi_vmware_ops = {
+struct GUI_UDI_OPS udi_vmware_ops = {
     "vmware-svga", vmw_probe, vmw_init, vmw_alloc_buffer,
     vmw_free_buffer, vmw_commit, vmw_wait_vblank,
 };

@@ -65,7 +65,7 @@ static void fill_file(uint32_t fd, uint32_t off, uint32_t base, uint32_t len) {
 }
 
 static uint32_t find_free_region(uint32_t pages) {
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t start = cur->userprog_v_addr.vaddr_start;
     uint32_t limit = USER_LOW_CEILING;
     uint32_t total = (limit - start) / PAGE_SIZE;
@@ -89,7 +89,7 @@ static uint32_t find_free_region(uint32_t pages) {
     return 0;
 }
 
-uint32_t sys_mmap(const struct mmap_args *a) {
+uint32_t sys_mmap(const struct SYS_MMAP_ARGS *a) {
     if (a == NULL)
         return -LINUX_EFAULT;
     uint32_t len = a->len;
@@ -97,7 +97,7 @@ uint32_t sys_mmap(const struct mmap_args *a) {
         (a->prot & ~PROT_MASK))
         return -LINUX_EINVAL;
     uint32_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t span = pages * PAGE_SIZE;
     uint32_t base;
     if (a->flags & MAP_FIXED) {
@@ -121,7 +121,7 @@ uint32_t sys_mmap(const struct mmap_args *a) {
 
 uint32_t sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags,
                    uint32_t fd, uint32_t offset) {
-    struct mmap_args a = {addr, len, prot, flags, fd, offset << 12};
+    struct SYS_MMAP_ARGS a = {addr, len, prot, flags, fd, offset << 12};
     return sys_mmap(&a);
 }
 

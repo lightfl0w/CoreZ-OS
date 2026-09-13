@@ -32,7 +32,7 @@
 #define O_WRONLY 1
 #define O_RDWR 2
 
-struct lc_iovec {
+struct LC_IOVEC {
     uint32_t base;
     uint32_t len;
 };
@@ -56,7 +56,7 @@ long lc_brk(void *addr);
 long lc_open(const char *path, int flags);
 long lc_close(int fd);
 long lc_set_thread_area(void *base);
-long lc_writev(int fd, const struct lc_iovec *iov, int iovcnt);
+long lc_writev(int fd, const struct LC_IOVEC *iov, int iovcnt);
 long lc_mmap(void *addr, uint32_t len, int prot, int flags, int fd,
              uint32_t off);
 

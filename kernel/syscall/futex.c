@@ -5,11 +5,11 @@
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
 #define FUTEX_BUCKETS 64
-struct futex_bucket {
-    struct list waiters;
-    struct spinlock lock;
+struct SYS_FUTEX_BUCKET {
+    struct LIST waiters;
+    struct SCHED_SPINLOCK lock;
 };
-static struct futex_bucket futex_buckets[FUTEX_BUCKETS];
+static struct SYS_FUTEX_BUCKET futex_buckets[FUTEX_BUCKETS];
 static int futex_inited = 0;
 void futex_init(void) {
     for (int i = 0; i < FUTEX_BUCKETS; i++) {
@@ -19,7 +19,7 @@ void futex_init(void) {
     futex_inited = 1;
 }
 
-static struct futex_bucket *futex_bucket_for(uint32_t uaddr, uint32_t pml4_phys) {
+static struct SYS_FUTEX_BUCKET *futex_bucket_for(uint32_t uaddr, uint32_t pml4_phys) {
     if (!futex_inited) {
         futex_init();
     }
@@ -28,7 +28,7 @@ static struct futex_bucket *futex_bucket_for(uint32_t uaddr, uint32_t pml4_phys)
 }
 
 static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
-    struct futex_bucket *b = futex_bucket_for(uaddr, current->pml4_phys);
+    struct SYS_FUTEX_BUCKET *b = futex_bucket_for(uaddr, current->pml4_phys);
     current->futex_ready = 0;
     (void)timeout;
     uint32_t old = asm_save_eflags();
@@ -57,14 +57,14 @@ static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
 }
 
 static int32_t sys_futex_wake(uint32_t uaddr, uint32_t nr) {
-    struct futex_bucket *b = futex_bucket_for(uaddr, current->pml4_phys);
+    struct SYS_FUTEX_BUCKET *b = futex_bucket_for(uaddr, current->pml4_phys);
     int32_t woken = 0;
     uint32_t old = asm_save_eflags();
     asm_cli();
     spinlock_acquire(&b->lock);
     while (woken < (int32_t)nr && !list_empty(&b->waiters)) {
-        struct list_elem *e = list_pop_front(&b->waiters);
-        struct task_struct *t = list_entry(e, struct task_struct, futex_tag);
+        struct LIST_ELEM *e = list_pop_front(&b->waiters);
+        struct TASK *t = list_entry(e, struct TASK, futex_tag);
         t->futex_ready = 1;
         thread_unblock(t);
         woken++;

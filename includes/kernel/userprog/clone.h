@@ -12,6 +12,6 @@
 #define CLONE_THREAD 0x00010000
 #define CLONE_SETTLS 0x00080000
 
-pid_t sys_clone(struct Registers *r);
+pid_t sys_clone(struct X86_REGS *r);
 
 #endif

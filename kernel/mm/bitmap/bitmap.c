@@ -2,11 +2,11 @@
 
 #include "lib/str/str.h"
 
-void bitmap_init(struct bitmap *btmp) {
+void bitmap_init(struct MM_BITMAP *btmp) {
     memset(btmp->bits, 0, btmp->btmp_bytes_len);
 }
 
-int bitmap_scan_test(const struct bitmap *btmp, uint32_t bit_idx) {
+int bitmap_scan_test(const struct MM_BITMAP *btmp, uint32_t bit_idx) {
     uint32_t byte = bit_idx >> 3;
     if (byte >= btmp->btmp_bytes_len) {
         return -1;
@@ -14,7 +14,7 @@ int bitmap_scan_test(const struct bitmap *btmp, uint32_t bit_idx) {
     return (btmp->bits[byte] & (BITMAP_MASK >> (bit_idx & 7))) ? 1 : 0;
 }
 
-void bitmap_set(struct bitmap *btmp, uint32_t bit_idx, int8_t value) {
+void bitmap_set(struct MM_BITMAP *btmp, uint32_t bit_idx, int8_t value) {
     uint32_t byte = bit_idx >> 3;
     if (byte >= btmp->btmp_bytes_len) {
         return;
@@ -34,7 +34,7 @@ static inline uint64_t bitmap_word(const uint64_t *words, uint32_t w) {
     return (x & 0x0f0f0f0f0f0f0f0full) << 4 | ((x >> 4) & 0x0f0f0f0f0f0f0f0full);
 }
 
-int bitmap_scan(const struct bitmap *btmp, uint32_t cnt) {
+int bitmap_scan(const struct MM_BITMAP *btmp, uint32_t cnt) {
     if (cnt == 0 || btmp->btmp_bytes_len == 0) {
         return -1;
     }

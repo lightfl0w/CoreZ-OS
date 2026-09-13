@@ -26,13 +26,13 @@ void start_process(void *arg) {
     thread_exit_current();
 }
 
-void page_dir_activate(struct task_struct *task) {
+void page_dir_activate(struct TASK *task) {
     if (task->pml4_phys == 0)
         return;
     asm_write_cr3((uint64_t)task->pml4_phys);
 }
 
-void process_activate(struct task_struct *task) {
+void process_activate(struct TASK *task) {
     if (task->pml4_phys != 0) {
         page_dir_activate(task);
         if (task->tls_msr) {
@@ -110,7 +110,7 @@ uint32_t *create_page_dir(void) {
     return (uint32_t *)(uintptr_t)pml4_phys;
 }
 
-void create_user_vaddr_bitmap(struct task_struct *user_prog) {
+void create_user_vaddr_bitmap(struct TASK *user_prog) {
     user_prog->userprog_v_addr.vaddr_start = USER_VADDR_START;
     uint32_t bitmap_pg_cnt = DIV_ROUND_UP(
         (0xc0000000 - USER_VADDR_START) / PAGE_SIZE / 8, PAGE_SIZE);
@@ -122,10 +122,10 @@ void create_user_vaddr_bitmap(struct task_struct *user_prog) {
 }
 
 void process_execute(char *path, char *name) {
-    struct task_struct *thread = thread_alloc_slot(name, DEFAULT_PRIO);
-    struct thread_stack *ts =
-        (struct thread_stack *)(thread->kernel_stack_top -
-                                sizeof(struct thread_stack));
+    struct TASK *thread = thread_alloc_slot(name, DEFAULT_PRIO);
+    struct TASK_STACK *ts =
+        (struct TASK_STACK *)(thread->kernel_stack_top -
+                                sizeof(struct TASK_STACK));
     ts->rflags = RFLAGS_INIT;
     ts->r15 = (uint64_t)start_process;
     ts->r14 = (uint64_t)path;

@@ -4,19 +4,19 @@
 #include "kernel/gui/gfx.h"
 #include <stdint.h>
 
-enum disp_surface { DISP_FRONT = 0, DISP_BACK = 1 };
+enum GUI_SURFACE { DISP_FRONT = 0, DISP_BACK = 1 };
 
-struct display_ops {
+struct GUI_DISPLAY_OPS {
     const char *name;
     int (*init)(void);
-    struct gfx_canvas *(*surface)(int which);
-    int (*flip)(struct gfx_rect *rects, int n);
+    struct GFX_CANVAS *(*surface)(int which);
+    int (*flip)(struct GFX_RECT *rects, int n);
     void (*wait_vblank)(void);
     int (*set_mode)(uint32_t w, uint32_t h, uint32_t bpp);
 };
 
 void display_init(void);
-void display_register(struct display_ops *ops);
-struct display_ops *display_get(void);
+void display_register(struct GUI_DISPLAY_OPS *ops);
+struct GUI_DISPLAY_OPS *display_get(void);
 
 #endif

@@ -2,7 +2,7 @@
 #include "lib/str/str.h"
 #include "syscall.h"
 
-struct stat {
+struct FS_STAT {
     uint32_t st_ino;
     uint32_t st_size;
     int32_t st_filetype;
@@ -136,7 +136,7 @@ static void *my_malloc(int size) {
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "lib/stb_truetype.h"
 
-struct boot_info {
+struct BOOT_INFO {
     uint8_t cyls, leds, vmode, pad;
     uint16_t scrnx, scrny;
     uint32_t vram;
@@ -191,12 +191,12 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    struct boot_info *bi = (struct boot_info *)0x0FF0;
+    struct BOOT_INFO *bi = (struct BOOT_INFO *)0x0FF0;
     uint8_t *vram = (uint8_t *)bi->vram;
     int scrnx = bi->scrnx, scrny = bi->scrny;
     int pitch = scrnx;
 
-    struct stat st;
+    struct FS_STAT st;
     if (stat("/font_subset.ttf", &st) == -1) {
         printf("font: /font_subset.ttf not found\n");
         exit(-1);

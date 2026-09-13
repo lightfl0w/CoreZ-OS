@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-struct Registers;
-int32_t sys_execv(const char *path, const char *argv[], struct Registers *regs);
+struct X86_REGS;
+int32_t sys_execv(const char *path, const char *argv[], struct X86_REGS *regs);
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
-                   struct Registers *regs);
+                   struct X86_REGS *regs);
 
 #endif

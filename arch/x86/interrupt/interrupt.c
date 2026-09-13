@@ -65,7 +65,7 @@ static int handle_cow_fault(uint32_t fault_addr, uint32_t error_code) {
     return page_cow_resolve(fault_addr, *pte);
 }
 
-void isr_handler(struct Registers *r) {
+void isr_handler(struct X86_REGS *r) {
     uint32_t n = r->int_no;
     if (n == 14) {
         uint64_t cr2;
@@ -172,7 +172,7 @@ static void irq_eoi(uint32_t irq) {
     }
 }
 
-void irq_handler(struct Registers *r) {
+void irq_handler(struct X86_REGS *r) {
     uint32_t irq = r->int_no - 32;
     if (irq == 0) {
         irq_eoi(irq);

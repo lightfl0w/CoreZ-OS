@@ -7,7 +7,7 @@
 pid_t sys_wait(int32_t *status);
 void sys_exit(int32_t status);
 
-void proc_exit(struct task_struct *t, int status);
+void proc_exit(struct TASK *t, int status);
 
 #ifndef __ASSEMBLER__
 struct LINUX_SIGINFO;

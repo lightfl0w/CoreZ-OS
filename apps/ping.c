@@ -33,7 +33,7 @@ static uint32_t parse_ip(const char *s) {
 }
 
 static uint32_t now_ms(void) {
-    struct timespec tp;
+    struct SYS_TIMESPEC tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
     return (uint32_t)tp.tv_sec * 1000u + (uint32_t)(tp.tv_nsec / 1000000u);
 }
@@ -47,7 +47,7 @@ static uint32_t ip_to_ipv4_str(uint32_t ip, char *out) {
 
 static int wait_reply(uint16_t id, uint16_t seq, uint32_t *rtt) {
     uint32_t t0 = now_ms();
-    struct nt_ping_reply rep[4];
+    struct NET_PING_REPLY rep[4];
     for (;;) {
         int n = icmp_recv(rep, 4);
         for (int i = 0; i < n; i++) {
@@ -58,7 +58,7 @@ static int wait_reply(uint16_t id, uint16_t seq, uint32_t *rtt) {
         }
         if (now_ms() - t0 >= PING_TIMEOUT_MS)
             return 0;
-        struct timespec sl = {0, 200 * 1000 * 1000};
+        struct SYS_TIMESPEC sl = {0, 200 * 1000 * 1000};
         nanosleep(&sl, 0);
     }
 }
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
         }
 
         (void)t_send;
-        struct timespec gap = {0, 300 * 1000 * 1000};
+        struct SYS_TIMESPEC gap = {0, 300 * 1000 * 1000};
         nanosleep(&gap, 0);
     }
 

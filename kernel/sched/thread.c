@@ -17,20 +17,20 @@ static uint64_t sleep_bitmap;
 static uint32_t wake_tick[MAX_TASKS];
 static uint32_t wake_pid[MAX_TASKS];
 
-struct task_struct task_table[MAX_TASKS];
+struct TASK task_table[MAX_TASKS];
 static uint32_t pid_alloc = 0;
 static uint32_t died_pending = 0;
-struct list thread_all_list;
-struct task_struct *idle_thread;
+struct LIST thread_all_list;
+struct TASK *idle_thread;
 uint32_t foreground_pid = (uint32_t)-1;
 static volatile uint32_t idle_monitor;
 static int mwait_ok;
 
-static inline uint32_t task_slot(struct task_struct *t) {
+static inline uint32_t task_slot(struct TASK *t) {
     return (uint32_t)(t - task_table);
 }
 
-static void ready_enqueue(struct task_struct *t) {
+static void ready_enqueue(struct TASK *t) {
     uint64_t bit = 1ULL << task_slot(t);
     if (ready_bitmap & bit)
         return;
@@ -38,7 +38,7 @@ static void ready_enqueue(struct task_struct *t) {
     t->status = TASK_READY;
 }
 
-static void ready_remove(struct task_struct *t) {
+static void ready_remove(struct TASK *t) {
     ready_bitmap &= ~(1ULL << task_slot(t));
 }
 
@@ -69,7 +69,7 @@ void kernel_thread_entry_c(thread_func function, void *arg) {
     thread_exit_current();
 }
 
-static void init_fd_table(struct task_struct *t) {
+static void init_fd_table(struct TASK *t) {
     t->fd_table[0] = 0;
     t->fd_table[1] = 1;
     t->fd_table[2] = 2;
@@ -78,7 +78,7 @@ static void init_fd_table(struct task_struct *t) {
     t->cwd_inode_nr = 0;
 }
 
-static void init_task_struct_basic(struct task_struct *t, int32_t parent_pid) {
+static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->status = TASK_READY;
     t->pid = pid_alloc++;
     t->elapsed_ticks = 0;
@@ -116,15 +116,15 @@ static void init_task_struct_basic(struct task_struct *t, int32_t parent_pid) {
 
 static void reap_died_threads(void);
 
-struct task_struct *thread_create(char *name, uint8_t priority,
+struct TASK *thread_create(char *name, uint8_t priority,
                                   thread_func function, void *arg) {
-    struct task_struct *t = thread_alloc_slot(name, priority);
+    struct TASK *t = thread_alloc_slot(name, priority);
     if (t == NULL) {
         return NULL;
     }
-    struct thread_stack *ts =
-        (struct thread_stack *)(t->kernel_stack_top -
-                                sizeof(struct thread_stack));
+    struct TASK_STACK *ts =
+        (struct TASK_STACK *)(t->kernel_stack_top -
+                                sizeof(struct TASK_STACK));
     ts->rflags = RFLAGS_INIT;
     ts->r15 = (uint64_t)function;
     ts->r14 = (uint64_t)arg;
@@ -167,14 +167,14 @@ void thread_init(void) {
     idle_thread = thread_create("idle", 10, idle, 0);
 }
 
-struct task_struct *thread_alloc_slot(const char *name, uint8_t priority) {
+struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
     uint64_t free = ~slot_inuse;
     if (free == 0) {
         kprintf("[thread] no free task slot (MAX_TASKS=%d)\n", MAX_TASKS);
         return NULL;
     }
     uint32_t i = (uint32_t)__builtin_ctzll(free);
-    struct task_struct *t = &task_table[i];
+    struct TASK *t = &task_table[i];
     uint64_t stack = (uint64_t)get_kernel_pages(THREAD_STACK_SIZE / PAGE_SIZE);
     if (stack == 0) {
         kprintf("[thread] no kernel pages for stack (free pages: %d)\n",
@@ -184,9 +184,9 @@ struct task_struct *thread_alloc_slot(const char *name, uint8_t priority) {
     t->slot_used = 1;
     slot_inuse |= 1ULL << i;
     t->wait_tag.prev = t->wait_tag.next = NULL;
-    struct thread_stack *ts =
-        (struct thread_stack *)(stack + THREAD_STACK_SIZE -
-                                sizeof(struct thread_stack));
+    struct TASK_STACK *ts =
+        (struct TASK_STACK *)(stack + THREAD_STACK_SIZE -
+                                sizeof(struct TASK_STACK));
     ts->rflags = RFLAGS_INIT;
     ts->r15 = ts->r14 = ts->r13 = ts->r12 = ts->rbx = ts->rbp = 0;
     ts->rip = 0;
@@ -201,7 +201,7 @@ struct task_struct *thread_alloc_slot(const char *name, uint8_t priority) {
     return t;
 }
 
-void thread_ready(struct task_struct *t) {
+void thread_ready(struct TASK *t) {
     if (t == NULL)
         return;
     uint32_t old = asm_save_eflags();
@@ -215,7 +215,7 @@ void kernel_thread(char *name, uint8_t priority, thread_func function,
     thread_create(name, priority, function, arg);
 }
 
-void thread_block_with_status(enum task_status status) {
+void thread_block_with_status(enum TASK_STATUS status) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     ready_remove(current);
@@ -228,7 +228,7 @@ void thread_block(void) {
     thread_block_with_status(TASK_BLOCKED);
 }
 
-void thread_unblock(struct task_struct *t) {
+void thread_unblock(struct TASK *t) {
     ASSERT(t != NULL);
     ASSERT(t->status & TASK_WAKE_MASK);
     thread_ready(t);
@@ -256,7 +256,7 @@ void thread_timer_wake(void) {
             continue;
         }
         sleep_bitmap &= ~(1ULL << slot);
-        struct task_struct *t = &task_table[slot];
+        struct TASK *t = &task_table[slot];
         if (t->slot_used && t->pid == wake_pid[slot] &&
             (t->status & TASK_WAKE_MASK)) {
             thread_unblock(t);
@@ -294,11 +294,11 @@ void schedule(void) {
         avail = ready_bitmap;
     uint32_t slot = (uint32_t)__builtin_ctzll(avail);
     ready_bitmap &= ~(1ULL << slot);
-    struct task_struct *next = &task_table[slot];
+    struct TASK *next = &task_table[slot];
     rr_cursor = slot;
     next->status = TASK_RUNNING;
 
-    struct task_struct *prev = current;
+    struct TASK *prev = current;
     set_current(next);
     process_activate(next);
     switch_to(&prev->self_kstack, &next->self_kstack);
@@ -306,10 +306,10 @@ void schedule(void) {
 
 int thread_traverse_all(thread_all_action action, void *arg) {
     int stopped = 0;
-    struct list_elem *e = thread_all_list.head.next;
+    struct LIST_ELEM *e = thread_all_list.head.next;
     while (e != &thread_all_list.tail) {
-        struct task_struct *t = list_entry(e, struct task_struct, all_list_tag);
-        struct list_elem *next = e->next;
+        struct TASK *t = list_entry(e, struct TASK, all_list_tag);
+        struct LIST_ELEM *next = e->next;
         int r = action(t, arg);
         if (r) {
             stopped = 1;
@@ -332,7 +332,7 @@ void thread_exit_current(void) {
 }
 
 void thread_kill_pid(uint32_t pid) {
-    struct task_struct *t = NULL;
+    struct TASK *t = NULL;
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
         if (task_table[i].slot_used && task_table[i].pid == pid) {
             t = &task_table[i];
@@ -358,7 +358,7 @@ void thread_kill_pid(uint32_t pid) {
     if (keyboard_ioq.producer == t)
         keyboard_ioq.producer = 0;
 
-    struct task_struct *parent = pid2thread(t->parent_pid);
+    struct TASK *parent = pid2thread(t->parent_pid);
     if (parent && parent->status == TASK_WAITING)
         thread_unblock(parent);
 
@@ -367,7 +367,7 @@ void thread_kill_pid(uint32_t pid) {
     asm_restore_eflags(old);
 }
 
-struct task_struct *pid2thread(int32_t pid) {
+struct TASK *pid2thread(int32_t pid) {
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
         if (task_table[i].slot_used && (int32_t)task_table[i].pid == pid)
             return &task_table[i];
@@ -375,7 +375,7 @@ struct task_struct *pid2thread(int32_t pid) {
     return NULL;
 }
 
-void thread_exit(struct task_struct *thread_over, int need_schedule) {
+void thread_exit(struct TASK *thread_over, int need_schedule) {
     (void)need_schedule;
     uint32_t old = asm_save_eflags();
     asm_cli();
@@ -391,10 +391,10 @@ void thread_exit(struct task_struct *thread_over, int need_schedule) {
 }
 
 static void reap_died_threads(void) {
-    struct list_elem *e = thread_all_list.head.next;
+    struct LIST_ELEM *e = thread_all_list.head.next;
     while (e != &thread_all_list.tail) {
-        struct task_struct *t = list_entry(e, struct task_struct, all_list_tag);
-        struct list_elem *next = e->next;
+        struct TASK *t = list_entry(e, struct TASK, all_list_tag);
+        struct LIST_ELEM *next = e->next;
         if (t->status == TASK_DIED && t != current) {
             if (t->pml4_phys) {
                 pfree(&kernel_pool, t->pml4_phys);

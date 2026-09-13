@@ -12,17 +12,17 @@
 #include "kernel/gui/display.h"
 #include "kernel/gui/input.h"
 
-static struct wl_client clients[WL_MAX_CLIENTS];
-static struct wl_surface surfaces[WL_MAX_SURFACES];
+static struct WL_CLIENT clients[WL_MAX_CLIENTS];
+static struct WL_SURFACE surfaces[WL_MAX_SURFACES];
 
-static struct gfx_canvas *dst;
+static struct GFX_CANVAS *dst;
 static int scrnx, scrny;
 
-static struct lock comp_lock;
+static struct SCHED_LOCK comp_lock;
 static int session_active = 1;
 
 #define MAX_DAMAGE 48
-static struct gfx_rect damage[MAX_DAMAGE];
+static struct GFX_RECT damage[MAX_DAMAGE];
 static int damage_n = 0;
 static int damage_full = 0;
 
@@ -44,7 +44,7 @@ static const char *cursor_bmp[CURSOR_H] = {
 #define TITLE_FONT_PX 13
 #define CLOSE_FONT_PX 10
 
-static void client_post(struct wl_client *c, int type, int32_t a, int32_t b,
+static void client_post(struct WL_CLIENT *c, int type, int32_t a, int32_t b,
                         int32_t cc) {
     if (!c || !c->used)
         return;
@@ -70,7 +70,7 @@ void comp_log(const char *s) {
 void comp_damage_rect(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0)
         return;
-    struct gfx_rect r = {x, y, w, h}, scr = {0, 0, scrnx, scrny}, v;
+    struct GFX_RECT r = {x, y, w, h}, scr = {0, 0, scrnx, scrny}, v;
     if (!gfx_rect_intersect(r, scr, &v))
         return;
     lock_acquire(&comp_lock);
@@ -80,7 +80,7 @@ void comp_damage_rect(int x, int y, int w, int h) {
     }
 
     for (int i = 0; i < damage_n; i++) {
-        struct gfx_rect u;
+        struct GFX_RECT u;
         if (gfx_rect_intersect(v, damage[i], &u)) {
             int x0 = v.x < damage[i].x ? v.x : damage[i].x;
             int y0 = v.y < damage[i].y ? v.y : damage[i].y;
@@ -106,7 +106,7 @@ void comp_damage_rect(int x, int y, int w, int h) {
     lock_release(&comp_lock);
 }
 
-void comp_damage_surface(struct wl_surface *s) {
+void comp_damage_surface(struct WL_SURFACE *s) {
     if (!s || !s->used)
         return;
     int m = WIN_SHADOW + WIN_RADIUS + 2;
@@ -125,12 +125,12 @@ void comp_post_mouse(int dx, int dy, uint8_t buttons) {
                (int32_t)(dx & 0xFFFF) | ((int32_t)(dy & 0xFFFF) << 16));
 }
 
-struct wl_client *wl_display_connect(const char *name) {
+struct WL_CLIENT *wl_display_connect(const char *name) {
     lock_acquire(&comp_lock);
     for (int i = 0; i < WL_MAX_CLIENTS; i++) {
         if (clients[i].used)
             continue;
-        struct wl_client *c = &clients[i];
+        struct WL_CLIENT *c = &clients[i];
         memset(c, 0, sizeof(*c));
         c->used = 1;
         strncpy(c->name, name, 15);
@@ -144,7 +144,7 @@ struct wl_client *wl_display_connect(const char *name) {
     return 0;
 }
 
-void wl_display_disconnect(struct wl_client *c) {
+void wl_display_disconnect(struct WL_CLIENT *c) {
     if (!c)
         return;
     lock_acquire(&comp_lock);
@@ -152,7 +152,7 @@ void wl_display_disconnect(struct wl_client *c) {
     lock_release(&comp_lock);
 }
 
-struct wl_surface *wl_compositor_create_surface(struct wl_client *c,
+struct WL_SURFACE *wl_compositor_create_surface(struct WL_CLIENT *c,
                                                 const char *title) {
     if (!c || !c->used)
         return 0;
@@ -160,7 +160,7 @@ struct wl_surface *wl_compositor_create_surface(struct wl_client *c,
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
         if (surfaces[i].used)
             continue;
-        struct wl_surface *s = &surfaces[i];
+        struct WL_SURFACE *s = &surfaces[i];
         memset(s, 0, sizeof(*s));
         s->used = 1;
         s->client = c;
@@ -175,7 +175,7 @@ struct wl_surface *wl_compositor_create_surface(struct wl_client *c,
     return 0;
 }
 
-int wl_surface_attach(struct wl_surface *s, struct shm_pool *pool, int w,
+int wl_surface_attach(struct WL_SURFACE *s, struct WL_SHM_POOL *pool, int w,
                       int h) {
     if (!s || !s->used || !pool || !pool->in_use)
         return -1;
@@ -187,7 +187,7 @@ int wl_surface_attach(struct wl_surface *s, struct shm_pool *pool, int w,
     return 0;
 }
 
-void wl_surface_commit(struct wl_surface *s) {
+void wl_surface_commit(struct WL_SURFACE *s) {
     if (!s || !s->used || !s->buf)
         return;
     lock_acquire(&comp_lock);
@@ -196,7 +196,7 @@ void wl_surface_commit(struct wl_surface *s) {
     comp_damage_surface(s);
 }
 
-void wl_surface_destroy(struct wl_surface *s) {
+void wl_surface_destroy(struct WL_SURFACE *s) {
     if (!s || !s->used)
         return;
     lock_acquire(&comp_lock);
@@ -207,7 +207,7 @@ void wl_surface_destroy(struct wl_surface *s) {
     lock_release(&comp_lock);
 }
 
-int wl_display_dispatch(struct wl_client *c, struct wl_event *ev) {
+int wl_display_dispatch(struct WL_CLIENT *c, struct WL_EVENT *ev) {
     if (!c || !c->used)
         return -1;
     sema_down(&c->sema);
@@ -223,8 +223,8 @@ int wl_display_dispatch(struct wl_client *c, struct wl_event *ev) {
     return 0;
 }
 
-struct wl_surface **comp_surfaces(int *count) {
-    static struct wl_surface *list[WL_MAX_SURFACES];
+struct WL_SURFACE **comp_surfaces(int *count) {
+    static struct WL_SURFACE *list[WL_MAX_SURFACES];
     int n = 0;
     for (int i = 0; i < WL_MAX_SURFACES; i++)
         if (surfaces[i].used)
@@ -241,15 +241,15 @@ int comp_screen_h(void) {
     return scrny;
 }
 
-void comp_send_configure(struct wl_surface *s, int w, int h) {
+void comp_send_configure(struct WL_SURFACE *s, int w, int h) {
     client_post(s->client, WL_EV_CONFIGURE, w, h, 0);
 }
 
-void comp_send_close(struct wl_surface *s) {
+void comp_send_close(struct WL_SURFACE *s) {
     client_post(s->client, WL_EV_CLOSE, 0, 0, 0);
 }
 
-void comp_send_key(struct wl_surface *s, int scancode, int pressed, int mods) {
+void comp_send_key(struct WL_SURFACE *s, int scancode, int pressed, int mods) {
     client_post(s->client, WL_EV_KEY, scancode, pressed, mods);
 }
 
@@ -257,7 +257,7 @@ void comp_request_exit(void) {
     session_active = 0;
 }
 
-void comp_destroy_surface_pool(struct wl_surface *s, struct shm_pool **pool) {
+void comp_destroy_surface_pool(struct WL_SURFACE *s, struct WL_SHM_POOL **pool) {
     if (!pool || !*pool)
         return;
     lock_acquire(&comp_lock);
@@ -283,7 +283,7 @@ static gfx_color wallpaper_color(int y) {
     return GFX_RGB(r, g, b);
 }
 
-static struct gfx_canvas wp_cache;
+static struct GFX_CANVAS wp_cache;
 static int wp_ready;
 
 static void wallpaper_init(void) {
@@ -307,7 +307,7 @@ static void wallpaper_init(void) {
     wp_ready = 1;
 }
 
-static void draw_wallpaper(struct gfx_rect *r) {
+static void draw_wallpaper(struct GFX_RECT *r) {
     if (!wp_ready) {
         for (int y = r->y; y < r->y + r->h; y++)
             gfx_hline(dst, r->x, y, r->w, wallpaper_color(y));
@@ -324,14 +324,14 @@ static void draw_wallpaper(struct gfx_rect *r) {
     }
 }
 
-static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
+static void draw_window(struct WL_SURFACE *s, struct GFX_RECT *clip) {
     int fx = s->x - COMP_BORDER;
     int fy = s->y - COMP_TITLE_H;
     int fw = s->w + 2 * COMP_BORDER;
     int fh = s->h + COMP_TITLE_H + COMP_BORDER;
     int rad = WIN_RADIUS;
 
-    struct gfx_rect frame = {fx, fy, fw, fh}, v;
+    struct GFX_RECT frame = {fx, fy, fw, fh}, v;
     if (!gfx_rect_intersect(frame, *clip, &v))
         return;
 
@@ -364,11 +364,11 @@ static void draw_window(struct wl_surface *s, struct gfx_rect *clip) {
               TH_TEXT);
 
     if (s->w > 0 && s->h > 0) {
-        struct gfx_rect content = {s->x, s->y, s->w, s->h};
-        struct gfx_rect iv;
+        struct GFX_RECT content = {s->x, s->y, s->w, s->h};
+        struct GFX_RECT iv;
         if (gfx_rect_intersect(content, *clip, &iv)) {
             if (s->buf && s->buf_w == s->w && s->buf_h == s->h) {
-                struct gfx_canvas sc;
+                struct GFX_CANVAS sc;
                 sc.pixels = (gfx_color *)s->buf;
                 sc.pitch = s->w * 4;
                 sc.w = s->w;
@@ -399,10 +399,10 @@ static void draw_cursor(void) {
     }
 }
 
-static int rect_covered_by_window(struct gfx_rect *r, struct wl_surface **vis,
+static int rect_covered_by_window(struct GFX_RECT *r, struct WL_SURFACE **vis,
                                   int vn) {
     for (int j = 0; j < vn; j++) {
-        struct wl_surface *s = vis[j];
+        struct WL_SURFACE *s = vis[j];
         if (s->w <= 0 || s->h <= 0)
             continue;
         if (r->x >= s->x && r->y >= s->y && r->x + r->w <= s->x + s->w &&
@@ -414,10 +414,10 @@ static int rect_covered_by_window(struct gfx_rect *r, struct wl_surface **vis,
 }
 
 static void repaint(void);
-static void comp_present(struct gfx_rect *rects, int n);
+static void comp_present(struct GFX_RECT *rects, int n);
 
 static void repaint(void) {
-    struct gfx_rect rects[MAX_DAMAGE + 1];
+    struct GFX_RECT rects[MAX_DAMAGE + 1];
     int n = 0;
     lock_acquire(&comp_lock);
     if (damage_full) {
@@ -434,11 +434,11 @@ static void repaint(void) {
     damage_n = 0;
     damage_full = 0;
 
-    struct wl_surface *vis[WL_MAX_SURFACES];
+    struct WL_SURFACE *vis[WL_MAX_SURFACES];
     int vn = wm_collect_visible(vis, WL_MAX_SURFACES);
 
     for (int i = 0; i < n; i++) {
-        struct gfx_rect *r = &rects[i];
+        struct GFX_RECT *r = &rects[i];
         if (!rect_covered_by_window(r, vis, vn))
             draw_wallpaper(r);
         for (int j = 0; j < vn; j++)
@@ -449,7 +449,7 @@ static void repaint(void) {
     comp_present(rects, n);
 
     for (int i = 0; i < vn; i++) {
-        struct wl_surface *s = vis[i];
+        struct WL_SURFACE *s = vis[i];
         if (s->frame_pending) {
             s->frame_pending = 0;
             client_post(s->client, WL_EV_FRAME, 0, 0, 0);
@@ -457,8 +457,8 @@ static void repaint(void) {
     }
 }
 
-static void comp_present(struct gfx_rect *rects, int n) {
-    struct display_ops *d = display_get();
+static void comp_present(struct GFX_RECT *rects, int n) {
+    struct GUI_DISPLAY_OPS *d = display_get();
     if (d == 0)
         return;
     draw_cursor();
@@ -467,14 +467,14 @@ static void comp_present(struct gfx_rect *rects, int n) {
 
 void comp_init(void) {
     display_init();
-    struct display_ops *d = display_get();
+    struct GUI_DISPLAY_OPS *d = display_get();
     d->init();
 
     scrnx = io_get_scrnx();
     scrny = io_get_scrny();
     dst = d->surface(DISP_BACK);
 
-    struct gfx_canvas *fc = d->surface(DISP_FRONT);
+    struct GFX_CANVAS *fc = d->surface(DISP_FRONT);
     (void)fc;
 
     input_init();
@@ -492,7 +492,7 @@ void comp_init(void) {
 }
 
 static void drain_input(void) {
-    struct input_event ev;
+    struct GUI_INPUT_EVENT ev;
     while (input_get(&ev)) {
         if (ev.dev == INPUT_DEV_KEYBOARD) {
             wm_handle_key((uint8_t)ev.code, (int)(ev.value & 0xFF),
@@ -528,7 +528,7 @@ static void drain_input(void) {
 }
 
 void comp_run(void) {
-    struct display_ops *d = display_get();
+    struct GUI_DISPLAY_OPS *d = display_get();
     while (session_active) {
         drain_input();
         if (wm_bar_check_dirty()) {

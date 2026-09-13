@@ -5,17 +5,17 @@
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/pool/pool.h"
 
-static struct gfx_canvas back;
+static struct GFX_CANVAS back;
 static uint64_t back_handle;
 static int back_ok;
 
-static struct display_ops *active;
+static struct GUI_DISPLAY_OPS *active;
 
-void display_register(struct display_ops *ops) {
+void display_register(struct GUI_DISPLAY_OPS *ops) {
     active = ops;
 }
 
-struct display_ops *display_get(void) {
+struct GUI_DISPLAY_OPS *display_get(void) {
     return active;
 }
 
@@ -27,8 +27,8 @@ static int udi_disp_init(void) {
     uint32_t h = DISP_TGT_H;
     if (udi_init(&w, &h, 32) != 0)
         return -1;
-    struct udi_ops *ops = udi_active();
-    struct udi_buffer buf;
+    struct GUI_UDI_OPS *ops = udi_active();
+    struct GUI_UDI_BUFFER buf;
     if (ops->alloc_buffer(w, h, 32, &buf) != 0)
         return -1;
     back.pixels = buf.vmem;
@@ -43,20 +43,20 @@ static int udi_disp_init(void) {
     return 0;
 }
 
-static struct gfx_canvas *udi_disp_surface(int which) {
+static struct GFX_CANVAS *udi_disp_surface(int which) {
     (void)which;
     return &back;
 }
 
-static int udi_disp_flip(struct gfx_rect *rects, int n) {
-    struct udi_ops *ops = udi_active();
+static int udi_disp_flip(struct GFX_RECT *rects, int n) {
+    struct GUI_UDI_OPS *ops = udi_active();
     if (ops == 0 || back_ok == 0)
         return -1;
     return ops->commit(back_handle, rects, n);
 }
 
 static void udi_disp_wait_vblank(void) {
-    struct udi_ops *ops = udi_active();
+    struct GUI_UDI_OPS *ops = udi_active();
     if (ops && ops->wait_vblank)
         ops->wait_vblank();
 }
@@ -68,7 +68,7 @@ static int udi_disp_set_mode(uint32_t w, uint32_t h, uint32_t bpp) {
     return -1;
 }
 
-struct display_ops udi_display_ops = {
+struct GUI_DISPLAY_OPS udi_display_ops = {
     "udi", udi_disp_init, udi_disp_surface, udi_disp_flip,
     udi_disp_wait_vblank, udi_disp_set_mode,
 };

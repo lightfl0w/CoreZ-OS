@@ -40,7 +40,7 @@ void keyboard_init(void) {
 #define KBD_CHAR_CTRL_U (1)
 #define KBD_CHAR_CTRL_L (12)
 
-struct ioqueue keyboard_ioq;
+struct TTY_IOQUEUE keyboard_ioq;
 
 static const char keymap[2][128] = {
     {0,   0x1b, '1',  '2', '3',  '4', '5', '6', '7', '8', '9', '0', '-',

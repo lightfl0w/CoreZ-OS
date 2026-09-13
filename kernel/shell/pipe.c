@@ -6,7 +6,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 int32_t is_pipe(uint32_t local_fd) {
-    struct file *file = file_get(fd_local2global(local_fd));
+    struct FILE *file = file_get(fd_local2global(local_fd));
     if (file == NULL) {
         return 0;
     }
@@ -18,7 +18,7 @@ int32_t sys_pipe(int32_t pipefd[2]) {
     if (global_fd == -1) {
         return -1;
     }
-    struct file *file = file_get((uint32_t)global_fd);
+    struct FILE *file = file_get((uint32_t)global_fd);
 
     file->fd_flag = PIPE_FLAG;
     file->ref_cnt = 2;
@@ -27,8 +27,8 @@ int32_t sys_pipe(int32_t pipefd[2]) {
         file_table_free_slot(global_fd);
         return -1;
     }
-    ioq_init((struct ioqueue *)buf);
-    file->fd_inode = (struct inode *)buf;
+    ioq_init((struct TTY_IOQUEUE *)buf);
+    file->fd_inode = (struct FS_INODE *)buf;
     file->fd_pos = 0;
     pipefd[0] = fd_install(global_fd);
     pipefd[1] = fd_install(global_fd);
@@ -46,11 +46,11 @@ int32_t sys_pipe(int32_t pipefd[2]) {
 
 uint32_t pipe_read(int32_t fd, void *buf, uint32_t count) {
     uint32_t global_fd = fd_local2global(fd);
-    struct file *file = file_get(global_fd);
+    struct FILE *file = file_get(global_fd);
     if (file == NULL || file->fd_inode == NULL) {
         return 0;
     }
-    struct ioqueue *ioq = (struct ioqueue *)file->fd_inode;
+    struct TTY_IOQUEUE *ioq = (struct TTY_IOQUEUE *)file->fd_inode;
     uint32_t ioq_len = ioq_length(ioq);
     uint32_t size = (ioq_len > count) ? count : ioq_len;
     char *buffer = (char *)buf;
@@ -66,11 +66,11 @@ uint32_t pipe_read(int32_t fd, void *buf, uint32_t count) {
 
 uint32_t pipe_write(int32_t fd, const void *buf, uint32_t count) {
     uint32_t global_fd = fd_local2global(fd);
-    struct file *file = file_get(global_fd);
+    struct FILE *file = file_get(global_fd);
     if (file == NULL || file->fd_inode == NULL) {
         return 0;
     }
-    struct ioqueue *ioq = (struct ioqueue *)file->fd_inode;
+    struct TTY_IOQUEUE *ioq = (struct TTY_IOQUEUE *)file->fd_inode;
     uint32_t ioq_left = BUFSIZE - ioq_length(ioq);
     uint32_t size = (ioq_left > count) ? count : ioq_left;
     const char *buffer = (const char *)buf;
@@ -85,7 +85,7 @@ uint32_t pipe_write(int32_t fd, const void *buf, uint32_t count) {
 }
 
 void sys_fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd) {
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     if (new_local_fd < 3) {
         cur->fd_table[old_local_fd] = new_local_fd;
     } else {

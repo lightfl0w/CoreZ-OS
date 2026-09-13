@@ -25,7 +25,7 @@ static void kthread_fork_exec(void *unused) {
     }
 }
 
-static void mark_child_bitmap(struct task_struct *child, uint32_t vaddr) {
+static void mark_child_bitmap(struct TASK *child, uint32_t vaddr) {
     uint32_t bit = (vaddr - USER_VADDR_START) / PAGE_SIZE;
     if (vaddr >= USER_VADDR_START &&
         bit < child->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8) {
@@ -40,7 +40,7 @@ static int cow_vaddr_ok(uint32_t vaddr) {
            vaddr < 0xc0000000;
 }
 
-static int alloc_child_page_tables(struct task_struct *child, uint64_t *pdp,
+static int alloc_child_page_tables(struct TASK *child, uint64_t *pdp,
                                    uint64_t *child_pdp) {
     for (uint32_t pdp_idx = 0; pdp_idx < 3; pdp_idx++) {
         uint64_t pdp_e = pdp[pdp_idx];
@@ -69,7 +69,7 @@ static int alloc_child_page_tables(struct task_struct *child, uint64_t *pdp,
     return 0;
 }
 
-static void share_user_space_cow(struct task_struct *child, uint64_t *pdp,
+static void share_user_space_cow(struct TASK *child, uint64_t *pdp,
                                  uint64_t *child_pdp) {
     for (uint32_t pdp_idx = 0; pdp_idx < 3; pdp_idx++) {
         uint64_t pdp_e = pdp[pdp_idx];
@@ -113,8 +113,8 @@ static void share_user_space_cow(struct task_struct *child, uint64_t *pdp,
     }
 }
 
-static void copy_user_space(struct task_struct *parent,
-                            struct task_struct *child) {
+static void copy_user_space(struct TASK *parent,
+                            struct TASK *child) {
     if (parent->pml4_phys == 0) {
         return;
     }
@@ -133,25 +133,25 @@ static void copy_user_space(struct task_struct *parent,
     share_user_space_cow(child, pdp, child_pdp);
 }
 
-static void build_child_stack(struct task_struct *child,
-                              struct Registers *parent_frame) {
+static void build_child_stack(struct TASK *child,
+                              struct X86_REGS *parent_frame) {
     uint32_t stack_top = (uint32_t)child->kernel_stack_top;
-    struct Registers *child_frame =
-        (struct Registers *)(stack_top - sizeof(struct Registers));
-    memcpy(child_frame, parent_frame, sizeof(struct Registers));
+    struct X86_REGS *child_frame =
+        (struct X86_REGS *)(stack_top - sizeof(struct X86_REGS));
+    memcpy(child_frame, parent_frame, sizeof(struct X86_REGS));
     child_frame->eax = 0;
-    struct thread_stack *ts =
-        (struct thread_stack *)((uint8_t *)child_frame -
-                                sizeof(struct thread_stack));
-    memset(ts, 0, sizeof(struct thread_stack));
+    struct TASK_STACK *ts =
+        (struct TASK_STACK *)((uint8_t *)child_frame -
+                                sizeof(struct TASK_STACK));
+    memset(ts, 0, sizeof(struct TASK_STACK));
     ts->rflags = RFLAGS_INIT;
     ts->rip = (void (*)(void))intr_exit;
     child->self_kstack = (uint64_t *)ts;
 }
 
-pid_t sys_fork(struct Registers *r) {
-    struct task_struct *parent = current;
-    struct task_struct *child =
+pid_t sys_fork(struct X86_REGS *r) {
+    struct TASK *parent = current;
+    struct TASK *child =
         thread_alloc_slot(parent->name, parent->priority);
     if (child == NULL) {
         return -1;
@@ -193,10 +193,10 @@ pid_t sys_fork(struct Registers *r) {
     }
     copy_user_space(parent, child);
     if (parent->pml4_phys == 0) {
-        struct thread_stack *ts =
-            (struct thread_stack *)((uint8_t *)child->kernel_stack_top -
-                                    sizeof(struct thread_stack));
-        memset(ts, 0, sizeof(struct thread_stack));
+        struct TASK_STACK *ts =
+            (struct TASK_STACK *)((uint8_t *)child->kernel_stack_top -
+                                    sizeof(struct TASK_STACK));
+        memset(ts, 0, sizeof(struct TASK_STACK));
         ts->rflags = RFLAGS_INIT;
         ts->r15 = (uint64_t)kthread_fork_exec;
         ts->r14 = 0;

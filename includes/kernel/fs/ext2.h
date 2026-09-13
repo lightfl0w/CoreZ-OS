@@ -5,7 +5,7 @@
 #include "kernel/fs/inode.h"
 #include <stdint.h>
 
-struct partition;
+struct DISK_PARTITION;
 #define EXT2_SUPER_MAGIC 0xEF53u
 #define EXT2_S_IFREG 0x8000u
 #define EXT2_S_IFDIR 0x4000u
@@ -41,27 +41,27 @@ struct EXT2_DIRENT {
 } __attribute__((packed));
 
 int ext2_init(void);
-struct partition *ext2_partition(void);
+struct DISK_PARTITION *ext2_partition(void);
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir);
 int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow);
 int ext2_read_link_target(uint32_t ino, char *buf, uint32_t cap);
-int ext2_read_inode(uint32_t ino, struct inode *out);
-int ext2_read_from_inode(const struct inode *ino, uint32_t off, void *buf,
+int ext2_read_inode(uint32_t ino, struct FS_INODE *out);
+int ext2_read_from_inode(const struct FS_INODE *ino, uint32_t off, void *buf,
                          uint32_t count);
-int ext2_dir_next(const struct inode *dino, uint32_t *pos,
-                  struct dir_entry *out);
+int ext2_dir_next(const struct FS_INODE *dino, uint32_t *pos,
+                  struct FS_DIRENT *out);
 
-int ext2_new_inode(uint32_t mode, struct inode *out);
+int ext2_new_inode(uint32_t mode, struct FS_INODE *out);
 void ext2_free_inode(uint32_t ino);
-int ext2_write_inode(uint32_t ino, const struct inode *in);
-int ext2_write_to_inode(struct inode *ino, uint32_t off, const void *buf,
+int ext2_write_inode(uint32_t ino, const struct FS_INODE *in);
+int ext2_write_to_inode(struct FS_INODE *ino, uint32_t off, const void *buf,
                         uint32_t count);
-void ext2_truncate_inode(struct inode *ino);
-int ext2_add_entry(struct inode *dino, uint32_t ino, const char *name,
+void ext2_truncate_inode(struct FS_INODE *ino);
+int ext2_add_entry(struct FS_INODE *dino, uint32_t ino, const char *name,
                    int is_dir);
-int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
+int ext2_add_entry_dt(struct FS_INODE *dino, uint32_t ino, const char *name,
                        uint8_t dtype);
-int ext2_remove_entry(struct inode *dino, const char *name);
+int ext2_remove_entry(struct FS_INODE *dino, const char *name);
 
 #ifndef __ASSEMBLER__
 void ext2_statfs_info(uint32_t *bsize, uint32_t *blocks, uint32_t *bfree,

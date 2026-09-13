@@ -2,28 +2,28 @@
 #define KERNEL_INIT_MB2_H
 #include <stdint.h>
 #define MB2_BOOTLOADER_MAGIC 0x36D76289u
-#define MB2_TAG_END 0
-#define MB2_TAG_CMDLINE 1
-#define MB2_TAG_BOOT_LOADER_NAME 2
-#define MB2_TAG_MODULE 3
-#define MB2_TAG_BASIC_MEMINFO 4
-#define MB2_TAG_BOOTDEV 5
-#define MB2_TAG_MMAP 6
-#define MB2_TAG_VBE 7
-#define MB2_TAG_FRAMEBUFFER 8
-#define MB2_TAG_ELF_SECTIONS 9
-#define MB2_TAG_APM 10
-#define MB2_TAG_EFI32 11
-#define MB2_TAG_EFI64 12
-#define MB2_TAG_SMBIOS 13
-#define MB2_TAG_ACPI_OLD 14
-#define MB2_TAG_ACPI_NEW 15
-#define MB2_TAG_NETWORK 16
-#define MB2_TAG_EFI_MMAP 17
-#define MB2_TAG_EFI_BS 18
-#define MB2_TAG_EFI32_IH 19
-#define MB2_TAG_EFI64_IH 20
-#define MB2_TAG_LOAD_BASE 21
+#define MB2_TYPE_END 0
+#define MB2_TYPE_CMDLINE 1
+#define MB2_TYPE_BOOT_LOADER_NAME 2
+#define MB2_TYPE_MODULE 3
+#define MB2_TYPE_BASIC_MEMINFO 4
+#define MB2_TYPE_BOOTDEV 5
+#define MB2_TYPE_MMAP 6
+#define MB2_TYPE_VBE 7
+#define MB2_TYPE_FRAMEBUFFER 8
+#define MB2_TYPE_ELF_SECTIONS 9
+#define MB2_TYPE_APM 10
+#define MB2_TYPE_EFI32 11
+#define MB2_TYPE_EFI64 12
+#define MB2_TYPE_SMBIOS 13
+#define MB2_TYPE_ACPI_OLD 14
+#define MB2_TYPE_ACPI_NEW 15
+#define MB2_TYPE_NETWORK 16
+#define MB2_TYPE_EFI_MMAP 17
+#define MB2_TYPE_EFI_BS 18
+#define MB2_TYPE_EFI32_IH 19
+#define MB2_TYPE_EFI64_IH 20
+#define MB2_TYPE_LOAD_BASE 21
 #define MB2_MMAP_AVAILABLE 1
 #define MB2_MMAP_RESERVED 2
 #define MB2_MMAP_ACPI_RECLAIM 3
@@ -33,42 +33,42 @@
 #define MB2_FB_TYPE_RGB 1
 #define MB2_FB_TYPE_EGA 2
 #define MB2_MAX_MMAP_ENTRIES 64
-struct mb2_tag {
+struct MB2_TAG {
     uint32_t type;
     uint32_t size;
 };
-struct mb2_tag_string {
+struct MB2_TAG_STRING {
     uint32_t type;
     uint32_t size;
     char string[1];
 };
-struct mb2_tag_basic_meminfo {
+struct MB2_TAG_BASIC_MEMINFO {
     uint32_t type;
     uint32_t size;
     uint32_t mem_lower;
     uint32_t mem_upper;
 };
-struct mb2_tag_bootdev {
+struct MB2_TAG_BOOTDEV {
     uint32_t type;
     uint32_t size;
     uint32_t biosdev;
     uint32_t partition;
     uint32_t sub_partition;
 };
-struct mb2_mmap_entry {
+struct MB2_MMAP_ENTRY {
     uint64_t addr;
     uint64_t len;
     uint32_t type;
     uint32_t zero;
 };
-struct mb2_tag_mmap {
+struct MB2_TAG_MMAP {
     uint32_t type;
     uint32_t size;
     uint32_t entry_size;
     uint32_t entry_version;
-    struct mb2_mmap_entry entries[1];
+    struct MB2_MMAP_ENTRY entries[1];
 };
-struct mb2_tag_framebuffer {
+struct MB2_TAG_FRAMEBUFFER {
     uint32_t type;
     uint32_t size;
     uint64_t framebuffer_addr;
@@ -81,23 +81,23 @@ struct mb2_tag_framebuffer {
     uint8_t color_info[6];
     uint8_t pad[2];
 };
-struct mb2_tag_acpi_old {
+struct MB2_TAG_ACPI_OLD {
     uint32_t type;
     uint32_t size;
     uint8_t rsdp[20];
     uint8_t pad[4];
 };
-struct mb2_tag_acpi_new {
+struct MB2_TAG_ACPI_NEW {
     uint32_t type;
     uint32_t size;
     uint8_t rsdp[36];
 };
-struct mb2_tag_load_base {
+struct MB2_TAG_LOAD_BASE {
     uint32_t type;
     uint32_t size;
     uint32_t load_base_addr;
 };
-struct mb2_info {
+struct MB2_INFO {
     int valid;
     uint32_t total_size;
     const char *cmdline;
@@ -112,9 +112,9 @@ struct mb2_info {
     uint32_t load_base_addr;
     int has_mmap;
     uint32_t mmap_count;
-    struct mb2_mmap_entry mmap[MB2_MAX_MMAP_ENTRIES];
+    struct MB2_MMAP_ENTRY mmap[MB2_MAX_MMAP_ENTRIES];
     int has_framebuffer;
-    struct mb2_tag_framebuffer framebuffer;
+    struct MB2_TAG_FRAMEBUFFER framebuffer;
     int has_rsdp_old;
     uint8_t rsdp_old[20];
     int has_rsdp_new;
@@ -123,7 +123,7 @@ struct mb2_info {
     uint32_t tag_count;
 };
 void mb2_init(uint32_t magic, const void *mbi);
-const struct mb2_info *mb2_get(void);
+const struct MB2_INFO *mb2_get(void);
 uint64_t mb2_mem_top(void);
 uint32_t mb2_mem_upper_kb(void);
 void mb2_dump(void);

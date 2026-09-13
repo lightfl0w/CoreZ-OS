@@ -12,24 +12,24 @@
 #include "kernel/init/tss/tss.h"
 #include "kernel/init/pit/pit.h"
 
-struct ap_boot_info {
+struct SMP_BOOT_INFO {
     uint32_t gdtr;
     uint32_t stack_top;
     uint32_t ap_main;
     uint32_t index;
 };
 
-static struct gdt_desc ap_gdt[NR_CPU][GDT_ENTRIES];
+static struct GDT_DESC ap_gdt[NR_CPU][GDT_ENTRIES];
 
-struct cmp_gdtr {
+struct GDT_REG {
     uint16_t limit;
     uint64_t base;
 } __attribute__((packed));
-static struct cmp_gdtr ap_gdtr[NR_CPU];
+static struct GDT_REG ap_gdtr[NR_CPU];
 
 static uint32_t ap_ready[NR_CPU];
 
-static void ap_desc_init(struct gdt_desc *d, uint32_t base, uint32_t limit,
+static void ap_desc_init(struct GDT_DESC *d, uint32_t base, uint32_t limit,
                          uint8_t attr_low, uint8_t attr_high) {
     d->limit_low = limit & 0xFFFF;
     d->base_low = base & 0xFFFF;
@@ -40,14 +40,14 @@ static void ap_desc_init(struct gdt_desc *d, uint32_t base, uint32_t limit,
 }
 
 static void ap_build_gdt(uint32_t idx, uint32_t percpu_base) {
-    struct gdt_desc *g = ap_gdt[idx];
+    struct GDT_DESC *g = ap_gdt[idx];
     memset(g, 0, sizeof(ap_gdt[idx]));
 
     ap_desc_init(&g[1], 0, 0, 0x9A, 0x20);
     ap_desc_init(&g[2], 0, 0xFFFFF, 0x92, 0xCF);
     ap_desc_init(&g[GDT_PER_CPU_INDEX], percpu_base, 0xFFF, 0x92, 0x40);
     tss_desc_init(&g[GDT_TSS_INDEX], (uint64_t)tss_cpu(idx),
-                  sizeof(struct tss) - 1);
+                  sizeof(struct X86_TSS) - 1);
 
     ap_gdtr[idx].limit = (uint16_t)(sizeof(ap_gdt[idx]) - 1);
     ap_gdtr[idx].base = (uint64_t)g;
@@ -55,7 +55,7 @@ static void ap_build_gdt(uint32_t idx, uint32_t percpu_base) {
 
 static void ap_main(uint32_t idx) {
     set_cpu_id(idx);
-    set_current((struct task_struct *)0);
+    set_current((struct TASK *)0);
     __atomic_store_n(&ap_ready[idx], 1u, __ATOMIC_RELEASE);
     asm_cli();
     for (;;) {
@@ -64,8 +64,8 @@ static void ap_main(uint32_t idx) {
 }
 
 static void wakeup_ap(uint32_t idx) {
-    volatile struct ap_boot_info *info =
-        (volatile struct ap_boot_info *)AP_BOOT_INFO_ADDR;
+    volatile struct SMP_BOOT_INFO *info =
+        (volatile struct SMP_BOOT_INFO *)AP_BOOT_INFO_ADDR;
 
     uint32_t percpu_base = PER_CPU_BASE + idx * PAGE_SIZE;
     uint32_t stack = (uint32_t)palloc(&kernel_pool);

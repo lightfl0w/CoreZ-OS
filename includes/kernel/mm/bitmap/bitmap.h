@@ -5,14 +5,14 @@
 
 #define BITMAP_MASK 0x80
 
-struct bitmap {
+struct MM_BITMAP {
     uint32_t btmp_bytes_len;
     uint8_t *bits;
 };
 
-void bitmap_init(struct bitmap *btmp);
-int bitmap_scan_test(const struct bitmap *btmp, uint32_t bit_idx);
-void bitmap_set(struct bitmap *btmp, uint32_t bit_idx, int8_t value);
-int bitmap_scan(const struct bitmap *btmp, uint32_t cnt);
+void bitmap_init(struct MM_BITMAP *btmp);
+int bitmap_scan_test(const struct MM_BITMAP *btmp, uint32_t bit_idx);
+void bitmap_set(struct MM_BITMAP *btmp, uint32_t bit_idx, int8_t value);
+int bitmap_scan(const struct MM_BITMAP *btmp, uint32_t cnt);
 
 #endif

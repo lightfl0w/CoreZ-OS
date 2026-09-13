@@ -10,7 +10,7 @@
 #include "drivers/char/tty.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
-struct partition *cur_part;
+struct DISK_PARTITION *cur_part;
 void filesys_init(void) {
     file_table_init();
     if (ext2_init()) {
@@ -102,7 +102,7 @@ static uint32_t get_parent_inode(const char *parent) {
     return pino;
 }
 
-static void ext2_free_best_effort(struct inode *ino);
+static void ext2_free_best_effort(struct FS_INODE *ino);
 static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     char parent[MAX_PATH_LEN];
     char base[MAX_PATH_LEN];
@@ -121,7 +121,7 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     if (ext2_lookup_ftype(pathname, &tino, &tft, 0) == 0) {
         return -1;
     }
-    struct inode par;
+    struct FS_INODE par;
     if (ext2_read_inode(pino, &par)) {
         return -1;
     }
@@ -129,7 +129,7 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
         current->errno = 13;
         return -1;
     }
-    struct inode newi;
+    struct FS_INODE newi;
     uint32_t ino = ext2_new_inode(mode, &newi);
     if (ino == 0) {
         return -1;
@@ -156,14 +156,14 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     return (int)ino;
 }
 
-static void ext2_free_best_effort(struct inode *ino) {
+static void ext2_free_best_effort(struct FS_INODE *ino) {
     ext2_truncate_inode(ino);
     ext2_write_inode(ino->i_no, ino);
     ext2_free_inode(ino->i_no);
 }
 
-int fs_check_perm(const struct inode *ino, uint32_t bits) {
-    struct task_struct *cur = current;
+int fs_check_perm(const struct FS_INODE *ino, uint32_t bits) {
+    struct TASK *cur = current;
     if (cur->euid == 0) {
         if ((bits & 1u) && !(ino->i_mode & 0111u))
             return -1;
@@ -181,11 +181,11 @@ int fs_check_perm(const struct inode *ino, uint32_t bits) {
     return 0;
 }
 
-int fs_is_chardev(const struct inode *ino) {
+int fs_is_chardev(const struct FS_INODE *ino) {
     return ino != NULL && (ino->i_mode & 0xF000u) == 0x2000u;
 }
 
-uint32_t fs_chardev_dev(const struct inode *ino) {
+uint32_t fs_chardev_dev(const struct FS_INODE *ino) {
     return ino->i_block[0];
 }
 
@@ -206,7 +206,7 @@ int32_t sys_symlink(const char *target, const char *linkpath) {
     if ((int32_t)ino <= 0) {
         return -1;
     }
-    struct inode node;
+    struct FS_INODE node;
     if (ext2_read_inode(ino, &node)) {
         return -1;
     }
@@ -223,7 +223,7 @@ int32_t sys_symlink(const char *target, const char *linkpath) {
 
 static int fs_stat_node(uint32_t ino_no, uint32_t *size, uint32_t *mode,
                         uint32_t *uid, uint32_t *gid) {
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino_no, &obj))
         return -1;
     if (size) *size = obj.i_size;
@@ -257,7 +257,7 @@ int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
     int ft = 0;
     if (path == NULL || ext2_lookup_ftype(path, &ino_no, &ft, 1))
         return -1;
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino_no, &obj))
         return -1;
     if (current->euid != 0) {
@@ -284,7 +284,7 @@ int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev) {
     if ((int32_t)ino <= 0) {
         return -1;
     }
-    struct inode node;
+    struct FS_INODE node;
     if (ext2_read_inode(ino, &node)) {
         return -1;
     }
@@ -319,7 +319,7 @@ int open_file(const char *pathname, uint8_t flags) {
     if (gfd == -1) {
         return -1;
     }
-    struct file *file = file_get((uint32_t)gfd);
+    struct FILE *file = file_get((uint32_t)gfd);
     file->fd_pos = 0;
     file->fd_flag = flags;
     file->fd_inode = inode_open(cur_part, ino);
@@ -366,7 +366,7 @@ int close_file(int fd) {
         return 0;
 
     lock_acquire(&file_table_lock);
-    struct file *file = file_get(global_fd_idx);
+    struct FILE *file = file_get(global_fd_idx);
     if (file->ref_cnt > 0)
         file->ref_cnt--;
 
@@ -399,7 +399,7 @@ uint32_t read_file(int fd, void *buf, uint32_t count) {
     if (global_fd_idx == (uint32_t)-1) {
         return (uint32_t)-1;
     }
-    struct file *pf = file_get(global_fd_idx);
+    struct FILE *pf = file_get(global_fd_idx);
     if (pf->proc_id != 0) {
         return proc_read(pf, buf, count);
     }
@@ -425,7 +425,7 @@ int32_t sys_lseek(int32_t fd, int32_t offset, uint8_t whence) {
     if (global_fd_idx == (uint32_t)-1) {
         return -1;
     }
-    struct file *pf = file_get(global_fd_idx);
+    struct FILE *pf = file_get(global_fd_idx);
     if (pf->proc_id != 0) {
         return proc_lseek(pf, offset, whence);
     }
@@ -451,9 +451,9 @@ int32_t sys_lseek(int32_t fd, int32_t offset, uint8_t whence) {
     return (int32_t)pf->fd_pos;
 }
 
-static int ext2_dir_is_empty(struct inode *dino) {
+static int ext2_dir_is_empty(struct FS_INODE *dino) {
     uint32_t pos = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     while (ext2_dir_next(dino, &pos, &de) == 0) {
         if (strcmp(de.filename, ".") != 0 && strcmp(de.filename, "..") != 0) {
             return 0;
@@ -478,8 +478,8 @@ static int remove_entry_common(const char *pathname, int want_dir,
     if (ext2_lookup(pathname, &ino, &is_dir) || is_dir != want_dir) {
         return -1;
     }
-    struct inode par;
-    struct inode obj;
+    struct FS_INODE par;
+    struct FS_INODE obj;
     if (ext2_read_inode(pino, &par) || ext2_read_inode(ino, &obj)) {
         return -1;
     }
@@ -511,7 +511,7 @@ int32_t sys_mkdir(const char *pathname) {
     return r > 0 ? 0 : -1;
 }
 
-struct dir *sys_opendir(const char *name) {
+struct FS_DIR *sys_opendir(const char *name) {
     uint32_t ino = 0;
     int is_dir = 0;
     if (!strcmp(name, "/") || !strcmp(name, "/.") || !strcmp(name, "/..")) {
@@ -523,7 +523,7 @@ struct dir *sys_opendir(const char *name) {
     if (!is_dir) {
         return NULL;
     }
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino, &obj)) {
         return NULL;
     }
@@ -534,7 +534,7 @@ struct dir *sys_opendir(const char *name) {
     return dir_open(cur_part, ino);
 }
 
-int32_t sys_closedir(struct dir *dir) {
+int32_t sys_closedir(struct FS_DIR *dir) {
     int32_t ret = -1;
     if (dir != NULL) {
         dir_close(dir);
@@ -543,11 +543,11 @@ int32_t sys_closedir(struct dir *dir) {
     return ret;
 }
 
-struct dir_entry *sys_readdir(struct dir *dir) {
+struct FS_DIRENT *sys_readdir(struct FS_DIR *dir) {
     return dir_read(dir);
 }
 
-void sys_rewinddir(struct dir *dir) {
+void sys_rewinddir(struct FS_DIR *dir) {
     dir_rewind(dir);
 }
 
@@ -564,12 +564,12 @@ int32_t sys_rmdir(const char *pathname) {
 }
 
 static uint32_t get_parent_dir_inode_nr(uint32_t child_inode_nr) {
-    struct inode *ino = inode_open(cur_part, child_inode_nr);
+    struct FS_INODE *ino = inode_open(cur_part, child_inode_nr);
     if (ino == NULL) {
         return (uint32_t)-1;
     }
     uint32_t pos = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     uint32_t parent = 0;
     while (ext2_dir_next(ino, &pos, &de) == 0) {
         if (strcmp(de.filename, "..") == 0) {
@@ -583,12 +583,12 @@ static uint32_t get_parent_dir_inode_nr(uint32_t child_inode_nr) {
 
 static int get_child_dir_name(uint32_t p_inode_nr, uint32_t c_inode_nr,
                               char *path) {
-    struct inode *p = inode_open(cur_part, p_inode_nr);
+    struct FS_INODE *p = inode_open(cur_part, p_inode_nr);
     if (p == NULL) {
         return -1;
     }
     uint32_t pos = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     int ret = -1;
     while (ext2_dir_next(p, &pos, &de) == 0) {
         if (de.i_no == c_inode_nr && strcmp(de.filename, ".") != 0 &&
@@ -687,7 +687,7 @@ int32_t sys_chdir(const char *path) {
     if (ext2_lookup(path, &ino, &is_dir) || !is_dir) {
         return -1;
     }
-    struct inode obj;
+    struct FS_INODE obj;
     if (ext2_read_inode(ino, &obj)) {
         return -1;
     }
@@ -699,7 +699,7 @@ int32_t sys_chdir(const char *path) {
     return 0;
 }
 
-int32_t sys_stat(const char *path, struct stat *buf) {
+int32_t sys_stat(const char *path, struct FS_STAT *buf) {
     if (path == NULL) {
         return -1;
     }
@@ -717,7 +717,7 @@ int32_t sys_stat(const char *path, struct stat *buf) {
     if (ext2_lookup(path, &ino, &is_dir)) {
         return -1;
     }
-    struct inode *obj = inode_open(cur_part, ino);
+    struct FS_INODE *obj = inode_open(cur_part, ino);
     if (obj == NULL) {
         return -1;
     }

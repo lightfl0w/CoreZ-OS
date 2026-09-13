@@ -24,7 +24,7 @@ static const uint8_t sig_default[NSIG] = {
     [SIGTSTP] = SIG_ACT_STOP, [SIGTTIN] = SIG_ACT_STOP,
     [SIGTTOU] = SIG_ACT_STOP, [SIGSYS] = SIG_ACT_TERM,
 };
-void init_signal_state(struct task_struct *t) {
+void init_signal_state(struct TASK *t) {
     t->signal_pending = 0;
     t->signal_mask = 0;
     for (int i = 0; i < NSIG; i++) {
@@ -35,7 +35,7 @@ void init_signal_state(struct task_struct *t) {
     }
 }
 
-void signal_reset_user(struct task_struct *t) {
+void signal_reset_user(struct TASK *t) {
     init_signal_state(t);
 }
 
@@ -58,7 +58,7 @@ int exception_to_signal(int int_no) {
     }
 }
 
-void signal_terminate(struct task_struct *t, int sig) {
+void signal_terminate(struct TASK *t, int sig) {
     proc_exit(t, 128 + sig);
 }
 
@@ -66,7 +66,7 @@ static void signal_stop_current(void) {
     thread_block_with_status(TASK_STOPPED);
 }
 
-struct sigframe64 {
+struct SYS_SIGFRAME64 {
     uint64_t restorer;
     uint64_t signo;
     uint64_t rip;
@@ -112,9 +112,9 @@ static int sigframe_valid(uint64_t cs, uint64_t rip, uint64_t rsp,
     return 1;
 }
 
-static void deliver_signal64(struct task_struct *cur, struct Registers *r,
-                             int sig, struct sigaction *sa) {
-    struct sigframe64 frame;
+static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
+                             int sig, struct SYS_SIGACTION *sa) {
+    struct SYS_SIGFRAME64 frame;
     frame.restorer = (uint64_t)sa->sa_restorer;
     frame.signo = (uint64_t)sig;
     frame.rip = r->rip;
@@ -139,7 +139,7 @@ static void deliver_signal64(struct task_struct *cur, struct Registers *r,
     frame.r15 = r->r15;
     frame.old_mask = cur->signal_mask;
     uint64_t sp = r->user_rsp - 128;
-    sp -= sizeof(struct sigframe64);
+    sp -= sizeof(struct SYS_SIGFRAME64);
     sp &= ~0xfULL;
     sp -= 8;
     uint32_t stack_low =
@@ -160,13 +160,13 @@ static void deliver_signal64(struct task_struct *cur, struct Registers *r,
     r->rax = 0;
 }
 
-static void deliver_signal(struct task_struct *cur, struct Registers *r,
-                           int sig, struct sigaction *sa) {
+static void deliver_signal(struct TASK *cur, struct X86_REGS *r,
+                           int sig, struct SYS_SIGACTION *sa) {
     if (r->cs == SELECTOR_USER64_CODE) {
         deliver_signal64(cur, r, sig, sa);
         return;
     }
-    struct sigframe frame;
+    struct SYS_SIGFRAME frame;
     frame.restorer = (uint32_t)sa->sa_restorer;
     frame.signo = (uint32_t)sig;
     frame.eip = r->eip;
@@ -182,7 +182,7 @@ static void deliver_signal(struct task_struct *cur, struct Registers *r,
     frame.edi = r->edi;
     frame.ebp = r->ebp;
     frame.old_mask = cur->signal_mask;
-    uint32_t frame_size = sizeof(struct sigframe);
+    uint32_t frame_size = sizeof(struct SYS_SIGFRAME);
     uint32_t new_esp = (r->user_esp - frame_size) & ~3u;
     uint32_t stack_low =
         (cur->stack_bottom != 0) ? cur->stack_bottom : USER_STACK_BOTTOM;
@@ -200,8 +200,8 @@ static void deliver_signal(struct task_struct *cur, struct Registers *r,
     r->eax = (uint32_t)sig;
 }
 
-void check_pending_signals(struct Registers *r) {
-    struct task_struct *cur = current;
+void check_pending_signals(struct X86_REGS *r) {
+    struct TASK *cur = current;
     if (cur == NULL) {
         return;
     }
@@ -222,7 +222,7 @@ void check_pending_signals(struct Registers *r) {
             break;
         }
         cur->signal_pending &= ~(1u << sig);
-        struct sigaction *sa = &cur->sigactions[sig];
+        struct SYS_SIGACTION *sa = &cur->sigactions[sig];
         void (*handler)(int) = sa->sa_handler;
         if (sig == SIGKILL) {
             signal_terminate(cur, sig);
@@ -251,7 +251,7 @@ void check_pending_signals(struct Registers *r) {
     }
 }
 
-int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
+int sys_sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old) {
     if (sig < 1 || sig >= NSIG) {
         return -1;
     }
@@ -260,11 +260,11 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
     }
     if (old) {
         memcpy((void *)old, &current->sigactions[sig],
-               sizeof(struct sigaction));
+               sizeof(struct SYS_SIGACTION));
     }
     if (act) {
         memcpy(&current->sigactions[sig], (const void *)act,
-               sizeof(struct sigaction));
+               sizeof(struct SYS_SIGACTION));
     }
     return 0;
 }
@@ -289,7 +289,7 @@ int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     return 0;
 }
 
-static int sig_default_terminates(struct task_struct *t, int sig) {
+static int sig_default_terminates(struct TASK *t, int sig) {
     if (sig == SIGKILL) {
         return 1;
     }
@@ -308,7 +308,7 @@ int sys_kill(int pid, int sig) {
         uint32_t pgid = (uint32_t)(-pid);
         int n = 0;
         for (uint32_t i = 0; i < MAX_TASKS; i++) {
-            struct task_struct *t = &task_table[i];
+            struct TASK *t = &task_table[i];
             if (!t->slot_used || t->status == TASK_DIED)
                 continue;
             if (t->pid != pgid)
@@ -326,7 +326,7 @@ int sys_kill(int pid, int sig) {
     if (pid == 0) {
         pid = (int)current->pid;
     }
-    struct task_struct *t = pid2thread(pid);
+    struct TASK *t = pid2thread(pid);
     if (t == NULL) {
         return -1;
     }
@@ -354,18 +354,18 @@ int sys_kill(int pid, int sig) {
     return 0;
 }
 
-uint64_t sys_sigreturn(struct Registers *r) {
-    struct task_struct *cur = current;
+uint64_t sys_sigreturn(struct X86_REGS *r) {
+    struct TASK *cur = current;
     if (r->cs == SELECTOR_USER64_CODE) {
         uint64_t faddr = r->user_rsp - 8;
         if (faddr < USER_VADDR_START ||
-            faddr > USER_SPACE_END - sizeof(struct sigframe64) ||
+            faddr > USER_SPACE_END - sizeof(struct SYS_SIGFRAME64) ||
             !user_range_readable((uint32_t)faddr,
-                                 sizeof(struct sigframe64))) {
+                                 sizeof(struct SYS_SIGFRAME64))) {
             signal_terminate(cur, SIGSEGV);
             return (uint64_t)-1;
         }
-        struct sigframe64 *sf = (struct sigframe64 *)faddr;
+        struct SYS_SIGFRAME64 *sf = (struct SYS_SIGFRAME64 *)faddr;
         if (!sigframe_valid(sf->cs, sf->rip, sf->rsp, sf->ss, sf->rflags)) {
             signal_terminate(cur, SIGSEGV);
             return (uint64_t)-1;
@@ -396,12 +396,12 @@ uint64_t sys_sigreturn(struct Registers *r) {
     }
     uint64_t faddr = r->user_esp - 4;
     if (faddr < USER_VADDR_START ||
-        faddr > USER_SPACE_END - sizeof(struct sigframe) ||
-        !user_range_readable((uint32_t)faddr, sizeof(struct sigframe))) {
+        faddr > USER_SPACE_END - sizeof(struct SYS_SIGFRAME) ||
+        !user_range_readable((uint32_t)faddr, sizeof(struct SYS_SIGFRAME))) {
         signal_terminate(cur, SIGSEGV);
         return (uint64_t)-1;
     }
-    struct sigframe *sf = (struct sigframe *)faddr;
+    struct SYS_SIGFRAME *sf = (struct SYS_SIGFRAME *)faddr;
     if (!sigframe_valid(sf->cs, sf->eip, sf->user_esp, sf->ss, sf->eflags)) {
         signal_terminate(cur, SIGSEGV);
         return (uint64_t)-1;
@@ -426,7 +426,7 @@ uint64_t sys_sigreturn(struct Registers *r) {
 void itimer_tick(void) {
     uint32_t now = tick;
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        struct task_struct *t = &task_table[i];
+        struct TASK *t = &task_table[i];
         if (!t->slot_used || t->status == TASK_DIED || t->itimer_expire == 0) {
             continue;
         }

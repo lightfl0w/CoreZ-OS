@@ -1,6 +1,6 @@
 #include "kernel/gui/layout.h"
 
-const char *layout_name(enum layout_kind kind) {
+const char *layout_name(enum GUI_LAYOUT_KIND kind) {
     switch (kind) {
     case LAYOUT_MASTER_STACK:
         return "[M]";
@@ -15,7 +15,7 @@ const char *layout_name(enum layout_kind kind) {
     }
 }
 
-static void rect_inset(struct gfx_rect *r, int gap) {
+static void rect_inset(struct GFX_RECT *r, int gap) {
     r->x += gap / 2;
     r->y += gap / 2;
     r->w -= gap;
@@ -26,8 +26,8 @@ static void rect_inset(struct gfx_rect *r, int gap) {
         r->h = 16;
 }
 
-void layout_arrange(const struct layout_params *p, int n, struct gfx_rect area,
-                    struct gfx_rect *out) {
+void layout_arrange(const struct GUI_LAYOUT_PARAMS *p, int n, struct GFX_RECT area,
+                    struct GFX_RECT *out) {
     if (n <= 0)
         return;
 

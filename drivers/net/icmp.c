@@ -10,7 +10,7 @@ extern NETIF g_netif;
 
 extern uint32_t net_now_ms(void);
 
-static struct nt_ping_reply s_ping_q[PING_QUEUE_MAX];
+static struct NET_PING_REPLY s_ping_q[PING_QUEUE_MAX];
 static uint32_t s_ping_head;
 static uint32_t s_ping_tail;
 static uint32_t s_ping_cnt;
@@ -20,7 +20,7 @@ static int s_ping_active;
 static void ping_push(uint32_t src, uint16_t id, uint16_t seq) {
     if (s_ping_cnt >= PING_QUEUE_MAX)
         return;
-    struct nt_ping_reply *r = &s_ping_q[s_ping_tail];
+    struct NET_PING_REPLY *r = &s_ping_q[s_ping_tail];
     r->src = src;
     r->id = id;
     r->seq = seq;
@@ -69,7 +69,7 @@ int nt_icmp_send(uint32_t dst, uint16_t id, uint16_t seq) {
     return ip_output(&g_netif, dst, IPPROTO_ICMP, req, rlen);
 }
 
-int nt_icmp_recv(struct nt_ping_reply *out, int max) {
+int nt_icmp_recv(struct NET_PING_REPLY *out, int max) {
     int n = 0;
     asm_cli();
     while (n < max && s_ping_cnt > 0) {

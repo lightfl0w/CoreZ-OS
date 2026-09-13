@@ -7,7 +7,7 @@
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
 #include "kernel/init/mb2.h"
-static struct lock mem_lock;
+static struct SCHED_LOCK mem_lock;
 
 #define PML4_INDEX(v) (((uint64_t)(v) >> 39) & 0x1ff)
 #define PDPT_INDEX(v) (((uint64_t)(v) >> 30) & 0x1ff)
@@ -16,8 +16,8 @@ static struct lock mem_lock;
 
 static uint8_t kernel_pool_bitmap[(MAX_PHYS_MEM - MEMORY_BASE) / PAGE_SIZE / 8];
 static uint8_t kernel_vaddr_bitmap[0x1000000 / PAGE_SIZE / 8];
-struct pool kernel_pool;
-struct virtual_addr kernel_vaddr;
+struct MM_POOL kernel_pool;
+struct MM_VADDR kernel_vaddr;
 #define FRAME_IDX(phy) (((phy) - MEMORY_BASE) / PAGE_SIZE)
 #define FRAME_IDX_MAX ((MAX_PHYS_MEM - MEMORY_BASE) / PAGE_SIZE)
 static uint8_t frame_owner[FRAME_IDX_MAX];
@@ -108,11 +108,11 @@ void mm_init(void) {
     bitmap_init(&kernel_pool.pool_bitmap);
     mark_used(kernel_pool.phy_addr_start, kernel_pool.pool_size);
     {
-        const struct mb2_info *mb2 = mb2_get();
+        const struct MB2_INFO *mb2 = mb2_get();
         int freed_any = 0;
         if (mb2 != NULL && mb2->has_mmap) {
             for (uint32_t i = 0; i < mb2->mmap_count; i++) {
-                const struct mb2_mmap_entry *e = &mb2->mmap[i];
+                const struct MB2_MMAP_ENTRY *e = &mb2->mmap[i];
                 if (e->type != MB2_MMAP_AVAILABLE) {
                     continue;
                 }
@@ -201,7 +201,7 @@ void mm_init(void) {
     }
 }
 
-static uint32_t palloc_raw(struct pool *pool) {
+static uint32_t palloc_raw(struct MM_POOL *pool) {
     int idx = bitmap_scan(&pool->pool_bitmap, 1);
     if (idx == -1) {
         return 0;
@@ -212,7 +212,7 @@ static uint32_t palloc_raw(struct pool *pool) {
     return phy;
 }
 
-static void pfree_raw(struct pool *pool, uint32_t phy_addr) {
+static void pfree_raw(struct MM_POOL *pool, uint32_t phy_addr) {
     if (phy_addr < pool->phy_addr_start) {
         return;
     }
@@ -222,7 +222,7 @@ static void pfree_raw(struct pool *pool, uint32_t phy_addr) {
     bitmap_set(&pool->pool_bitmap, idx, 0);
 }
 
-static uint32_t palloc_pages_raw(struct pool *pool, uint32_t cnt) {
+static uint32_t palloc_pages_raw(struct MM_POOL *pool, uint32_t cnt) {
     int idx = bitmap_scan(&pool->pool_bitmap, cnt);
     if (idx == -1) {
         return 0;
@@ -406,7 +406,7 @@ void *ioremap(uint32_t phy_addr, uint32_t size) {
 }
 
 void *get_a_page(uint32_t vaddr) {
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t bit_idx = (vaddr - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
     if (bit_idx >= cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8) {
         return 0;
@@ -444,7 +444,7 @@ void *get_kernel_pages(uint32_t pg_cnt) {
     return (void *)(uintptr_t)VIRT_OF(phy);
 }
 
-void *palloc(struct pool *pool) {
+void *palloc(struct MM_POOL *pool) {
     lock_acquire(&mem_lock);
     void *r = (void *)palloc_raw(pool);
     lock_release(&mem_lock);
@@ -452,7 +452,7 @@ void *palloc(struct pool *pool) {
 }
 
 uint32_t kernel_pool_free_count(void) {
-    const struct bitmap *btmp = &kernel_pool.pool_bitmap;
+    const struct MM_BITMAP *btmp = &kernel_pool.pool_bitmap;
     const uint64_t *words = (const uint64_t *)btmp->bits;
     uint32_t nwords = btmp->btmp_bytes_len >> 3;
     uint32_t n = 0;
@@ -465,13 +465,13 @@ uint32_t kernel_pool_free_count(void) {
     return n;
 }
 
-void pfree(struct pool *pool, uint32_t phy_addr) {
+void pfree(struct MM_POOL *pool, uint32_t phy_addr) {
     lock_acquire(&mem_lock);
     pfree_raw(pool, phy_addr);
     lock_release(&mem_lock);
 }
 
-uint32_t palloc_pages(struct pool *pool, uint32_t cnt) {
+uint32_t palloc_pages(struct MM_POOL *pool, uint32_t cnt) {
     lock_acquire(&mem_lock);
     uint32_t r = palloc_pages_raw(pool, cnt);
     lock_release(&mem_lock);
@@ -486,7 +486,7 @@ void free_kernel_page(uint32_t vaddr) {
 }
 
 void free_user_page(uint32_t vaddr) {
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     lock_acquire(&mem_lock);
     uint64_t *pte = pte_ptr(vaddr);
     if (*pte & 1) {

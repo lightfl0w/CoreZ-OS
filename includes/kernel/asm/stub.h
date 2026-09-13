@@ -57,7 +57,7 @@ extern void default_handler(void);
 extern void syscall_0x80(void);
 extern void syscall_entry(void);
 
-struct Registers {
+struct X86_REGS {
     uint64_t r15;
     uint64_t r14;
     uint64_t r13;
@@ -95,7 +95,7 @@ struct Registers {
 #define ebp rbp
 #define esp user_rsp
 
-void isr_handler(struct Registers *r);
-void irq_handler(struct Registers *r);
+void isr_handler(struct X86_REGS *r);
+void irq_handler(struct X86_REGS *r);
 
 #endif

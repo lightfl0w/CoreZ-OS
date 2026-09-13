@@ -3,9 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static struct gfx_fb_format fb_fmt = {32, 16, 8, 8, 8, 0, 8};
+static struct GFX_FB_FORMAT fb_fmt = {32, 16, 8, 8, 8, 0, 8};
 
-void gfx_set_fb_format(const struct gfx_fb_format *fmt) {
+void gfx_set_fb_format(const struct GFX_FB_FORMAT *fmt) {
     if (fmt)
         fb_fmt = *fmt;
 }
@@ -30,8 +30,8 @@ gfx_color gfx_over(gfx_color dst, gfx_color src, int alpha) {
     return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
-int gfx_rect_intersect(struct gfx_rect a, struct gfx_rect b,
-                       struct gfx_rect *out) {
+int gfx_rect_intersect(struct GFX_RECT a, struct GFX_RECT b,
+                       struct GFX_RECT *out) {
     int x0 = a.x > b.x ? a.x : b.x;
     int y0 = a.y > b.y ? a.y : b.y;
     int x1 = (a.x + a.w) < (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
@@ -47,7 +47,7 @@ int gfx_rect_intersect(struct gfx_rect a, struct gfx_rect b,
     return 1;
 }
 
-static size_t canvas_bytes(const struct gfx_canvas *c, int *ok) {
+static size_t canvas_bytes(const struct GFX_CANVAS *c, int *ok) {
     if (!c || !c->pixels || c->w <= 0 || c->h <= 0 || c->pitch < c->w * 4) {
         *ok = 0;
         return 0;
@@ -55,7 +55,7 @@ static size_t canvas_bytes(const struct gfx_canvas *c, int *ok) {
     return gfx_canvas_mapped_bytes(c, ok);
 }
 
-void gfx_px(struct gfx_canvas *c, int x, int y, gfx_color color) {
+void gfx_px(struct GFX_CANVAS *c, int x, int y, gfx_color color) {
     if (!c || x < 0 || y < 0 || x >= c->w || y >= c->h)
         return;
     int ok;
@@ -69,7 +69,7 @@ void gfx_px(struct gfx_canvas *c, int x, int y, gfx_color color) {
     *p = gfx_over(*p, color, 255);
 }
 
-void gfx_fill(struct gfx_canvas *c, int x, int y, int w, int h,
+void gfx_fill(struct GFX_CANVAS *c, int x, int y, int w, int h,
               gfx_color color) {
     if (!c || w <= 0 || h <= 0)
         return;
@@ -77,8 +77,8 @@ void gfx_fill(struct gfx_canvas *c, int x, int y, int w, int h,
     size_t mapped = canvas_bytes(c, &ok);
     if (!ok || mapped == 0)
         return;
-    struct gfx_rect clip = {0, 0, c->w, c->h};
-    struct gfx_rect r = {x, y, w, h}, v;
+    struct GFX_RECT clip = {0, 0, c->w, c->h};
+    struct GFX_RECT r = {x, y, w, h}, v;
     if (!gfx_rect_intersect(clip, r, &v))
         return;
     int a = GFX_A(color);
@@ -98,15 +98,15 @@ void gfx_fill(struct gfx_canvas *c, int x, int y, int w, int h,
     }
 }
 
-void gfx_hline(struct gfx_canvas *c, int x, int y, int len, gfx_color color) {
+void gfx_hline(struct GFX_CANVAS *c, int x, int y, int len, gfx_color color) {
     gfx_fill(c, x, y, len, 1, color);
 }
 
-void gfx_vline(struct gfx_canvas *c, int x, int y, int len, gfx_color color) {
+void gfx_vline(struct GFX_CANVAS *c, int x, int y, int len, gfx_color color) {
     gfx_fill(c, x, y, 1, len, color);
 }
 
-void gfx_rect(struct gfx_canvas *c, int x, int y, int w, int h,
+void gfx_rect(struct GFX_CANVAS *c, int x, int y, int w, int h,
               gfx_color color) {
     if (w <= 0 || h <= 0)
         return;
@@ -116,8 +116,8 @@ void gfx_rect(struct gfx_canvas *c, int x, int y, int w, int h,
     gfx_vline(c, x + w - 1, y, h, color);
 }
 
-static int gfx_blit_clip(struct gfx_canvas *dst, int *dx, int *dy,
-                         const struct gfx_canvas *src, int *sx, int *sy, int *w,
+static int gfx_blit_clip(struct GFX_CANVAS *dst, int *dx, int *dy,
+                         const struct GFX_CANVAS *src, int *sx, int *sy, int *w,
                          int *h) {
     if (*dx < 0) {
         *sx -= *dx;
@@ -154,8 +154,8 @@ static int gfx_blit_clip(struct gfx_canvas *dst, int *dx, int *dy,
     return 1;
 }
 
-void gfx_blit(struct gfx_canvas *dst, int dx, int dy,
-              const struct gfx_canvas *src, int sx, int sy, int w, int h) {
+void gfx_blit(struct GFX_CANVAS *dst, int dx, int dy,
+              const struct GFX_CANVAS *src, int sx, int sy, int w, int h) {
     if (!dst || !src || !dst->pixels || !src->pixels)
         return;
     int ok;
@@ -186,8 +186,8 @@ void gfx_blit(struct gfx_canvas *dst, int dx, int dy,
     }
 }
 
-void gfx_blit_alpha(struct gfx_canvas *dst, int dx, int dy,
-                    const struct gfx_canvas *src, int sx, int sy, int w, int h,
+void gfx_blit_alpha(struct GFX_CANVAS *dst, int dx, int dy,
+                    const struct GFX_CANVAS *src, int sx, int sy, int w, int h,
                     int alpha) {
     if (!dst || !src || !dst->pixels || !src->pixels || alpha <= 0)
         return;
@@ -277,7 +277,7 @@ uint8_t gfx_round_coverage(int px, int py, int w, int h, int rad,
     return (uint8_t)(hits * 255 / 16);
 }
 
-static void round_core(struct gfx_canvas *c, int x, int y, int w, int h,
+static void round_core(struct GFX_CANVAS *c, int x, int y, int w, int h,
                        int rad, int corners, gfx_color color, int alpha,
                        int outside) {
     if (!c || w <= 0 || h <= 0)
@@ -286,8 +286,8 @@ static void round_core(struct gfx_canvas *c, int x, int y, int w, int h,
     size_t mapped = canvas_bytes(c, &ok);
     if (!ok || mapped == 0)
         return;
-    struct gfx_rect clip = {0, 0, c->w, c->h};
-    struct gfx_rect r = {x, y, w, h}, v;
+    struct GFX_RECT clip = {0, 0, c->w, c->h};
+    struct GFX_RECT r = {x, y, w, h}, v;
     if (!gfx_rect_intersect(clip, r, &v))
         return;
     if (rad < 0)
@@ -328,23 +328,23 @@ static void round_core(struct gfx_canvas *c, int x, int y, int w, int h,
     }
 }
 
-void gfx_fill_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_fill_round(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                     gfx_color color) {
     round_core(c, x, y, w, h, rad, GFX_CORNER_ALL, color, 255, 0);
 }
 
-void gfx_fill_round_a(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_fill_round_a(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                       gfx_color color, int alpha) {
     round_core(c, x, y, w, h, rad, GFX_CORNER_ALL, color, alpha, 0);
 }
 
-void gfx_mask_round(struct gfx_canvas *c, int x, int y, int w, int h, int rad,
+void gfx_mask_round(struct GFX_CANVAS *c, int x, int y, int w, int h, int rad,
                     gfx_color color, int corners) {
     round_core(c, x, y, w, h, rad, corners, color, 255, 1);
 }
 
-void gfx_blit_round(struct gfx_canvas *dst, int dx, int dy,
-                    const struct gfx_canvas *src, int sx, int sy, int w, int h,
+void gfx_blit_round(struct GFX_CANVAS *dst, int dx, int dy,
+                    const struct GFX_CANVAS *src, int sx, int sy, int w, int h,
                     int alpha, int rx, int ry, int rw, int rh, int rad,
                     int corners) {
     if (!dst || !src || !dst->pixels || !src->pixels || alpha <= 0)
@@ -397,7 +397,7 @@ void gfx_blit_round(struct gfx_canvas *dst, int dx, int dy,
     }
 }
 
-static int fmt_is_standard_32(const struct gfx_fb_format *f) {
+static int fmt_is_standard_32(const struct GFX_FB_FORMAT *f) {
     return f->bpp == 32 && f->r_pos == 16 && f->r_bits == 8 && f->g_pos == 8 &&
            f->g_bits == 8 && f->b_pos == 0 && f->b_bits == 8;
 }
@@ -409,8 +409,8 @@ static uint32_t scale_channel(int v, int bits) {
     return (uint32_t)((v * max + 127) / 255);
 }
 
-void gfx_present(struct gfx_canvas *dst, int dx, int dy,
-                 const struct gfx_canvas *src, int sx, int sy, int w, int h) {
+void gfx_present(struct GFX_CANVAS *dst, int dx, int dy,
+                 const struct GFX_CANVAS *src, int sx, int sy, int w, int h) {
     if (gfx_fb_bpp() != 32) {
         gfx_blit(dst, dx, dy, src, sx, sy, w, h);
         return;

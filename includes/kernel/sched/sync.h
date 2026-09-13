@@ -4,32 +4,32 @@
 #include "lib/list/list.h"
 #include <stdint.h>
 
-struct spinlock {
+struct SCHED_SPINLOCK {
     volatile uint32_t locked;
 };
 
-struct semaphore {
+struct SCHED_SEMAPHORE {
     uint8_t value;
-    struct list waiters;
+    struct LIST waiters;
 
-    struct spinlock lock;
+    struct SCHED_SPINLOCK lock;
 };
 
-struct lock {
-    struct task_struct *holder;
-    struct semaphore semaphore;
+struct SCHED_LOCK {
+    struct TASK *holder;
+    struct SCHED_SEMAPHORE semaphore;
     uint32_t holder_repeat_nr;
 };
 
-void spinlock_init(struct spinlock *s);
-void spinlock_acquire(struct spinlock *s);
-void spinlock_release(struct spinlock *s);
+void spinlock_init(struct SCHED_SPINLOCK *s);
+void spinlock_acquire(struct SCHED_SPINLOCK *s);
+void spinlock_release(struct SCHED_SPINLOCK *s);
 
-void sema_init(struct semaphore *psema, uint8_t value);
-void sema_down(struct semaphore *psema);
-void sema_up(struct semaphore *psema);
-void lock_init(struct lock *plock);
-void lock_acquire(struct lock *plock);
-void lock_release(struct lock *plock);
+void sema_init(struct SCHED_SEMAPHORE *psema, uint8_t value);
+void sema_down(struct SCHED_SEMAPHORE *psema);
+void sema_up(struct SCHED_SEMAPHORE *psema);
+void lock_init(struct SCHED_LOCK *plock);
+void lock_acquire(struct SCHED_LOCK *plock);
+void lock_release(struct SCHED_LOCK *plock);
 
 #endif

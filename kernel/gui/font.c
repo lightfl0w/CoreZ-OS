@@ -102,38 +102,38 @@ static float ft_acos(float x) {
 
 #define GLYPH_ARENA_PAGES 512
 #define ARENA_ALIGN 16
-struct arena_hdr {
+struct GUI_ARENA_HDR {
     size_t size;
-    struct arena_hdr *next;
+    struct GUI_ARENA_HDR *next;
 };
 static uint8_t *g_arena;
 static size_t g_arena_size, g_arena_bump;
-static struct arena_hdr *g_freelist;
+static struct GUI_ARENA_HDR *g_freelist;
 static void *arena_alloc(size_t n) {
     if (!g_arena)
         return 0;
     n = (n + (ARENA_ALIGN - 1)) & ~(size_t)(ARENA_ALIGN - 1);
-    struct arena_hdr **pp = &g_freelist;
+    struct GUI_ARENA_HDR **pp = &g_freelist;
     while (*pp) {
         if ((*pp)->size >= n) {
-            struct arena_hdr *b = *pp;
+            struct GUI_ARENA_HDR *b = *pp;
             *pp = b->next;
             return (void *)(b + 1);
         }
         pp = &(*pp)->next;
     }
-    if (g_arena_bump + n + sizeof(struct arena_hdr) > g_arena_size)
+    if (g_arena_bump + n + sizeof(struct GUI_ARENA_HDR) > g_arena_size)
         return 0;
-    struct arena_hdr *b = (struct arena_hdr *)(void *)(g_arena + g_arena_bump);
+    struct GUI_ARENA_HDR *b = (struct GUI_ARENA_HDR *)(void *)(g_arena + g_arena_bump);
     b->size = n;
-    g_arena_bump += n + sizeof(struct arena_hdr);
+    g_arena_bump += n + sizeof(struct GUI_ARENA_HDR);
     return (void *)(b + 1);
 }
 
 static void arena_release(void *p) {
     if (!p)
         return;
-    struct arena_hdr *b = ((struct arena_hdr *)p) - 1;
+    struct GUI_ARENA_HDR *b = ((struct GUI_ARENA_HDR *)p) - 1;
     b->next = g_freelist;
     g_freelist = b;
 }
@@ -155,7 +155,7 @@ static void arena_release(void *p) {
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "lib/stb_truetype.h"
 #define FONT_SLOTS 512
-struct font_glyph {
+struct GUI_FONT_GLYPH {
     int32_t cp;
     int px;
     int w, h, ox, oy;
@@ -163,11 +163,11 @@ struct font_glyph {
     uint8_t *bm;
     uint32_t lru;
 };
-static struct font_glyph g_glyphs[FONT_SLOTS];
+static struct GUI_FONT_GLYPH g_glyphs[FONT_SLOTS];
 static stbtt_fontinfo g_fi;
 static int g_ready;
 static uint32_t g_clock;
-static struct lock g_font_lock;
+static struct SCHED_LOCK g_font_lock;
 static int g_lock_ready;
 static uint8_t g_fpu_buf[512] __attribute__((aligned(64)));
 static uint32_t fpu_enter(void) {
@@ -189,7 +189,7 @@ static void cache_reset(void) {
     g_clock = 0;
 }
 
-static struct font_glyph *glyph_fill(struct font_glyph *g, int32_t cp, int px) {
+static struct GUI_FONT_GLYPH *glyph_fill(struct GUI_FONT_GLYPH *g, int32_t cp, int px) {
     uint32_t ef = fpu_enter();
     float scale = stbtt_ScaleForPixelHeight(&g_fi, (float)px);
     int adv = 0, lsb = 0;
@@ -227,23 +227,23 @@ static struct font_glyph *glyph_fill(struct font_glyph *g, int32_t cp, int px) {
     return g;
 }
 
-static struct font_glyph *glyph_get(int32_t cp, int px) {
+static struct GUI_FONT_GLYPH *glyph_get(int32_t cp, int px) {
     uint32_t h =
         (((uint32_t)cp * 2654435761u) ^ ((uint32_t)px * 40503u)) &
         (FONT_SLOTS - 1);
     for (int i = 0; i < FONT_SLOTS; i++) {
-        struct font_glyph *g = &g_glyphs[(h + i) & (FONT_SLOTS - 1)];
+        struct GUI_FONT_GLYPH *g = &g_glyphs[(h + i) & (FONT_SLOTS - 1)];
         if (g->cp == cp && g->px == px) {
             g->lru = ++g_clock;
             return g;
         }
     }
     for (int i = 0; i < FONT_SLOTS; i++) {
-        struct font_glyph *g = &g_glyphs[(h + i) & (FONT_SLOTS - 1)];
+        struct GUI_FONT_GLYPH *g = &g_glyphs[(h + i) & (FONT_SLOTS - 1)];
         if (g->cp == 0)
             return glyph_fill(g, cp, px);
     }
-    struct font_glyph *victim = &g_glyphs[0];
+    struct GUI_FONT_GLYPH *victim = &g_glyphs[0];
     for (int i = 1; i < FONT_SLOTS; i++)
         if (g_glyphs[i].lru < victim->lru)
             victim = &g_glyphs[i];
@@ -365,7 +365,7 @@ int font_text_width(const char *utf8, int px) {
     return w;
 }
 
-int font_draw(struct gfx_canvas *c, int x, int y, const char *utf8, int px,
+int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
               gfx_color fg) {
     if (!g_ready || !c || !c->pixels || !utf8)
         return x;
@@ -384,7 +384,7 @@ int font_draw(struct gfx_canvas *c, int x, int y, const char *utf8, int px,
         int cp = font_utf8_next(&s);
         if (cp <= 0)
             break;
-        struct font_glyph *g = glyph_get(cp, px);
+        struct GUI_FONT_GLYPH *g = glyph_get(cp, px);
         if (prev)
             penx += (int)(stbtt_GetCodepointKernAdvance(&g_fi, prev, cp) *
                               scale +

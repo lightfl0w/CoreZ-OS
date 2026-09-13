@@ -8,29 +8,29 @@
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
 extern void intr_exit(void);
-static void build_clone_stack(struct task_struct *child,
-                              struct Registers *parent_frame,
+static void build_clone_stack(struct TASK *child,
+                              struct X86_REGS *parent_frame,
                               uint32_t user_stack) {
     uint32_t stack_top = (uint32_t)child->kernel_stack_top;
-    struct Registers *child_frame =
-        (struct Registers *)(stack_top - sizeof(struct Registers));
-    memcpy(child_frame, parent_frame, sizeof(struct Registers));
+    struct X86_REGS *child_frame =
+        (struct X86_REGS *)(stack_top - sizeof(struct X86_REGS));
+    memcpy(child_frame, parent_frame, sizeof(struct X86_REGS));
     child_frame->eax = 0;
     child_frame->user_esp = user_stack;
-    struct thread_stack *ts =
-        (struct thread_stack *)((uint8_t *)child_frame -
-                                sizeof(struct thread_stack));
-    memset(ts, 0, sizeof(struct thread_stack));
+    struct TASK_STACK *ts =
+        (struct TASK_STACK *)((uint8_t *)child_frame -
+                                sizeof(struct TASK_STACK));
+    memset(ts, 0, sizeof(struct TASK_STACK));
     ts->rflags = RFLAGS_INIT;
     ts->rip = (void (*)(void))intr_exit;
     child->self_kstack = (uint64_t *)ts;
 }
 
-pid_t sys_clone(struct Registers *r) {
+pid_t sys_clone(struct X86_REGS *r) {
     uint32_t flags = r->ebx;
     uint32_t child_user_stack = r->ecx;
-    struct task_struct *parent = current;
-    struct task_struct *child =
+    struct TASK *parent = current;
+    struct TASK *child =
         thread_alloc_slot(parent->name, parent->priority);
     if (child == NULL) {
         return -1;

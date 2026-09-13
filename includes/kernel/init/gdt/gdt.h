@@ -17,7 +17,7 @@
 #define GDT_TSS_INDEX 9
 #define GDT_ENTRIES 12
 
-struct gdt_desc {
+struct GDT_DESC {
     uint16_t limit_low;
     uint16_t base_low;
     uint8_t base_mid;
@@ -26,10 +26,10 @@ struct gdt_desc {
     uint8_t base_high;
 } __attribute__((packed));
 
-extern struct gdt_desc gdt[GDT_ENTRIES];
+extern struct GDT_DESC gdt[GDT_ENTRIES];
 
 void gdt_init(void);
 void set_tss_desc(uint64_t tss_base, uint32_t tss_limit);
-void tss_desc_init(struct gdt_desc *d, uint64_t base, uint32_t limit);
+void tss_desc_init(struct GDT_DESC *d, uint64_t base, uint32_t limit);
 void tls_desc_set_base(uint32_t base);
 #endif

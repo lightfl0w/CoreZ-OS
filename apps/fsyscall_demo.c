@@ -1,11 +1,11 @@
 #include "libc/user/stdio.h"
 #include "syscall.h"
 
-enum file_types { FT_UNKNOWN, FT_REGULAR, FT_DIRECTORY };
-struct stat {
+enum FS_FILE_TYPE { FT_UNKNOWN, FT_REGULAR, FT_DIRECTORY };
+struct FS_STAT {
     uint32_t st_ino;
     uint32_t st_size;
-    enum file_types st_filetype;
+    enum FS_FILE_TYPE st_filetype;
 };
 
 static int g_fail = 0;
@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     (void)argv;
     const char *f1 = "/sysdemo.tmp";
     const char *f2 = "/sysdemo.renamed";
-    struct stat st;
+    struct FS_STAT st;
 
     printf("fsyscall_demo: start\n");
 
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     CHECK(fcntl((-1), F_GETFL, 0) == -1, "fcntl bad fd -> -1");
 
     char dbuf[256];
-    CHECK(getdents(-1, (struct linux_dirent *)dbuf, sizeof(dbuf)) == -1,
+    CHECK(getdents(-1, (struct LINUX_DIRENT *)dbuf, sizeof(dbuf)) == -1,
           "getdents bad fd -> -1");
 
     CHECK(chmod(f1, 0700) == 0, "chmod ok");
@@ -66,12 +66,12 @@ int main(int argc, char **argv) {
 
     CHECK(readlink(f2, dbuf, sizeof(dbuf)) == -1, "readlink -> -1");
 
-    struct timespec ts;
-    struct timeval tv;
+    struct SYS_TIMESPEC ts;
+    struct SYS_TIMEVAL tv;
     CHECK(clock_gettime(CLOCK_REALTIME, &ts) == 0 && ts.tv_sec >= 0,
           "clock_gettime");
     CHECK(gettimeofday(&tv, 0) == 0 && tv.tv_sec >= 0, "gettimeofday");
-    struct timespec req = {0, 10 * 1000 * 1000};
+    struct SYS_TIMESPEC req = {0, 10 * 1000 * 1000};
     CHECK(nanosleep(&req, 0) == 0, "nanosleep 10ms");
 
     close(fd);

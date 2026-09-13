@@ -18,10 +18,10 @@
 extern void intr_exit(void);
 
 void start_process(void *arg);
-void page_dir_activate(struct task_struct *task);
-void process_activate(struct task_struct *task);
+void page_dir_activate(struct TASK *task);
+void process_activate(struct TASK *task);
 uint32_t *create_page_dir(void);
-void create_user_vaddr_bitmap(struct task_struct *user_prog);
+void create_user_vaddr_bitmap(struct TASK *user_prog);
 void process_execute(char *path, char *name);
 
 #endif

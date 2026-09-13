@@ -5,22 +5,22 @@
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/pool/pool.h"
 
-extern struct udi_ops udi_virtio_ops;
-extern struct udi_ops udi_vmware_ops;
+extern struct GUI_UDI_OPS udi_virtio_ops;
+extern struct GUI_UDI_OPS udi_vmware_ops;
 
 #define UDI_MAX_BACKENDS 4
 
-static struct udi_ops *backends[UDI_MAX_BACKENDS];
+static struct GUI_UDI_OPS *backends[UDI_MAX_BACKENDS];
 static int backend_count;
-static struct udi_ops *active;
+static struct GUI_UDI_OPS *active;
 
-void udi_register(struct udi_ops *ops) {
+void udi_register(struct GUI_UDI_OPS *ops) {
     if (ops == 0 || backend_count >= UDI_MAX_BACKENDS)
         return;
     backends[backend_count++] = ops;
 }
 
-struct udi_ops *udi_active(void) {
+struct GUI_UDI_OPS *udi_active(void) {
     return active;
 }
 
@@ -28,13 +28,13 @@ int udi_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
     if (active)
         return 0;
 
-    extern struct udi_ops udi_sw_ops;
+    extern struct GUI_UDI_OPS udi_sw_ops;
     udi_register(&udi_virtio_ops);
     udi_register(&udi_vmware_ops);
     udi_register(&udi_sw_ops);
 
     for (int i = 0; i < backend_count; i++) {
-        struct udi_ops *ops = backends[i];
+        struct GUI_UDI_OPS *ops = backends[i];
         if (ops->probe && ops->probe() != 0)
             continue;
         if (ops->init(w, h, bpp) != 0)
@@ -45,8 +45,8 @@ int udi_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
     return -1;
 }
 
-static struct gfx_canvas sw_front;
-static struct gfx_canvas sw_back;
+static struct GFX_CANVAS sw_front;
+static struct GFX_CANVAS sw_back;
 static uint64_t sw_handle;
 
 static int sw_probe(void) {
@@ -82,7 +82,7 @@ static int sw_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
 }
 
 static int sw_alloc_buffer(uint32_t w, uint32_t h, uint32_t bpp,
-                           struct udi_buffer *out) {
+                           struct GUI_UDI_BUFFER *out) {
     out->handle = sw_handle;
     out->vmem = sw_back.pixels;
     out->w = w;
@@ -96,10 +96,10 @@ static void sw_free_buffer(uint64_t handle) {
     (void)handle;
 }
 
-static int sw_commit(uint64_t handle, struct gfx_rect *rects, int n) {
+static int sw_commit(uint64_t handle, struct GFX_RECT *rects, int n) {
     (void)handle;
     for (int i = 0; i < n; i++) {
-        struct gfx_rect *r = &rects[i];
+        struct GFX_RECT *r = &rects[i];
         gfx_present(&sw_front, r->x, r->y, &sw_back, r->x, r->y, r->w, r->h);
     }
     return 0;
@@ -109,7 +109,7 @@ static void sw_wait_vblank(void) {
     mtime_sleep(16);
 }
 
-struct udi_ops udi_sw_ops = {
+struct GUI_UDI_OPS udi_sw_ops = {
     "software", sw_probe,  sw_init,      sw_alloc_buffer,
     sw_free_buffer, sw_commit, sw_wait_vblank,
 };

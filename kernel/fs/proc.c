@@ -82,7 +82,7 @@ static uint32_t meminfo_build(char *dst, uint32_t cap) {
 }
 
 static uint32_t procstat_build(char *dst, uint32_t cap, uint32_t slot) {
-    struct task_struct *t = &task_table[slot];
+    struct TASK *t = &task_table[slot];
     char state = t->status == TASK_RUNNING ? 'R'
                  : (t->status == TASK_HANGING || t->status == TASK_DIED)
                      ? 'Z'
@@ -95,7 +95,7 @@ static uint32_t procstat_build(char *dst, uint32_t cap, uint32_t slot) {
 }
 
 static uint32_t procstatus_build(char *dst, uint32_t cap, uint32_t slot) {
-    struct task_struct *t = &task_table[slot];
+    struct TASK *t = &task_table[slot];
     return sprintf(dst,
                    "Name:\t%s\nPid:\t%d\nPPid:\t%d\nUid:\t%d %d %d\n"
                    "Gid:\t%d %d %d\n",
@@ -126,7 +126,7 @@ int proc_open(const char *path, uint8_t flags) {
     if (gfd == -1) {
         return -1;
     }
-    struct file *file = file_get((uint32_t)gfd);
+    struct FILE *file = file_get((uint32_t)gfd);
     file->fd_pos = 0;
     file->fd_flag = flags;
     file->fd_inode = NULL;
@@ -143,7 +143,7 @@ int proc_open(const char *path, uint8_t flags) {
     return fd;
 }
 
-uint32_t proc_read(struct file *file, void *buf, uint32_t count) {
+uint32_t proc_read(struct FILE *file, void *buf, uint32_t count) {
     char info[256];
     uint32_t len;
     if (file->proc_id == PROC_MEMINFO) {
@@ -168,7 +168,7 @@ uint32_t proc_read(struct file *file, void *buf, uint32_t count) {
     return n;
 }
 
-int proc_stat(const char *path, struct stat *buf) {
+int proc_stat(const char *path, struct FS_STAT *buf) {
     int node = proc_node_of(path);
     if (node == PROC_NONE) {
         return -1;
@@ -185,7 +185,7 @@ int proc_stat(const char *path, struct stat *buf) {
     return 0;
 }
 
-int proc_fstat(struct file *file, struct stat *buf) {
+int proc_fstat(struct FILE *file, struct FS_STAT *buf) {
     if (file->proc_id == PROC_NONE) {
         return -1;
     }
@@ -205,7 +205,7 @@ int proc_access(const char *path) {
     return proc_match(path) ? 0 : -1;
 }
 
-int proc_lseek(struct file *file, int32_t offset, uint8_t whence) {
+int proc_lseek(struct FILE *file, int32_t offset, uint8_t whence) {
     int32_t size = (int32_t)proc_size(file->proc_id);
     int32_t new_pos = 0;
     if (whence == SEEK_SET) {

@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-struct task_struct;
-struct Registers;
+struct TASK;
+struct X86_REGS;
 
 #define NSIG 32
 
@@ -50,14 +50,14 @@ struct Registers;
 
 typedef uint32_t sigset_t;
 
-struct sigaction {
+struct SYS_SIGACTION {
     void (*sa_handler)(int);
     uint32_t sa_mask;
     uint32_t sa_flags;
     void (*sa_restorer)(void);
 };
 
-struct sigframe {
+struct SYS_SIGFRAME {
     uint32_t restorer;
     uint32_t signo;
     uint32_t eip;
@@ -69,18 +69,18 @@ struct sigframe {
     uint32_t old_mask;
 };
 
-void init_signal_state(struct task_struct *t);
-void signal_reset_user(struct task_struct *t);
+void init_signal_state(struct TASK *t);
+void signal_reset_user(struct TASK *t);
 
-int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+int sys_sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old);
 int sys_kill(int pid, int sig);
 int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-uint64_t sys_sigreturn(struct Registers *r);
+uint64_t sys_sigreturn(struct X86_REGS *r);
 
-void check_pending_signals(struct Registers *r);
+void check_pending_signals(struct X86_REGS *r);
 void itimer_tick(void);
 
-void signal_terminate(struct task_struct *t, int sig);
+void signal_terminate(struct TASK *t, int sig);
 
 int exception_to_signal(int int_no);
 

@@ -32,7 +32,7 @@ static uint32_t sys_getpid(void) {
     return current->pid;
 }
 
-int32_t sys_clock_gettime(int32_t clk_id, struct timespec *tp) {
+int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
     if (tp == NULL) {
         return -1;
     }
@@ -43,7 +43,7 @@ int32_t sys_clock_gettime(int32_t clk_id, struct timespec *tp) {
     return 0;
 }
 
-int32_t sys_gettimeofday(struct timeval *tv, void *tz) {
+int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
     if (tv == NULL) {
         return -1;
     }
@@ -54,7 +54,7 @@ int32_t sys_gettimeofday(struct timeval *tv, void *tz) {
     return 0;
 }
 
-int32_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
+int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
     if (req == NULL || req->tv_sec < 0 || req->tv_nsec < 0) {
         return -1;
     }
@@ -100,7 +100,7 @@ static uint32_t sys_write(int32_t fd, char *str, uint32_t count) {
         return pipe_write(fd, str, count);
     }
     uint32_t gfd = fd_local2global((uint32_t)fd);
-    struct file *wf = file_get(gfd);
+    struct FILE *wf = file_get(gfd);
     if (gfd >= 3 && wf != NULL && wf->fd_inode != NULL &&
         wf->fd_flag != PIPE_FLAG) {
         return write_file(fd, str, count);
@@ -136,7 +136,7 @@ static int32_t sys_read(int32_t fd, void *buf, uint32_t count) {
     return r;
 }
 
-static const char *task_status_str(enum task_status s) {
+static const char *task_status_str(enum TASK_STATUS s) {
     static const char *names[] = {"RUNNING", "READY",  "BLOCKED",
                                   "WAITING", "HANGING", "DIED"};
     return (s >= TASK_RUNNING && s <= TASK_DIED)
@@ -144,7 +144,7 @@ static const char *task_status_str(enum task_status s) {
                : "?";
 }
 
-static int ps_action(struct task_struct *t, void *arg) {
+static int ps_action(struct TASK *t, void *arg) {
     (void)arg;
     char buf[80];
     const char *parent = (t->parent_pid == -1) ? "(none)" : "?";
@@ -164,7 +164,7 @@ static uint32_t sys_ps(void) {
 }
 
 uint32_t sys_brk(uint32_t addr) {
-    struct task_struct *cur = current;
+    struct TASK *cur = current;
     uint32_t base = (cur->brk_base != 0) ? cur->brk_base : USER_HEAP_BASE;
     if (cur->user_brk == 0) {
         cur->user_brk = base;
@@ -203,7 +203,7 @@ uint32_t sys_brk(uint32_t addr) {
     return new_brk;
 }
 
-static uint32_t sys_set_thread_area(struct Registers *r, uint32_t base) {
+static uint32_t sys_set_thread_area(struct X86_REGS *r, uint32_t base) {
     if (base == 0 || !user_range_writable(base, sizeof(int32_t)))
         return (uint32_t)-1;
     current->tls_base = base;
@@ -215,19 +215,19 @@ static uint32_t sys_set_thread_area(struct Registers *r, uint32_t base) {
     return 0;
 }
 
-static int kern_call(struct Registers *r) {
+static int kern_call(struct X86_REGS *r) {
     return (r->cs & 3) == 0;
 }
 
-static int ok_read(struct Registers *r, uint32_t p, uint32_t n) {
+static int ok_read(struct X86_REGS *r, uint32_t p, uint32_t n) {
     return kern_call(r) || access_ok((const void *)p, (size_t)n, 0);
 }
 
-static int ok_write(struct Registers *r, uint32_t p, uint32_t n) {
+static int ok_write(struct X86_REGS *r, uint32_t p, uint32_t n) {
     return kern_call(r) || access_ok((const void *)p, (size_t)n, 1);
 }
 
-static const char *path_arg(struct Registers *r, char *kbuf, uint32_t cap) {
+static const char *path_arg(struct X86_REGS *r, char *kbuf, uint32_t cap) {
     if (kern_call(r)) {
         return (const char *)r->ebx;
     }
@@ -237,28 +237,28 @@ static const char *path_arg(struct Registers *r, char *kbuf, uint32_t cap) {
     return kbuf;
 }
 
-static int64_t nsys_getpid(struct Registers *r) {
+static int64_t nsys_getpid(struct X86_REGS *r) {
     (void)r;
     return sys_getpid();
 }
 
-static int64_t nsys_write(struct Registers *r) {
+static int64_t nsys_write(struct X86_REGS *r) {
     if (!ok_read(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
     return sys_write((int32_t)r->ebx, (char *)r->ecx, (uint32_t)r->edx);
 }
 
-static int64_t nsys_putchar(struct Registers *r) {
+static int64_t nsys_putchar(struct X86_REGS *r) {
     return sys_putchar((char)r->ebx);
 }
 
-static int64_t nsys_clear(struct Registers *r) {
+static int64_t nsys_clear(struct X86_REGS *r) {
     (void)r;
     return sys_clear();
 }
 
-static int64_t nsys_read(struct Registers *r) {
+static int64_t nsys_read(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -266,18 +266,18 @@ static int64_t nsys_read(struct Registers *r) {
                               (uint32_t)r->edx);
 }
 
-static int64_t nsys_fork(struct Registers *r) {
+static int64_t nsys_fork(struct X86_REGS *r) {
     return (uint32_t)sys_fork(r);
 }
 
-static int64_t nsys_getcwd(struct Registers *r) {
+static int64_t nsys_getcwd(struct X86_REGS *r) {
     if (!ok_write(r, r->ebx, r->ecx)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_getcwd((char *)r->ebx, (uint32_t)r->ecx);
 }
 
-static int64_t nsys_chdir(struct Registers *r) {
+static int64_t nsys_chdir(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -286,7 +286,7 @@ static int64_t nsys_chdir(struct Registers *r) {
     return (uint32_t)sys_chdir(p);
 }
 
-static int64_t nsys_mkdir(struct Registers *r) {
+static int64_t nsys_mkdir(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -295,7 +295,7 @@ static int64_t nsys_mkdir(struct Registers *r) {
     return (uint32_t)sys_mkdir(p);
 }
 
-static int64_t nsys_rmdir(struct Registers *r) {
+static int64_t nsys_rmdir(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -304,7 +304,7 @@ static int64_t nsys_rmdir(struct Registers *r) {
     return (uint32_t)sys_rmdir(p);
 }
 
-static int64_t nsys_open(struct Registers *r) {
+static int64_t nsys_open(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -313,16 +313,16 @@ static int64_t nsys_open(struct Registers *r) {
     return (uint32_t)open_file(p, (uint8_t)r->ecx);
 }
 
-static int64_t nsys_close(struct Registers *r) {
+static int64_t nsys_close(struct X86_REGS *r) {
     return (uint32_t)close_file((int)r->ebx);
 }
 
-static int64_t nsys_lseek(struct Registers *r) {
+static int64_t nsys_lseek(struct X86_REGS *r) {
     return (uint32_t)sys_lseek((int32_t)r->ebx, (int32_t)r->ecx,
                                (uint8_t)r->edx);
 }
 
-static int64_t nsys_unlink(struct Registers *r) {
+static int64_t nsys_unlink(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -331,7 +331,7 @@ static int64_t nsys_unlink(struct Registers *r) {
     return (uint32_t)sys_unlink(p);
 }
 
-static int64_t nsys_opendir(struct Registers *r) {
+static int64_t nsys_opendir(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -340,35 +340,35 @@ static int64_t nsys_opendir(struct Registers *r) {
     return (uint32_t)sys_opendir(p);
 }
 
-static int64_t nsys_closedir(struct Registers *r) {
-    return (uint32_t)sys_closedir((struct dir *)r->ebx);
+static int64_t nsys_closedir(struct X86_REGS *r) {
+    return (uint32_t)sys_closedir((struct FS_DIR *)r->ebx);
 }
 
-static int64_t nsys_readdir(struct Registers *r) {
-    return (uint32_t)sys_readdir((struct dir *)r->ebx);
+static int64_t nsys_readdir(struct X86_REGS *r) {
+    return (uint32_t)sys_readdir((struct FS_DIR *)r->ebx);
 }
 
-static int64_t nsys_rewinddir(struct Registers *r) {
-    sys_rewinddir((struct dir *)r->ebx);
+static int64_t nsys_rewinddir(struct X86_REGS *r) {
+    sys_rewinddir((struct FS_DIR *)r->ebx);
     return 0;
 }
 
-static int64_t nsys_stat(struct Registers *r) {
+static int64_t nsys_stat(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
-    if (p == NULL || !ok_write(r, r->ecx, sizeof(struct stat))) {
+    if (p == NULL || !ok_write(r, r->ecx, sizeof(struct FS_STAT))) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_stat(p, (struct stat *)r->ecx);
+    return (uint32_t)sys_stat(p, (struct FS_STAT *)r->ecx);
 }
 
-static int64_t nsys_ps(struct Registers *r) {
+static int64_t nsys_ps(struct X86_REGS *r) {
     (void)r;
     sys_ps();
     return 0;
 }
 
-static int64_t nsys_execv(struct Registers *r) {
+static int64_t nsys_execv(struct X86_REGS *r) {
     char kp[MAX_PATH_LEN];
     const char *p = path_arg(r, kp, MAX_PATH_LEN);
     if (p == NULL) {
@@ -377,58 +377,58 @@ static int64_t nsys_execv(struct Registers *r) {
     return (uint32_t)sys_execv(p, (const char **)r->ecx, r);
 }
 
-static int64_t nsys_exit(struct Registers *r) {
+static int64_t nsys_exit(struct X86_REGS *r) {
     sys_exit((int32_t)r->ebx);
     return 0;
 }
 
-static int64_t nsys_wait(struct Registers *r) {
+static int64_t nsys_wait(struct X86_REGS *r) {
     if (!ok_write(r, r->ebx, sizeof(int32_t))) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_wait((int32_t *)r->ebx);
 }
 
-static int64_t nsys_pipe(struct Registers *r) {
+static int64_t nsys_pipe(struct X86_REGS *r) {
     if (!ok_write(r, r->ebx, 2 * sizeof(int32_t))) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_pipe((int32_t *)r->ebx);
 }
 
-static int64_t nsys_fd_redirect(struct Registers *r) {
+static int64_t nsys_fd_redirect(struct X86_REGS *r) {
     sys_fd_redirect((uint32_t)r->ebx, (uint32_t)r->ecx);
     return 0;
 }
 
-static int64_t nsys_gui(struct Registers *r) {
+static int64_t nsys_gui(struct X86_REGS *r) {
     (void)r;
     return (uint32_t)gui_session_run();
 }
 
-static int64_t nsys_brk(struct Registers *r) {
+static int64_t nsys_brk(struct X86_REGS *r) {
     return (uint32_t)sys_brk((uint32_t)r->ebx);
 }
 
-static int64_t nsys_sigaction(struct Registers *r) {
-    if ((r->ecx && !ok_read(r, r->ecx, sizeof(struct sigaction))) ||
-        (r->edx && !ok_write(r, r->edx, sizeof(struct sigaction)))) {
+static int64_t nsys_sigaction(struct X86_REGS *r) {
+    if ((r->ecx && !ok_read(r, r->ecx, sizeof(struct SYS_SIGACTION))) ||
+        (r->edx && !ok_write(r, r->edx, sizeof(struct SYS_SIGACTION)))) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_sigaction((int)r->ebx,
-                                   (const struct sigaction *)r->ecx,
-                                   (struct sigaction *)r->edx);
+                                   (const struct SYS_SIGACTION *)r->ecx,
+                                   (struct SYS_SIGACTION *)r->edx);
 }
 
-static int64_t nsys_kill(struct Registers *r) {
+static int64_t nsys_kill(struct X86_REGS *r) {
     return (uint32_t)sys_kill((int)r->ebx, (int)r->ecx);
 }
 
-static int64_t nsys_sigreturn(struct Registers *r) {
+static int64_t nsys_sigreturn(struct X86_REGS *r) {
     return sys_sigreturn(r);
 }
 
-static int64_t nsys_sigprocmask(struct Registers *r) {
+static int64_t nsys_sigprocmask(struct X86_REGS *r) {
     if ((r->ecx && !ok_read(r, r->ecx, sizeof(sigset_t))) ||
         (r->edx && !ok_write(r, r->edx, sizeof(sigset_t)))) {
         return (uint32_t)-1;
@@ -437,38 +437,38 @@ static int64_t nsys_sigprocmask(struct Registers *r) {
                                      (sigset_t *)r->edx);
 }
 
-static int64_t nsys_set_thread_area(struct Registers *r) {
+static int64_t nsys_set_thread_area(struct X86_REGS *r) {
     if (!ok_write(r, r->ebx, sizeof(int32_t))) {
         return (uint32_t)-1;
     }
     return sys_set_thread_area(r, (uint32_t)r->ebx);
 }
 
-static int64_t nsys_mmap(struct Registers *r) {
-    if (!ok_read(r, r->ebx, sizeof(struct mmap_args))) {
+static int64_t nsys_mmap(struct X86_REGS *r) {
+    if (!ok_read(r, r->ebx, sizeof(struct SYS_MMAP_ARGS))) {
         return (uint32_t)-1;
     }
-    uint32_t ret = sys_mmap((const struct mmap_args *)r->ebx);
+    uint32_t ret = sys_mmap((const struct SYS_MMAP_ARGS *)r->ebx);
     return ret > (uint32_t)-4096 ? (uint32_t)-1 : ret;
 }
 
-static int64_t nsys_munmap(struct Registers *r) {
+static int64_t nsys_munmap(struct X86_REGS *r) {
     return (uint32_t)sys_munmap((uint32_t)r->ebx, (uint32_t)r->ecx);
 }
 
-static int64_t nsys_mmap2(struct Registers *r) {
+static int64_t nsys_mmap2(struct X86_REGS *r) {
     uint32_t ret = sys_mmap2((uint32_t)r->ebx, (uint32_t)r->ecx,
                              (uint32_t)r->edx, (uint32_t)r->esi,
                              (uint32_t)r->edi, (uint32_t)r->r10);
     return ret > (uint32_t)-4096 ? (uint32_t)-1 : ret;
 }
 
-static int64_t nsys_mprotect(struct Registers *r) {
+static int64_t nsys_mprotect(struct X86_REGS *r) {
     return (uint32_t)sys_mprotect((uint32_t)r->ebx, (uint32_t)r->ecx,
                                   (uint32_t)r->edx);
 }
 
-static int64_t nsys_futex(struct Registers *r) {
+static int64_t nsys_futex(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 4)) {
         return (uint32_t)-1;
     }
@@ -476,31 +476,31 @@ static int64_t nsys_futex(struct Registers *r) {
                                (uint32_t)r->edx, (uint32_t)r->esi);
 }
 
-static int64_t nsys_clone(struct Registers *r) {
+static int64_t nsys_clone(struct X86_REGS *r) {
     return (uint32_t)sys_clone(r);
 }
 
-static int64_t nsys_fstat(struct Registers *r) {
-    if (!ok_write(r, r->ecx, sizeof(struct stat))) {
+static int64_t nsys_fstat(struct X86_REGS *r) {
+    if (!ok_write(r, r->ecx, sizeof(struct FS_STAT))) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_fstat((int32_t)r->ebx, (void *)r->ecx);
 }
 
-static int64_t nsys_dup(struct Registers *r) {
+static int64_t nsys_dup(struct X86_REGS *r) {
     return (uint32_t)sys_dup((int32_t)r->ebx);
 }
 
-static int64_t nsys_dup2(struct Registers *r) {
+static int64_t nsys_dup2(struct X86_REGS *r) {
     return (uint32_t)sys_dup2((int32_t)r->ebx, (int32_t)r->ecx);
 }
 
-static int64_t nsys_fcntl(struct Registers *r) {
+static int64_t nsys_fcntl(struct X86_REGS *r) {
     return (uint32_t)sys_fcntl((int32_t)r->ebx, (int32_t)r->ecx,
                                (uint32_t)r->edx);
 }
 
-static int64_t nsys_getdents(struct Registers *r) {
+static int64_t nsys_getdents(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -508,7 +508,7 @@ static int64_t nsys_getdents(struct Registers *r) {
                                   (uint32_t)r->edx);
 }
 
-static int64_t nsys_readlink(struct Registers *r) {
+static int64_t nsys_readlink(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1) || !ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -516,42 +516,42 @@ static int64_t nsys_readlink(struct Registers *r) {
                                   (uint32_t)r->edx);
 }
 
-static int64_t nsys_access(struct Registers *r) {
+static int64_t nsys_access(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_access((const char *)r->ebx, (int32_t)r->ecx);
 }
 
-static int64_t nsys_rename(struct Registers *r) {
+static int64_t nsys_rename(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1) || !ok_read(r, r->ecx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_rename((const char *)r->ebx, (const char *)r->ecx);
 }
 
-static int64_t nsys_truncate(struct Registers *r) {
+static int64_t nsys_truncate(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_truncate((const char *)r->ebx, (int32_t)r->ecx);
 }
 
-static int64_t nsys_chmod(struct Registers *r) {
+static int64_t nsys_chmod(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_chmod((const char *)r->ebx, (uint32_t)r->ecx);
 }
 
-static int64_t nsys_symlink(struct Registers *r) {
+static int64_t nsys_symlink(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1) || !ok_read(r, r->ecx, 1)) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_symlink((const char *)r->ebx, (const char *)r->ecx);
 }
 
-static int64_t nsys_mknod(struct Registers *r) {
+static int64_t nsys_mknod(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 1)) {
         return (uint32_t)-1;
     }
@@ -559,77 +559,77 @@ static int64_t nsys_mknod(struct Registers *r) {
                                (uint32_t)r->edx);
 }
 
-static int64_t nsys_clock_gettime(struct Registers *r) {
-    if (!ok_write(r, r->ecx, sizeof(struct timespec))) {
+static int64_t nsys_clock_gettime(struct X86_REGS *r) {
+    if (!ok_write(r, r->ecx, sizeof(struct SYS_TIMESPEC))) {
         return (uint32_t)-1;
     }
     return (uint32_t)sys_clock_gettime((int32_t)r->ebx,
-                                       (struct timespec *)r->ecx);
+                                       (struct SYS_TIMESPEC *)r->ecx);
 }
 
-static int64_t nsys_gettimeofday(struct Registers *r) {
-    if (!ok_write(r, r->ebx, sizeof(struct timeval))) {
+static int64_t nsys_gettimeofday(struct X86_REGS *r) {
+    if (!ok_write(r, r->ebx, sizeof(struct SYS_TIMEVAL))) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_gettimeofday((struct timeval *)r->ebx,
+    return (uint32_t)sys_gettimeofday((struct SYS_TIMEVAL *)r->ebx,
                                       (void *)r->ecx);
 }
 
-static int64_t nsys_nanosleep(struct Registers *r) {
-    if (!ok_read(r, r->ebx, sizeof(struct timespec))) {
+static int64_t nsys_nanosleep(struct X86_REGS *r) {
+    if (!ok_read(r, r->ebx, sizeof(struct SYS_TIMESPEC))) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_nanosleep((const struct timespec *)r->ebx,
-                                   (struct timespec *)r->ecx);
+    return (uint32_t)sys_nanosleep((const struct SYS_TIMESPEC *)r->ebx,
+                                   (struct SYS_TIMESPEC *)r->ecx);
 }
 
-static int64_t nsys_getid(struct Registers *r) {
+static int64_t nsys_getid(struct X86_REGS *r) {
     (void)r;
     return sys_getid();
 }
 
-static int64_t nsys_exit_group(struct Registers *r) {
+static int64_t nsys_exit_group(struct X86_REGS *r) {
     sys_exit_group((int32_t)r->ebx);
     return 0;
 }
 
-static int64_t nsys_icmp_send(struct Registers *r) {
+static int64_t nsys_icmp_send(struct X86_REGS *r) {
     return (uint32_t)nt_icmp_send((uint32_t)r->ebx, (uint16_t)r->ecx,
                                   (uint16_t)r->edx);
 }
 
-static int64_t nsys_icmp_recv(struct Registers *r) {
-    if (!ok_write(r, r->ebx, sizeof(struct nt_ping_reply))) {
+static int64_t nsys_icmp_recv(struct X86_REGS *r) {
+    if (!ok_write(r, r->ebx, sizeof(struct NET_PING_REPLY))) {
         return (uint32_t)-1;
     }
-    return (uint32_t)nt_icmp_recv((struct nt_ping_reply *)r->ebx,
+    return (uint32_t)nt_icmp_recv((struct NET_PING_REPLY *)r->ebx,
                                   (int)r->ecx);
 }
 
-static int64_t nsys_shutdown(struct Registers *r) {
+static int64_t nsys_shutdown(struct X86_REGS *r) {
     (void)r;
     return sys_shutdown();
 }
 
-static int64_t nsys_socket(struct Registers *r) {
+static int64_t nsys_socket(struct X86_REGS *r) {
     return (uint32_t)net_socket((int)r->ebx, (int)r->ecx, (int)r->edx);
 }
 
-static int64_t nsys_bind(struct Registers *r) {
+static int64_t nsys_bind(struct X86_REGS *r) {
     return (uint32_t)net_bind((int)r->ebx, (uint32_t)r->ecx,
                               (uint16_t)r->edx);
 }
 
-static int64_t nsys_listen(struct Registers *r) {
+static int64_t nsys_listen(struct X86_REGS *r) {
     return (uint32_t)net_listen((int)r->ebx, (int)r->ecx);
 }
 
-static int64_t nsys_connect(struct Registers *r) {
+static int64_t nsys_connect(struct X86_REGS *r) {
     return (uint32_t)net_connect((int)r->ebx, (uint32_t)r->ecx,
                                  (uint16_t)r->edx);
 }
 
-static int64_t nsys_send(struct Registers *r) {
+static int64_t nsys_send(struct X86_REGS *r) {
     if (!ok_read(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -637,14 +637,14 @@ static int64_t nsys_send(struct Registers *r) {
                               (uint32_t)r->edx);
 }
 
-static int64_t nsys_recv(struct Registers *r) {
+static int64_t nsys_recv(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
     return (uint32_t)net_recv((int)r->ebx, (void *)r->ecx, (uint32_t)r->edx);
 }
 
-static int64_t nsys_sendto(struct Registers *r) {
+static int64_t nsys_sendto(struct X86_REGS *r) {
     if (!ok_read(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -653,7 +653,7 @@ static int64_t nsys_sendto(struct Registers *r) {
                                 (uint16_t)r->edi);
 }
 
-static int64_t nsys_recvfrom(struct Registers *r) {
+static int64_t nsys_recvfrom(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
@@ -662,19 +662,19 @@ static int64_t nsys_recvfrom(struct Registers *r) {
                                   (uint16_t *)r->edi);
 }
 
-static int64_t nsys_accept(struct Registers *r) {
+static int64_t nsys_accept(struct X86_REGS *r) {
     return (uint32_t)net_accept((int)r->ebx);
 }
 
-static int64_t nsys_close_socket(struct Registers *r) {
+static int64_t nsys_close_socket(struct X86_REGS *r) {
     return (uint32_t)net_close((int)r->ebx);
 }
 
-static int64_t nsys_sock_shutdown(struct Registers *r) {
+static int64_t nsys_sock_shutdown(struct X86_REGS *r) {
     return (uint32_t)net_shutdown((int)r->ebx, (int)r->ecx);
 }
 
-static int64_t nsys_getsockname(struct Registers *r) {
+static int64_t nsys_getsockname(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, 4) || !ok_write(r, r->edx, 2)) {
         return (uint32_t)-1;
     }
@@ -682,7 +682,7 @@ static int64_t nsys_getsockname(struct Registers *r) {
                                      (uint16_t *)r->edx);
 }
 
-static int64_t nsys_getpeername(struct Registers *r) {
+static int64_t nsys_getpeername(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, 4) || !ok_write(r, r->edx, 2)) {
         return (uint32_t)-1;
     }
@@ -690,7 +690,7 @@ static int64_t nsys_getpeername(struct Registers *r) {
                                      (uint16_t *)r->edx);
 }
 
-static int64_t nsys_getsockopt(struct Registers *r) {
+static int64_t nsys_getsockopt(struct X86_REGS *r) {
     if (!ok_write(r, r->esi, 4) || !ok_write(r, r->edi, 4)) {
         return (uint32_t)-1;
     }
@@ -698,7 +698,7 @@ static int64_t nsys_getsockopt(struct Registers *r) {
                                     (void *)r->esi, (uint32_t *)r->edi);
 }
 
-static int64_t nsys_setsockopt(struct Registers *r) {
+static int64_t nsys_setsockopt(struct X86_REGS *r) {
     if (!ok_write(r, r->esi, 4)) {
         return (uint32_t)-1;
     }
@@ -706,11 +706,11 @@ static int64_t nsys_setsockopt(struct Registers *r) {
                                     (const void *)r->esi, (uint32_t)r->edi);
 }
 
-static int64_t nsys_sock_fcntl(struct Registers *r) {
+static int64_t nsys_sock_fcntl(struct X86_REGS *r) {
     return (uint32_t)net_fcntl((int)r->ebx, (int)r->ecx, (uint32_t)r->edx);
 }
 
-static int64_t nsys_select(struct Registers *r) {
+static int64_t nsys_select(struct X86_REGS *r) {
     if ((r->ecx && !ok_write(r, r->ecx, 8)) ||
         (r->edx && !ok_write(r, r->edx, 8)) ||
         (r->esi && !ok_write(r, r->esi, 8))) {
@@ -721,7 +721,7 @@ static int64_t nsys_select(struct Registers *r) {
                                 (int)r->edi);
 }
 
-typedef int64_t (*nsys_fn)(struct Registers *r);
+typedef int64_t (*nsys_fn)(struct X86_REGS *r);
 
 static const nsys_fn nsys_table[] = {
     [SYS_GETPID] = nsys_getpid,       [SYS_WRITE] = nsys_write,
@@ -768,7 +768,7 @@ static const nsys_fn nsys_table[] = {
     [SYS_MKNOD] = nsys_mknod,         [SYS_SYMLINK] = nsys_symlink,
 };
 
-uint64_t syscall_handler(struct Registers *r) {
+uint64_t syscall_handler(struct X86_REGS *r) {
     uint32_t nr = r->eax;
     uint64_t ret = (uint32_t)-1;
     if (r->int_no == 0x81 || current->compat || nr >= COMPAT_SYSCALL_BASE) {

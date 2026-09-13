@@ -9,25 +9,25 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/dir.h"
 
-static struct lock ext2_lock;
+static struct SCHED_LOCK ext2_lock;
 
-static int ext2_read_inode_impl(uint32_t ino, struct inode *out);
-static int ext2_write_inode_impl(uint32_t ino, const struct inode *in);
-static int ext2_write_to_inode_impl(struct inode *ino, uint32_t off,
+static int ext2_read_inode_impl(uint32_t ino, struct FS_INODE *out);
+static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in);
+static int ext2_write_to_inode_impl(struct FS_INODE *ino, uint32_t off,
                                     const void *buf, uint32_t count);
-static void ext2_truncate_inode_impl(struct inode *ino);
-static uint32_t ext2_new_inode_impl(uint32_t mode, struct inode *out);
-static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
+static void ext2_truncate_inode_impl(struct FS_INODE *ino);
+static uint32_t ext2_new_inode_impl(uint32_t mode, struct FS_INODE *out);
+static int ext2_add_entry_impl(struct FS_INODE *dino, uint32_t ino,
                                const char *name, uint8_t dtype);
-static int ext2_remove_entry_impl(struct inode *dino, const char *name);
-static int ext2_read_from_inode_impl(const struct inode *ino, uint32_t off,
+static int ext2_remove_entry_impl(struct FS_INODE *dino, const char *name);
+static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
                                      void *buf, uint32_t count);
-static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
-                              struct dir_entry *out);
+static int ext2_dir_next_impl(const struct FS_INODE *dino, uint32_t *pos,
+                              struct FS_DIRENT *out);
 static int ext2_lookup_depth(const char *path, uint32_t *ino, int *ftype,
                              int follow, int depth);
-static struct disk *disk = NULL;
-static struct partition *part = NULL;
+static struct DISK *disk = NULL;
+static struct DISK_PARTITION *part = NULL;
 static uint32_t start = 0;
 static uint32_t bs = 1024;
 static uint32_t sect_per_block = 2;
@@ -65,15 +65,15 @@ static int ext2_write_block(uint32_t blk, const void *buf) {
     return 0;
 }
 
-struct partition *ext2_partition(void) {
+struct DISK_PARTITION *ext2_partition(void) {
     return part;
 }
 
 int ext2_init(void) {
     lock_init(&ext2_lock);
-    struct list_elem *e = partition_list.head.next;
+    struct LIST_ELEM *e = partition_list.head.next;
     while (e != &partition_list.tail) {
-        struct partition *p = list_entry(e, struct partition, part_tag);
+        struct DISK_PARTITION *p = list_entry(e, struct DISK_PARTITION, part_tag);
         uint8_t *buf = (uint8_t *)get_kernel_pages(1);
         if (buf == NULL) {
             return -1;
@@ -118,14 +118,14 @@ int ext2_init(void) {
     return -1;
 }
 
-int ext2_read_inode(uint32_t ino, struct inode *out) {
+int ext2_read_inode(uint32_t ino, struct FS_INODE *out) {
     lock_acquire(&ext2_lock);
     int rc = ext2_read_inode_impl(ino, out);
     lock_release(&ext2_lock);
     return rc;
 }
 
-static int ext2_read_inode_impl(uint32_t ino, struct inode *out) {
+static int ext2_read_inode_impl(uint32_t ino, struct FS_INODE *out) {
     if (disk == NULL || ino == 0) {
         return -1;
     }
@@ -139,7 +139,7 @@ static int ext2_read_inode_impl(uint32_t ino, struct inode *out) {
     uint32_t off = ((ino - 1) % per_block) * EXT2_INODE_SIZE;
     ext2_read_block(blk, buf);
     uint8_t *p = buf + off;
-    memset(out, 0, sizeof(struct inode));
+    memset(out, 0, sizeof(struct FS_INODE));
     out->i_no = ino;
     out->i_mode = (uint32_t)(*(uint16_t *)(p + 0));
     out->i_uid = *(uint16_t *)(p + 2);
@@ -260,14 +260,14 @@ void ext2_free_inode(uint32_t ino) {
     }
 }
 
-int ext2_write_inode(uint32_t ino, const struct inode *in) {
+int ext2_write_inode(uint32_t ino, const struct FS_INODE *in) {
     lock_acquire(&ext2_lock);
     int rc = ext2_write_inode_impl(ino, in);
     lock_release(&ext2_lock);
     return rc;
 }
 
-static int ext2_write_inode_impl(uint32_t ino, const struct inode *in) {
+static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in) {
     if (disk == NULL || ino == 0 || ino > inodes_per_group) {
         return -1;
     }
@@ -320,7 +320,7 @@ static uint32_t ext2_walk(uint32_t root, uint32_t fblk, uint32_t span,
     return ext2_walk(child, fblk % span, span / (bs / 4u), buf, alloc);
 }
 
-static int ext2_block_of(struct inode *ino, uint32_t fblk, int alloc,
+static int ext2_block_of(struct FS_INODE *ino, uint32_t fblk, int alloc,
                          uint32_t *out) {
     uint32_t addrs = bs / 4u;
     if (fblk < 12) {
@@ -370,13 +370,13 @@ static int ext2_block_of(struct inode *ino, uint32_t fblk, int alloc,
     return 0;
 }
 
-static uint32_t ext2_ensure_block(struct inode *ino, uint32_t fblk) {
+static uint32_t ext2_ensure_block(struct FS_INODE *ino, uint32_t fblk) {
     uint32_t b = 0;
     ext2_block_of(ino, fblk, 1, &b);
     return b;
 }
 
-int ext2_write_to_inode(struct inode *ino, uint32_t off, const void *buf,
+int ext2_write_to_inode(struct FS_INODE *ino, uint32_t off, const void *buf,
                         uint32_t count) {
     lock_acquire(&ext2_lock);
     int rc = ext2_write_to_inode_impl(ino, off, buf, count);
@@ -384,7 +384,7 @@ int ext2_write_to_inode(struct inode *ino, uint32_t off, const void *buf,
     return rc;
 }
 
-static int ext2_write_to_inode_impl(struct inode *ino, uint32_t off,
+static int ext2_write_to_inode_impl(struct FS_INODE *ino, uint32_t off,
                                     const void *buf, uint32_t count) {
     if (disk == NULL || ino == 0 || ino->i_no == 0) {
         return 0;
@@ -397,7 +397,7 @@ static int ext2_write_to_inode_impl(struct inode *ino, uint32_t off,
     while (done < count) {
         uint32_t fblk = (off + done) / bs;
         uint32_t within = (off + done) % bs;
-        uint32_t addr = ext2_ensure_block((struct inode *)ino, fblk);
+        uint32_t addr = ext2_ensure_block((struct FS_INODE *)ino, fblk);
         if (addr == 0) {
             break;
         }
@@ -416,12 +416,12 @@ static int ext2_write_to_inode_impl(struct inode *ino, uint32_t off,
         ino->i_size = off + done;
     }
     if (done > 0) {
-        ext2_write_inode(ino->i_no, (struct inode *)ino);
+        ext2_write_inode(ino->i_no, (struct FS_INODE *)ino);
     }
     return (int)done;
 }
 
-void ext2_truncate_inode(struct inode *ino) {
+void ext2_truncate_inode(struct FS_INODE *ino) {
     lock_acquire(&ext2_lock);
     ext2_truncate_inode_impl(ino);
     lock_release(&ext2_lock);
@@ -444,7 +444,7 @@ static void ext2_free_tree(uint32_t root, uint32_t span, uint8_t *buf) {
     ext2_free_block(root);
 }
 
-static void ext2_truncate_inode_impl(struct inode *ino) {
+static void ext2_truncate_inode_impl(struct FS_INODE *ino) {
     uint8_t *buf = (uint8_t *)get_kernel_pages(1);
     if (buf == NULL) {
         return;
@@ -472,22 +472,22 @@ static void ext2_truncate_inode_impl(struct inode *ino) {
     ino->i_size = 0;
 }
 
-static int ext2_map_block(const struct inode *ino, uint32_t fblk,
+static int ext2_map_block(const struct FS_INODE *ino, uint32_t fblk,
                           uint32_t *out);
 
-int ext2_new_inode(uint32_t mode, struct inode *out) {
+int ext2_new_inode(uint32_t mode, struct FS_INODE *out) {
     lock_acquire(&ext2_lock);
     uint32_t rc = ext2_new_inode_impl(mode, out);
     lock_release(&ext2_lock);
     return rc;
 }
 
-static uint32_t ext2_new_inode_impl(uint32_t mode, struct inode *out) {
+static uint32_t ext2_new_inode_impl(uint32_t mode, struct FS_INODE *out) {
     uint32_t ino = ext2_alloc_inode();
     if (ino == 0) {
         return 0;
     }
-    memset(out, 0, sizeof(struct inode));
+    memset(out, 0, sizeof(struct FS_INODE));
     out->i_no = ino;
     out->i_mode = mode;
     out->i_size = 0;
@@ -499,13 +499,13 @@ static uint32_t ext2_new_inode_impl(uint32_t mode, struct inode *out) {
     return (int)ino;
 }
 
-int ext2_add_entry(struct inode *dino, uint32_t ino, const char *name,
+int ext2_add_entry(struct FS_INODE *dino, uint32_t ino, const char *name,
                    int is_dir) {
     return ext2_add_entry_dt(dino, ino, name,
                              is_dir ? (uint8_t)EXT2_DT_DIR : 1u);
 }
 
-int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
+int ext2_add_entry_dt(struct FS_INODE *dino, uint32_t ino, const char *name,
                       uint8_t dtype) {
     lock_acquire(&ext2_lock);
     int rc = ext2_add_entry_impl(dino, ino, name, dtype);
@@ -513,7 +513,7 @@ int ext2_add_entry_dt(struct inode *dino, uint32_t ino, const char *name,
     return rc;
 }
 
-static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
+static int ext2_add_entry_impl(struct FS_INODE *dino, uint32_t ino,
                                const char *name, uint8_t dtype) {
     uint32_t nl = (uint32_t)strlen(name);
     if (nl == 0 || nl >= 255u) {
@@ -527,7 +527,7 @@ static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
 
     for (uint32_t fblk = 0; fblk * bs < dino->i_size; fblk++) {
         uint32_t addr = 0;
-        if (ext2_map_block((struct inode *)dino, fblk, &addr)) {
+        if (ext2_map_block((struct FS_INODE *)dino, fblk, &addr)) {
             break;
         }
         memset(blk, 0, 4096);
@@ -566,7 +566,7 @@ static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
     }
 
     uint32_t nfblk = dino->i_size / bs;
-    uint32_t naddr = ext2_ensure_block((struct inode *)dino, nfblk);
+    uint32_t naddr = ext2_ensure_block((struct FS_INODE *)dino, nfblk);
     if (naddr == 0) {
         free_kernel_page((uint32_t)blk);
         return -1;
@@ -580,19 +580,19 @@ static int ext2_add_entry_impl(struct inode *dino, uint32_t ino,
     memcpy(de->name, name, nl);
     ext2_write_block(naddr, blk);
     dino->i_size += bs;
-    ext2_write_inode(dino->i_no, (struct inode *)dino);
+    ext2_write_inode(dino->i_no, (struct FS_INODE *)dino);
     free_kernel_page((uint32_t)blk);
     return 0;
 }
 
-int ext2_remove_entry(struct inode *dino, const char *name) {
+int ext2_remove_entry(struct FS_INODE *dino, const char *name) {
     lock_acquire(&ext2_lock);
     int rc = ext2_remove_entry_impl(dino, name);
     lock_release(&ext2_lock);
     return rc;
 }
 
-static int ext2_remove_entry_impl(struct inode *dino, const char *name) {
+static int ext2_remove_entry_impl(struct FS_INODE *dino, const char *name) {
     uint32_t nl = (uint32_t)strlen(name);
     if (nl == 0 || nl >= 255u) {
         return -1;
@@ -603,7 +603,7 @@ static int ext2_remove_entry_impl(struct inode *dino, const char *name) {
     }
     for (uint32_t fblk = 0; fblk * bs < dino->i_size; fblk++) {
         uint32_t addr = 0;
-        if (ext2_map_block((struct inode *)dino, fblk, &addr)) {
+        if (ext2_map_block((struct FS_INODE *)dino, fblk, &addr)) {
             break;
         }
         memset(blk, 0, 4096);
@@ -631,12 +631,12 @@ static int ext2_remove_entry_impl(struct inode *dino, const char *name) {
     return -1;
 }
 
-static int ext2_map_block(const struct inode *ino, uint32_t fblk,
+static int ext2_map_block(const struct FS_INODE *ino, uint32_t fblk,
                           uint32_t *out) {
-    return ext2_block_of((struct inode *)ino, fblk, 0, out);
+    return ext2_block_of((struct FS_INODE *)ino, fblk, 0, out);
 }
 
-int ext2_read_from_inode(const struct inode *ino, uint32_t off, void *buf,
+int ext2_read_from_inode(const struct FS_INODE *ino, uint32_t off, void *buf,
                          uint32_t count) {
     lock_acquire(&ext2_lock);
     int rc = ext2_read_from_inode_impl(ino, off, buf, count);
@@ -644,7 +644,7 @@ int ext2_read_from_inode(const struct inode *ino, uint32_t off, void *buf,
     return rc;
 }
 
-static int ext2_read_from_inode_impl(const struct inode *ino, uint32_t off,
+static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
                                      void *buf, uint32_t count) {
     if (ino->i_no == 0 || off >= ino->i_size) {
         return 0;
@@ -677,16 +677,16 @@ static int ext2_read_from_inode_impl(const struct inode *ino, uint32_t off,
     return (int)done;
 }
 
-int ext2_dir_next(const struct inode *dino, uint32_t *pos,
-                  struct dir_entry *out) {
+int ext2_dir_next(const struct FS_INODE *dino, uint32_t *pos,
+                  struct FS_DIRENT *out) {
     lock_acquire(&ext2_lock);
     int rc = ext2_dir_next_impl(dino, pos, out);
     lock_release(&ext2_lock);
     return rc;
 }
 
-static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
-                              struct dir_entry *out) {
+static int ext2_dir_next_impl(const struct FS_INODE *dino, uint32_t *pos,
+                              struct FS_DIRENT *out) {
     while (*pos < dino->i_size) {
         uint32_t fblk = *pos / bs;
         uint32_t addr = 0;
@@ -733,10 +733,10 @@ static int ext2_dir_next_impl(const struct inode *dino, uint32_t *pos,
     return -1;
 }
 
-static int ext2_find_in_dir(const struct inode *dino, const char *name,
+static int ext2_find_in_dir(const struct FS_INODE *dino, const char *name,
                             uint32_t *child, int *ftype) {
     uint32_t pos = 0;
-    struct dir_entry de;
+    struct FS_DIRENT de;
     while (ext2_dir_next(dino, &pos, &de) == 0) {
         if (strcmp(de.filename, name) == 0) {
             *child = de.i_no;
@@ -748,7 +748,7 @@ static int ext2_find_in_dir(const struct inode *dino, const char *name,
 }
 
 static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
-    struct inode node;
+    struct FS_INODE node;
     if (ext2_read_inode_impl(ino, &node) ||
         (node.i_mode & 0xF000u) != 0xA000u) {
         return -1;
@@ -854,7 +854,7 @@ static int ext2_lookup_depth(const char *path, uint32_t *ino, int *ftype,
         if (*p == 0) {
             return 0;
         }
-        struct inode node;
+        struct FS_INODE node;
         if (ext2_read_inode_impl(2, &node)) {
             return -1;
         }

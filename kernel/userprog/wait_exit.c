@@ -8,7 +8,7 @@
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
 #include "lib/list/list.h"
-static int vaddr_owned_by_current(struct task_struct *t, uint32_t vaddr) {
+static int vaddr_owned_by_current(struct TASK *t, uint32_t vaddr) {
     if (vaddr < USER_VADDR_START || vaddr >= 0xc0000000) {
         return 0;
     }
@@ -19,7 +19,7 @@ static int vaddr_owned_by_current(struct task_struct *t, uint32_t vaddr) {
     return bitmap_scan_test(&t->userprog_v_addr.vaddr_bitmap, bit_idx) == 1;
 }
 
-static void release_prog_resource(struct task_struct *release_thread) {
+static void release_prog_resource(struct TASK *release_thread) {
     if (release_thread->pml4_phys != 0) {
         uint64_t *pml4 = (uint64_t *)VIRT_OF(release_thread->pml4_phys);
         uint64_t pml4e = pml4[0];
@@ -91,10 +91,10 @@ static void release_prog_resource(struct task_struct *release_thread) {
 }
 
 void kill_orphan_children(int32_t parent_pid) {
-    struct list_elem *e = thread_all_list.head.next;
+    struct LIST_ELEM *e = thread_all_list.head.next;
     while (e != &thread_all_list.tail) {
-        struct task_struct *t = list_entry(e, struct task_struct, all_list_tag);
-        struct list_elem *next = e->next;
+        struct TASK *t = list_entry(e, struct TASK, all_list_tag);
+        struct LIST_ELEM *next = e->next;
         if (t->parent_pid == parent_pid && t->status != TASK_DIED) {
             if (t->status != TASK_HANGING)
                 release_prog_resource(t);
@@ -104,29 +104,29 @@ void kill_orphan_children(int32_t parent_pid) {
     }
 }
 
-static int find_hanging_child(struct list_elem *pelem, int32_t ppid) {
-    struct task_struct *t = list_entry(pelem, struct task_struct, all_list_tag);
+static int find_hanging_child(struct LIST_ELEM *pelem, int32_t ppid) {
+    struct TASK *t = list_entry(pelem, struct TASK, all_list_tag);
     return (t->parent_pid == ppid && t->status == TASK_HANGING);
 }
 
-static int find_child(struct list_elem *pelem, int32_t ppid) {
-    struct task_struct *t = list_entry(pelem, struct task_struct, all_list_tag);
+static int find_child(struct LIST_ELEM *pelem, int32_t ppid) {
+    struct TASK *t = list_entry(pelem, struct TASK, all_list_tag);
     return (t->parent_pid == ppid);
 }
 
 pid_t sys_wait(int32_t *status) {
-    struct task_struct *parent = current;
+    struct TASK *parent = current;
     int32_t ignored_status;
     if (status == NULL) {
         status = &ignored_status;
     }
     for (;;) {
-        struct list_elem *e = thread_all_list.head.next;
+        struct LIST_ELEM *e = thread_all_list.head.next;
         while (e != &thread_all_list.tail) {
-            struct list_elem *next = e->next;
+            struct LIST_ELEM *next = e->next;
             if (find_hanging_child(e, (int32_t)parent->pid)) {
-                struct task_struct *child =
-                    list_entry(e, struct task_struct, all_list_tag);
+                struct TASK *child =
+                    list_entry(e, struct TASK, all_list_tag);
                 *status = child->exit_status;
                 uint32_t child_pid = child->pid;
                 thread_exit(child, 0);
@@ -134,7 +134,7 @@ pid_t sys_wait(int32_t *status) {
             }
             e = next;
         }
-        struct list_elem *child = thread_all_list.head.next;
+        struct LIST_ELEM *child = thread_all_list.head.next;
         while (child != &thread_all_list.tail) {
             if (find_child(child, (int32_t)parent->pid)) {
                 break;
@@ -148,12 +148,12 @@ pid_t sys_wait(int32_t *status) {
     }
 }
 
-void proc_exit(struct task_struct *cur, int status) {
+void proc_exit(struct TASK *cur, int status) {
     cur->exit_status = status;
 
     kill_orphan_children((int32_t)cur->pid);
     release_prog_resource(cur);
-    struct task_struct *parent = pid2thread(cur->parent_pid);
+    struct TASK *parent = pid2thread(cur->parent_pid);
     if (parent && parent->status == TASK_WAITING) {
         thread_unblock(parent);
     }
@@ -164,7 +164,7 @@ void sys_exit(int32_t status) {
     proc_exit(current, status);
 }
 
-static int waitid_match(struct task_struct *t, int idtype, int32_t id) {
+static int waitid_match(struct TASK *t, int idtype, int32_t id) {
     if (idtype == LINUX_P_PID) {
         return t->pid == (uint32_t)id;
     }
@@ -176,14 +176,14 @@ static int waitid_match(struct task_struct *t, int idtype, int32_t id) {
 
 int sys_waitid(int idtype, int32_t id, struct LINUX_SIGINFO *info,
                uint32_t options) {
-    struct task_struct *parent = current;
+    struct TASK *parent = current;
     for (;;) {
         int any_child = 0;
-        struct list_elem *e = thread_all_list.head.next;
+        struct LIST_ELEM *e = thread_all_list.head.next;
         while (e != &thread_all_list.tail) {
-            struct task_struct *t =
-                list_entry(e, struct task_struct, all_list_tag);
-            struct list_elem *next = e->next;
+            struct TASK *t =
+                list_entry(e, struct TASK, all_list_tag);
+            struct LIST_ELEM *next = e->next;
             if (t->parent_pid != (int32_t)parent->pid ||
                 t->status == TASK_DIED) {
                 e = next;

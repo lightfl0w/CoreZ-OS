@@ -132,24 +132,24 @@ char *getcwd(char *buf, uint32_t size) {
                             (uint64_t)size);
 }
 
-int32_t stat(const char *path, struct stat *buf) {
+int32_t stat(const char *path, struct FS_STAT *buf) {
     return (int32_t)syscall2(SYS_STAT, (uint64_t)(uintptr_t)path,
                              (uint64_t)(uintptr_t)buf);
 }
 
-struct dir *opendir(const char *name) {
-    return (struct dir *)syscall1(SYS_OPENDIR, (uint64_t)(uintptr_t)name);
+struct FS_DIR *opendir(const char *name) {
+    return (struct FS_DIR *)syscall1(SYS_OPENDIR, (uint64_t)(uintptr_t)name);
 }
 
-int32_t closedir(struct dir *dir) {
+int32_t closedir(struct FS_DIR *dir) {
     return (int32_t)syscall1(SYS_CLOSEDIR, (uint64_t)(uintptr_t)dir);
 }
 
-struct dir_entry *readdir(struct dir *dir) {
-    return (struct dir_entry *)syscall1(SYS_READDIR, (uint64_t)(uintptr_t)dir);
+struct FS_DIRENT *readdir(struct FS_DIR *dir) {
+    return (struct FS_DIRENT *)syscall1(SYS_READDIR, (uint64_t)(uintptr_t)dir);
 }
 
-void rewinddir(struct dir *dir) {
+void rewinddir(struct FS_DIR *dir) {
     syscall1(SYS_REWINDDIR, (uint64_t)(uintptr_t)dir);
 }
 
@@ -200,7 +200,7 @@ void *sbrk(intptr_t inc) {
     return (void *)ob;
 }
 
-struct _mmap_args {
+struct SYS_MMAP_ARGS {
     uint32_t addr;
     uint32_t len;
     uint32_t prot;
@@ -211,7 +211,7 @@ struct _mmap_args {
 
 void *mmap(void *addr, uint32_t len, int prot, int flags, int fd,
            uint32_t offset) {
-    struct _mmap_args a;
+    struct SYS_MMAP_ARGS a;
     a.addr = (uint32_t)addr;
     a.len = len;
     a.prot = (uint32_t)prot;
@@ -245,7 +245,7 @@ int32_t clone(uint32_t flags, void *child_stack) {
     return (int32_t)syscall2(SYS_CLONE, flags, (uint32_t)child_stack);
 }
 
-int32_t fstat(int32_t fd, struct stat *buf) {
+int32_t fstat(int32_t fd, struct FS_STAT *buf) {
     return (int32_t)syscall2(SYS_FSTAT, (uint32_t)fd, (uint32_t)buf);
 }
 
@@ -261,7 +261,7 @@ int32_t fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
     return (int32_t)syscall3(SYS_FCNTL, (uint32_t)fd, (uint32_t)cmd, arg);
 }
 
-int32_t getdents(int32_t fd, struct linux_dirent *dirp, uint32_t count) {
+int32_t getdents(int32_t fd, struct LINUX_DIRENT *dirp, uint32_t count) {
     return (int32_t)syscall3(SYS_GETDENTS, (uint32_t)fd, (uint32_t)dirp, count);
 }
 
@@ -286,15 +286,15 @@ int32_t chmod(const char *path, uint32_t mode) {
     return (int32_t)syscall2(SYS_CHMOD, (uint32_t)path, mode);
 }
 
-int32_t clock_gettime(int32_t clk_id, struct timespec *tp) {
+int32_t clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
     return (int32_t)syscall2(SYS_CLOCK_GETTIME, (uint32_t)clk_id, (uint32_t)tp);
 }
 
-int32_t gettimeofday(struct timeval *tv, void *tz) {
+int32_t gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
     return (int32_t)syscall2(SYS_GETTIMEOFDAY, (uint32_t)tv, (uint32_t)tz);
 }
 
-int32_t nanosleep(const struct timespec *req, struct timespec *rem) {
+int32_t nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
     return (int32_t)syscall2(SYS_NANOSLEEP, (uint32_t)req, (uint32_t)rem);
 }
 
@@ -325,7 +325,7 @@ int32_t icmp_send(uint32_t dst, uint16_t id, uint16_t seq) {
                              (uint32_t)seq);
 }
 
-int32_t icmp_recv(struct nt_ping_reply *buf, int32_t max) {
+int32_t icmp_recv(struct NET_PING_REPLY *buf, int32_t max) {
     return (int32_t)syscall2(SYS_ICMP_RECV, (uint32_t)buf, (uint32_t)max);
 }
 
@@ -415,9 +415,9 @@ __attribute__((naked)) void __restore(void) {
                      : "memory");
 }
 
-int sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
-    struct sigaction kact;
-    const struct sigaction *pact = act;
+int sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old) {
+    struct SYS_SIGACTION kact;
+    const struct SYS_SIGACTION *pact = act;
     if (act) {
         kact = *act;
         kact.sa_restorer = __restore;
@@ -438,7 +438,7 @@ int kill(pid_t pid, int sig) {
 }
 
 void (*signal(int sig, void (*handler)(int)))(int) {
-    struct sigaction act, old;
+    struct SYS_SIGACTION act, old;
     act.sa_handler = handler;
     act.sa_mask = 0;
     act.sa_flags = 0;

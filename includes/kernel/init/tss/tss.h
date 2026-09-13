@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-struct task_struct;
+struct TASK;
 
-struct tss {
+struct X86_TSS {
     uint32_t reserved1;
     uint64_t rsp0;
     uint64_t rsp1;
@@ -17,9 +17,9 @@ struct tss {
     uint16_t iomap_base;
 } __attribute__((packed));
 
-struct tss *tss_cpu(uint32_t idx);
+struct X86_TSS *tss_cpu(uint32_t idx);
 void tss_init(void);
 void tss_ap_init(uint32_t idx, uint32_t kstack_top);
-void tss_update_rsp0(struct task_struct *task);
+void tss_update_rsp0(struct TASK *task);
 
 #endif

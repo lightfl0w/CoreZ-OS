@@ -3,11 +3,11 @@
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "kernel/sched/thread.h"
-void spinlock_init(struct spinlock *s) {
+void spinlock_init(struct SCHED_SPINLOCK *s) {
     s->locked = 0;
 }
 
-void spinlock_acquire(struct spinlock *s) {
+void spinlock_acquire(struct SCHED_SPINLOCK *s) {
     while (asm_xchg(&s->locked, 1) != 0) {
         while (s->locked != 0) {
             asm_pause();
@@ -16,18 +16,18 @@ void spinlock_acquire(struct spinlock *s) {
     __asm__ volatile("" : : : "memory");
 }
 
-void spinlock_release(struct spinlock *s) {
+void spinlock_release(struct SCHED_SPINLOCK *s) {
     __asm__ volatile("" : : : "memory");
     s->locked = 0;
 }
 
-void sema_init(struct semaphore *psema, uint8_t value) {
+void sema_init(struct SCHED_SEMAPHORE *psema, uint8_t value) {
     psema->value = value;
     list_init(&psema->waiters);
     spinlock_init(&psema->lock);
 }
 
-void sema_down(struct semaphore *psema) {
+void sema_down(struct SCHED_SEMAPHORE *psema) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     spinlock_acquire(&psema->lock);
@@ -42,13 +42,13 @@ void sema_down(struct semaphore *psema) {
     asm_restore_eflags(old);
 }
 
-void sema_up(struct semaphore *psema) {
+void sema_up(struct SCHED_SEMAPHORE *psema) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     spinlock_acquire(&psema->lock);
     if (!list_empty(&psema->waiters)) {
-        struct list_elem *e = list_pop_front(&psema->waiters);
-        struct task_struct *w = list_entry(e, struct task_struct, wait_tag);
+        struct LIST_ELEM *e = list_pop_front(&psema->waiters);
+        struct TASK *w = list_entry(e, struct TASK, wait_tag);
         w->wait_tag.next = 0;
         w->wait_tag.prev = 0;
         thread_unblock(w);
@@ -58,24 +58,24 @@ void sema_up(struct semaphore *psema) {
     asm_restore_eflags(old);
 }
 
-void lock_init(struct lock *plock) {
+void lock_init(struct SCHED_LOCK *plock) {
     plock->holder = 0;
     plock->holder_repeat_nr = 0;
     sema_init(&plock->semaphore, 1);
 }
 
-struct lklog { uint32_t ev, task, holder, val; };
-static struct lklog lkbuf[64];
+struct SCHED_LKLOG { uint32_t ev, task, holder, val; };
+static struct SCHED_LKLOG lkbuf[64];
 static uint32_t lkidx;
 static void lkdump(const char *why) {
     kprintf("[lkdump] %s idx=%u\n", why, lkidx & 63);
     for (uint32_t i = 0; i < 64; i++) {
-        struct lklog *e = &lkbuf[(lkidx + i) & 63];
+        struct SCHED_LKLOG *e = &lkbuf[(lkidx + i) & 63];
         kprintf("[ev] %u t=%x h=%x v=%u\n", e->ev, e->task, e->holder, e->val);
     }
 }
 
-static void lklog(struct lock *p, uint32_t ev) {
+static void lklog(struct SCHED_LOCK *p, uint32_t ev) {
 
     uint32_t h = (uint32_t)(uintptr_t)p->holder;
     uint32_t v = p->semaphore.value;
@@ -93,14 +93,14 @@ static void lklog(struct lock *p, uint32_t ev) {
         for (;;)
             cpu_hlt();
     }
-    struct lklog *e = &lkbuf[lkidx++ & 63];
+    struct SCHED_LKLOG *e = &lkbuf[lkidx++ & 63];
     e->ev = ev;
     e->task = (uint32_t)(uintptr_t)current;
     e->holder = h;
     e->val = v;
 }
 
-void lock_acquire(struct lock *plock) {
+void lock_acquire(struct SCHED_LOCK *plock) {
     if (current == 0)
         return;
     uint32_t old = asm_save_eflags();
@@ -124,10 +124,10 @@ void lock_acquire(struct lock *plock) {
     lklog(plock, 1);
     if (plock->holder != 0) {
         for (uint32_t i = 0; i < 64; i++) {
-            struct lklog *e = &lkbuf[(lkidx + i) & 63];
+            struct SCHED_LKLOG *e = &lkbuf[(lkidx + i) & 63];
             kprintf("[ev] %u t=%x h=%x v=%u\n", e->ev, e->task, e->holder, e->val);
         }
-        struct task_struct *h = plock->holder;
+        struct TASK *h = plock->holder;
         kprintf("[lock] corrupt lock=%x holder=%x hp=%d hn=%s hs=%d cur=%x cp=%d cn=%s rpt=%d\n",
                 (uint32_t)(uintptr_t)plock, (uint32_t)(uintptr_t)h,
                 (int)h->pid, h->name, (int)h->status,
@@ -144,7 +144,7 @@ void lock_acquire(struct lock *plock) {
     asm_restore_eflags(old);
 }
 
-void lock_release(struct lock *plock) {
+void lock_release(struct SCHED_LOCK *plock) {
     if (current == 0)
         return;
     uint32_t old = asm_save_eflags();
@@ -163,8 +163,8 @@ void lock_release(struct lock *plock) {
     plock->semaphore.value++;
     lklog(plock, 2);
     if (!list_empty(&plock->semaphore.waiters)) {
-        struct list_elem *e = list_pop_front(&plock->semaphore.waiters);
-        struct task_struct *w = list_entry(e, struct task_struct, wait_tag);
+        struct LIST_ELEM *e = list_pop_front(&plock->semaphore.waiters);
+        struct TASK *w = list_entry(e, struct TASK, wait_tag);
         w->wait_tag.next = 0;
         w->wait_tag.prev = 0;
         thread_unblock(w);

@@ -24,7 +24,7 @@ static void spin_until_caught(const char *label) {
 }
 
 int main(void) {
-    struct sigaction act;
+    struct SYS_SIGACTION act;
     act.sa_handler = handler;
     act.sa_mask = 0;
     act.sa_flags = 0;
