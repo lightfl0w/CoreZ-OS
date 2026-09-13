@@ -341,7 +341,7 @@ static int vg_probe(void) {
     return 0;
 }
 
-static int vg_init(uint32_t w, uint32_t h, uint32_t bpp) {
+static int vg_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
     (void)bpp;
     if (vg.ready)
         return 0;
@@ -397,8 +397,6 @@ static int vg_init(uint32_t w, uint32_t h, uint32_t bpp) {
                              VIRTIO_STATUS_FEATURES_OK |
                              VIRTIO_STATUS_DRIVER_OK);
     vg.ready = 1;
-    (void)h;
-    (void)w;
     return 0;
 }
 

@@ -511,6 +511,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("input.o",      KERNEL_DIR / "gui" / "input.c"),
         ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
         ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
+        ("udi_vmware.o", KERNEL_DIR / "gui" / "udi_vmware.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
@@ -697,7 +698,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
         "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
-        "udi_virtio.o", "font.o",
+        "udi_virtio.o", "udi_vmware.o", "font.o",
         "font_kernel.o", "shm.o", "guiserver.o",
         "layout.o", "wm.o", "guiclients.o", "gui.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
@@ -1077,10 +1078,11 @@ def do_run(console: Console, stats: BuildStats,
     if kvm:
         console.info("KVM 加速已启用 (-enable-kvm -cpu host), 可在 ring0 测 MWAIT")
         cmd = [qemu, "-enable-kvm", "-cpu", "host", "-m", "1G",
-               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
+               "-smp", str(max(1, smp)),
+               "-device", "virtio-vga,edid=on,xres=1024,yres=768"]
     else:
         cmd = [qemu, "-accel", "tcg,tb-size=256", "-m", "1G",
-               "-smp", str(max(1, smp)), "-device", "virtio-vga"]
+               "-smp", str(max(1, smp)), "-device", "virtio-vga,edid=on,xres=1024,yres=768"]
     if boot_floppy:
         cmd += ["-fda", str(BUILD_DIR / "floppy.img")]
     else:
@@ -1090,7 +1092,7 @@ def do_run(console: Console, stats: BuildStats,
             console.info("generating test_hd.img via make_ext2.py")
             run([sys.executable, str(mkdisk), str(BUILD_DIR), str(hd_img)])
         cmd += ["-hda", str(hd_img)]
-    cmd += ["-debugcon", "stdio"]
+    cmd += ["-debugcon", "stdio", "-display", "gtk,zoom-to-fit=off"]
     if not no_net:
         cmd += ["-netdev", "user,id=net0,hostfwd=tcp::8765-:8765",
                 "-device", "e1000,netdev=net0"]

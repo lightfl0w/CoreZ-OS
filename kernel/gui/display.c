@@ -19,24 +19,27 @@ struct display_ops *display_get(void) {
     return active;
 }
 
+#define DISP_TGT_W 1024
+#define DISP_TGT_H 768
+
 static int udi_disp_init(void) {
-    uint32_t w = (uint32_t)io_get_scrnx();
-    uint32_t h = (uint32_t)io_get_scrny();
-    if (w == 0 || h == 0)
-        return -1;
-    if (udi_init(w, h, 32) != 0)
+    uint32_t w = DISP_TGT_W;
+    uint32_t h = DISP_TGT_H;
+    if (udi_init(&w, &h, 32) != 0)
         return -1;
     struct udi_ops *ops = udi_active();
     struct udi_buffer buf;
     if (ops->alloc_buffer(w, h, 32, &buf) != 0)
         return -1;
     back.pixels = buf.vmem;
-    back.pitch = w * 4;
+    back.pitch = (int)(w * 4);
     back.w = w;
     back.h = h;
     back.bytes = buf.size;
     back_handle = buf.handle;
     back_ok = 1;
+    io_init(buf.vmem, (int)w, (int)h, (uint32_t)buf.size, (int)(w * 4), 32);
+    kprintf("display: udi framebuffer %ux%u\n", w, h);
     return 0;
 }
 

@@ -6,6 +6,8 @@ KERNEL_FIXED equ  0x00280000
 
 MENU_ITEMS   equ  2
 MENU_TIMEOUT equ  5
+PREF_W       equ  1024
+PREF_H       equ  768
 TICKS_PER_SEC equ 18     
 KEY_UP       equ  0x48
 KEY_DOWN     equ  0x50
@@ -99,9 +101,9 @@ kernel_addr:    dd      0x00010000
         jz      .vbe_next
         cmp     byte [es:0x0019], 32
         jne     .vbe_next
-        cmp     word [es:0x0012], 1024
+        cmp     word [es:0x0012], PREF_W
         jne     .vbe_area
-        cmp     word [es:0x0014], 768
+        cmp     word [es:0x0014], PREF_H
         jne     .vbe_area
         mov     [l_exact], dx
         jmp     .vbe_scan_done
@@ -960,22 +962,30 @@ menu_clear:
 
 menu_draw:
         pushad
-        mov     eax, 40
+        mov     esi, msg_title
+        call    menu_cx
         mov     ebx, 30
         mov     esi, msg_title
-        mov     edx, MENU_TITLE
+        mov     edx, MENU_NORMAL
         call    draw_str
+        movzx   eax, word [SCRNY]
+        sub     eax, MENU_ITEMS*24
+        shr     eax, 1
+        mov     [cnt_y], eax
         mov     dword [item_idx], 0
 .iloop:
         mov     eax, [item_idx]
         cmp     eax, MENU_ITEMS
         jae     .done
         imul    ecx, eax, 24
-        add     ecx, 90
-        mov     ebx, ecx
-        mov     eax, 40
-        mov     ecx, [item_idx]
-        cmp     ecx, [menu_sel]
+        add     ecx, [cnt_y]
+        mov     [tmp_y], ecx
+        mov     esi, [menu_items + eax*4]
+        mov     [tmp_w], esi
+        call    menu_cx
+        mov     [tmp_x], eax
+        mov     eax, [item_idx]
+        cmp     eax, [menu_sel]
         jne     .m0
         mov     esi, msg_sel
         mov     edx, MENU_HI
@@ -984,18 +994,14 @@ menu_draw:
         mov     esi, msg_unsel
         mov     edx, MENU_NORMAL
 .m1:
+        mov     eax, [tmp_x]
+        sub     eax, 24
+        mov     ebx, [tmp_y]
         call    draw_str
-        mov     ecx, [item_idx]
-        mov     esi, [menu_items + ecx*4]
-        mov     eax, 64
-        mov     ecx, [item_idx]
-        cmp     ecx, [menu_sel]
-        jne     .l0
-        mov     edx, MENU_HI
-        jmp     .l1
-.l0:
-        mov     edx, MENU_NORMAL
-.l1:
+.m2:
+        mov     eax, [tmp_x]
+        mov     ebx, [tmp_y]
+        mov     esi, [tmp_w]
         call    draw_str
         inc     dword [item_idx]
         jmp     .iloop
@@ -1010,31 +1016,88 @@ menu_draw_count:
         movzx   eax, word [SCRNY]
         sub     eax, 28
         mov     [cnt_y], eax
-        mov     eax, 40
+        mov     eax, 0
         mov     ebx, [cnt_y]
-        mov     ecx, 560
+        movzx   ecx, word [SCRNX]
         mov     edx, 16
         mov     esi, MENU_BG
         call    fill_rect
-        mov     eax, 40
+        mov     esi, msg_count1
+        call    strpix8
+        mov     [cnt_pix1], eax
+        add     eax, 8
+        mov     [tmp_w], eax
+        mov     esi, msg_count2
+        call    strpix8
+        add     eax, [tmp_w]
+        movzx   ecx, word [SCRNX]
+        sub     ecx, eax
+        shr     ecx, 1
+        mov     [cnt_x], ecx
+        mov     eax, [cnt_x]
         mov     ebx, [cnt_y]
         mov     esi, msg_count1
         mov     edx, MENU_NORMAL
         call    draw_str
-        mov     eax, [menu_secs]
-        add     eax, '0'
-        mov     ecx, eax
-        mov     eax, 144
+        mov     eax, [cnt_x]
+        add     eax, [cnt_pix1]
         mov     ebx, [cnt_y]
+        mov     ecx, [menu_secs]
+        add     ecx, '0'
         mov     edx, MENU_HI
         call    draw_char
-        mov     eax, 152
+        mov     eax, [cnt_x]
+        add     eax, [cnt_pix1]
+        add     eax, 8
         mov     ebx, [cnt_y]
         mov     esi, msg_count2
         mov     edx, MENU_NORMAL
         call    draw_str
 .done:
         popad
+        ret
+
+menu_cx:
+        push    esi
+        push    ecx
+        push    edx
+        xor     ecx, ecx
+.cxl:
+        lodsb
+        test    al, al
+        jz      .cxd
+        inc     ecx
+        jmp     .cxl
+.cxd:
+        shl     ecx, 3
+        movzx   eax, word [SCRNX]
+        sub     eax, ecx
+        js      .cxz
+        shr     eax, 1
+        jmp     .cxr
+.cxz:
+        xor     eax, eax
+.cxr:
+        pop     edx
+        pop     ecx
+        pop     esi
+        ret
+
+strpix8:
+        push    esi
+        push    ecx
+        xor     ecx, ecx
+.spl:
+        lodsb
+        test    al, al
+        jz      .spd
+        inc     ecx
+        jmp     .spl
+.spd:
+        shl     ecx, 3
+        mov     eax, ecx
+        pop     ecx
+        pop     esi
         ret
 
 draw_str:
@@ -1045,7 +1108,7 @@ draw_str:
         lodsb
         test    al, al
         jz      .done
-        mov     ecx, eax
+        movzx   ecx, al               
         mov     eax, [cur_x]
         mov     ebx, [cur_y]
         call    draw_char
@@ -1246,6 +1309,8 @@ menu_secs:    dd    0
 menu_last_sec: dd  0
 item_idx:     dd    0
 cnt_y:        dd    0
+cnt_x:        dd    0
+cnt_pix1:     dd    0
 cur_x:        dd    0
 cur_y:        dd    0
 pitch:        dd    0

@@ -6,6 +6,7 @@
 #include "kernel/mm/pool/pool.h"
 
 extern struct udi_ops udi_virtio_ops;
+extern struct udi_ops udi_vmware_ops;
 
 #define UDI_MAX_BACKENDS 4
 
@@ -23,12 +24,13 @@ struct udi_ops *udi_active(void) {
     return active;
 }
 
-int udi_init(uint32_t w, uint32_t h, uint32_t bpp) {
+int udi_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
     if (active)
         return 0;
 
     extern struct udi_ops udi_sw_ops;
     udi_register(&udi_virtio_ops);
+    udi_register(&udi_vmware_ops);
     udi_register(&udi_sw_ops);
 
     for (int i = 0; i < backend_count; i++) {
@@ -51,25 +53,29 @@ static int sw_probe(void) {
     return (io_get_vram() != 0) ? 0 : -1;
 }
 
-static int sw_init(uint32_t w, uint32_t h, uint32_t bpp) {
+static int sw_init(uint32_t *w, uint32_t *h, uint32_t bpp) {
+    *w = (uint32_t)io_get_scrnx();
+    *h = (uint32_t)io_get_scrny();
+    uint32_t wloc = *w;
+    uint32_t hloc = *h;
     int pitch = io_get_pitch();
-    if (pitch < (int)(w * 4))
-        pitch = (int)(w * 4);
+    if (pitch < (int)(wloc * 4))
+        pitch = (int)(wloc * 4);
     sw_front.pixels = (gfx_color *)io_get_vram();
     sw_front.pitch = pitch;
-    sw_front.w = w;
-    sw_front.h = h;
+    sw_front.w = wloc;
+    sw_front.h = hloc;
     sw_front.bytes = io_get_vram_bytes();
 
-    size_t bsz = (size_t)w * (size_t)h * 4u;
+    size_t bsz = (size_t)wloc * (size_t)hloc * 4u;
     uint8_t *bp = (uint8_t *)get_kernel_pages(
         (uint32_t)((bsz + (size_t)PAGE_SIZE - 1) / (size_t)PAGE_SIZE));
     if (bp == 0)
         return -1;
     sw_back.pixels = (gfx_color *)bp;
-    sw_back.pitch = w * 4;
-    sw_back.w = w;
-    sw_back.h = h;
+    sw_back.pitch = (int)(wloc * 4);
+    sw_back.w = wloc;
+    sw_back.h = hloc;
     sw_back.bytes = bsz;
     sw_handle = 1;
     return 0;

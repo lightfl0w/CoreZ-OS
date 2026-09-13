@@ -11,6 +11,7 @@
 #include "kernel/gui/font.h"
 #include "kernel/gui/gfx.h"
 #include "kernel/gui/server.h"
+#include "kernel/gui/udi.h"
 #include "kernel/gui/wm.h"
 
 extern const unsigned char _binary_font_kernel_ttf_start[];
@@ -64,6 +65,10 @@ int gui_session_run(void) {
 
     io_set_gui_active(1);
     comp_init();
+    kprintf("gui: active=%s %ux%u@%ux%u\n",
+            udi_active() ? udi_active()->name : "(none)",
+            io_get_scrnx(), io_get_scrny(),
+            (int)comp_screen_w(), (int)comp_screen_h());
     if (gfx_fb_bpp() != 32) {
         kprintf("gui: 真彩 GUI 需要 32bpp 线性帧缓冲, 当前 %d bpp\n",
                 gfx_fb_bpp());
