@@ -1441,7 +1441,16 @@ IDTR0:
     dd  IDT0
 
 default_handler:
-    iret
+    bits 32
+    cli
+.h:
+    hlt
+    jmp .h
+    bits 16
+
+%if (default_handler - $$) >= (0x10000 - 0xC200)
+        %error "default_handler past 64KB: IDT gate offsets only encode the low 16 bits"
+%endif
 
 GDT0:
     db 0, 0, 0, 0, 0, 0, 0, 0
