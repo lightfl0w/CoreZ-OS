@@ -48,12 +48,12 @@ FAT_LBA   equ PART_LBA + RESERVED_SECT
 DATA_LBA  equ FAT_LBA + FAT_COUNT*FAT_SECTORS
 DIR_BUF   equ 0x3000
 FAT_BUF   equ 0x3400
+BOUNCE    equ 0x4000
+STAGE_HI  equ 0x00100000
 
         org     0xC200
 
         jmp     start
-
-kernel_addr:    dd      0x00010000
 
 start:
         cld
@@ -408,7 +408,26 @@ vbe_done:
         pop     fs
         pop     es
 .rsdp_fin:
-        mov     dword [l_loadcur], 0x00010000
+        call    waitkbdout
+        mov     al, 0xD1
+        out     0x64, al
+        call    waitkbdout
+        mov     al, 0xDF
+        out     0x60, al
+        call    waitkbdout
+
+        cli
+        lgdt    [GDTR0]
+        mov     eax, cr0
+        or      eax, 1
+        mov     cr0, eax
+        mov     bx, 0x08
+        mov     gs, bx
+        and     eax, 0xFFFFFFFE
+        mov     cr0, eax
+        sti
+
+        mov     dword [l_loadcur], STAGE_HI
 
         xor     ax, ax
         mov     es, ax
@@ -457,28 +476,21 @@ vbe_done:
         mul     dx
         add     ax, DATA_LBA
         mov     word [l_lba], ax
-        mov     eax, dword [l_loadcur]
-        mov     ecx, eax
-        and     ecx, 0x0F
-        mov     word [l_off], cx
-        shr     eax, 4
-        mov     word [l_seg], ax
-        mov     word [dap+0x02], SPC
-        mov     ax, word [l_off]
-        mov     word [dap+0x04], ax
-        mov     ax, word [l_seg]
-        mov     word [dap+0x06], ax
-        mov     ax, word [l_lba]
-        mov     word [dap+0x08], ax
-        mov     word [dap+0x0C], 0
-        mov     si, dap
-        mov     dl, byte [l_drive]
-        mov     ah, 0x42
-        int     0x13
+        mov     word [l_buf], BOUNCE
+        call    l_readsec
         jc      .lkerr
-        mov     ax, SPC
-        shl     ax, 9
-        movzx   eax, ax
+        mov     si, BOUNCE
+        mov     edi, [l_loadcur]
+        mov     ecx, SPC*512/4
+.gcopy:
+        mov     eax, [gs:si]
+        mov     [gs:edi], eax
+        add     si, 4
+        add     edi, 4
+        dec     ecx
+        jnz     .gcopy
+        mov     eax, SPC
+        shl     eax, 9
         add     dword [l_loadcur], eax
 
         mov     ax, word [l_cluster]
@@ -520,14 +532,6 @@ vbe_done:
 
         cli
 
-        call    waitkbdout
-        mov     al, 0xD1
-        out     0x64, al
-        call    waitkbdout
-        mov     al, 0xDF
-        out     0x60, al
-        call    waitkbdout
-
         lgdt    [GDTR0]
         lidt    [IDTR0]
         mov     eax, cr0
@@ -552,7 +556,7 @@ pipelineflush:
         mov     eax, [l_kphys]
         add     eax, KERNEL - 0x200000
         mov     edi, eax
-        mov     esi, [kernel_addr]
+        mov     esi, STAGE_HI
         mov     ecx, [l_ksize]
         cmp     ecx, 0x180000
         jbe     .ksz_ok
@@ -1289,8 +1293,6 @@ l_cluster: dw   0
 l_fbyte:  dw    0
 l_buf:    dw    0
 l_lba:    dw    0
-l_off:    dw    0
-l_seg:    dw    0
 l_kname:  db    "KERNEL  BIN"
 
 l_bestmode:   dw    0xFFFF
