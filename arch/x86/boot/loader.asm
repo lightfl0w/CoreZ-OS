@@ -2,10 +2,19 @@ KERNEL  equ     0x00280000
 KERNEL_VIRT equ 0xC0000000 + KERNEL
 KASLR_MIN  equ    0x00800000
 KASLR_SLOTS equ   124
-KERNEL_FIXED equ  0x00280000
+KERNEL_FIXED equ  0x00200000
+
+%if KERNEL_FIXED & 0x1FFFFF
+        %error "KERNEL_FIXED must be 2MB aligned: setup_hpd maps it as a 2MB page"
+%endif
+%if KASLR_MIN & 0x1FFFFF
+        %error "KASLR_MIN must be 2MB aligned"
+%endif
 
 MENU_ITEMS   equ  2
 MENU_TIMEOUT equ  5
+PREF_W       equ  1024
+PREF_H       equ  768
 TICKS_PER_SEC equ 18     
 KEY_UP       equ  0x48
 KEY_DOWN     equ  0x50
@@ -46,12 +55,18 @@ FAT_LBA   equ PART_LBA + RESERVED_SECT
 DATA_LBA  equ FAT_LBA + FAT_COUNT*FAT_SECTORS
 DIR_BUF   equ 0x3000
 FAT_BUF   equ 0x3400
+BOUNCE    equ 0x4000
+E820_MAX  equ 100
+STAGE_HI  equ 0x00100000
+MAX_KSIZE equ 0x00180000
 
         org     0xC200
 
-kernel_addr:    dd      0x00010000
+        jmp     start
 
-        mov     al, byte [0x0FFE]
+start:
+        cld
+        mov     al, byte [0x0FF0]
         mov     byte [l_drive], al
 
         mov     dword [l_bestmode], 0xFFFF
@@ -99,9 +114,9 @@ kernel_addr:    dd      0x00010000
         jz      .vbe_next
         cmp     byte [es:0x0019], 32
         jne     .vbe_next
-        cmp     word [es:0x0012], 1024
+        cmp     word [es:0x0012], PREF_W
         jne     .vbe_area
-        cmp     word [es:0x0014], 768
+        cmp     word [es:0x0014], PREF_H
         jne     .vbe_area
         mov     [l_exact], dx
         jmp     .vbe_scan_done
@@ -299,6 +314,8 @@ vbe_done:
 .e820_norm:
         add     edi, 24
         inc     dword [0x6000]
+        cmp     dword [0x6000], E820_MAX
+        jae     .e820_done
         cmp     ebx, 0
         je      .e820_done
         jmp     .e820_loop
@@ -402,7 +419,26 @@ vbe_done:
         pop     fs
         pop     es
 .rsdp_fin:
-        mov     dword [l_loadcur], 0x00010000
+        call    waitkbdout
+        mov     al, 0xD1
+        out     0x64, al
+        call    waitkbdout
+        mov     al, 0xDF
+        out     0x60, al
+        call    waitkbdout
+
+        cli
+        lgdt    [GDTR0]
+        mov     eax, cr0
+        or      eax, 1
+        mov     cr0, eax
+        mov     bx, 0x08
+        mov     gs, bx
+        and     eax, 0xFFFFFFFE
+        mov     cr0, eax
+        sti
+
+        mov     dword [l_loadcur], STAGE_HI
 
         xor     ax, ax
         mov     es, ax
@@ -443,6 +479,10 @@ vbe_done:
         mov     word [l_cluster], ax
         mov     eax, [bx+28]
         mov     [l_ksize], eax
+        cmp     eax, MAX_KSIZE
+        jbe     .l_loadloop
+        mov     si, kmsg2
+        jmp     .kerr
 
 .l_loadloop:
         mov     ax, word [l_cluster]
@@ -451,28 +491,21 @@ vbe_done:
         mul     dx
         add     ax, DATA_LBA
         mov     word [l_lba], ax
-        mov     eax, dword [l_loadcur]
-        mov     ecx, eax
-        and     ecx, 0x0F
-        mov     word [l_off], cx
-        shr     eax, 4
-        mov     word [l_seg], ax
-        mov     word [dap+0x02], SPC
-        mov     ax, word [l_off]
-        mov     word [dap+0x04], ax
-        mov     ax, word [l_seg]
-        mov     word [dap+0x06], ax
-        mov     ax, word [l_lba]
-        mov     word [dap+0x08], ax
-        mov     word [dap+0x0C], 0
-        mov     si, dap
-        mov     dl, byte [l_drive]
-        mov     ah, 0x42
-        int     0x13
+        mov     word [l_buf], BOUNCE
+        call    l_readsec
         jc      .lkerr
-        mov     ax, SPC
-        shl     ax, 9
-        movzx   eax, ax
+        mov     si, BOUNCE
+        mov     edi, [l_loadcur]
+        mov     ecx, SPC*512/4
+.gcopy:
+        mov     eax, [gs:si]
+        mov     [gs:edi], eax
+        add     si, 4
+        add     edi, 4
+        dec     ecx
+        jnz     .gcopy
+        mov     eax, SPC
+        shl     eax, 9
         add     dword [l_loadcur], eax
 
         mov     ax, word [l_cluster]
@@ -495,7 +528,7 @@ vbe_done:
         jmp     .l_loadloop
 
 .l_kload_ok:
-        jmp     .kload_ok
+        jmp     kload_ok
 
 .lkerr:
         mov     si, kmsg
@@ -510,17 +543,16 @@ vbe_done:
 .khalt:
         hlt
         jmp     .khalt
-.kload_ok:
+koverflow:
+        bits 32
+        cli
+.khang:
+        hlt
+        jmp     .khang
+        bits 16
+kload_ok:
 
         cli
-
-        call    waitkbdout
-        mov     al, 0xD1
-        out     0x64, al
-        call    waitkbdout
-        mov     al, 0xDF
-        out     0x60, al
-        call    waitkbdout
 
         lgdt    [GDTR0]
         lidt    [IDTR0]
@@ -546,12 +578,10 @@ pipelineflush:
         mov     eax, [l_kphys]
         add     eax, KERNEL - 0x200000
         mov     edi, eax
-        mov     esi, [kernel_addr]
+        mov     esi, STAGE_HI
         mov     ecx, [l_ksize]
-        cmp     ecx, 0x180000
-        jbe     .ksz_ok
-        mov     ecx, 0x180000
-.ksz_ok:
+        cmp     ecx, MAX_KSIZE
+        ja      koverflow
         add     ecx, 3
         shr     ecx, 2
         call    memcpy
@@ -816,10 +846,38 @@ mb_str_tag:
 pick_kphys:
         cmp     dword [l_kaslr], 0
         jne     .do_kaslr
+.fixed:
         mov     eax, KERNEL_FIXED
         mov     [l_kphys], eax
         ret
 .do_kaslr:
+        xor     eax, eax
+        mov     ebx, 0x6004
+        mov     ecx, [0x6000]
+.toploop:
+        test    ecx, ecx
+        jz      .topdone
+        cmp     dword [ebx+16], 1
+        jne     .topnext
+        mov     edx, [ebx]
+        add     edx, [ebx+4]
+        cmp     edx, eax
+        jbe     .topnext
+        mov     eax, edx
+.topnext:
+        add     ebx, 24
+        dec     ecx
+        jmp     .toploop
+.topdone:
+        sub     eax, KASLR_MIN
+        jc      .fixed
+        shr     eax, 21
+        jz      .fixed
+        cmp     eax, KASLR_SLOTS
+        jbe     .have_slots
+        mov     eax, KASLR_SLOTS
+.have_slots:
+        mov     ecx, eax
         rdtsc
         mov     ebx, eax
         rdtsc
@@ -835,7 +893,6 @@ pick_kphys:
         add     ebx, 12345
         mov     eax, ebx
         xor     edx, edx
-        mov     ecx, KASLR_SLOTS
         div     ecx
         mov     eax, edx
         shl     eax, 21
@@ -960,22 +1017,30 @@ menu_clear:
 
 menu_draw:
         pushad
-        mov     eax, 40
+        mov     esi, msg_title
+        call    menu_cx
         mov     ebx, 30
         mov     esi, msg_title
-        mov     edx, MENU_TITLE
+        mov     edx, MENU_NORMAL
         call    draw_str
+        movzx   eax, word [SCRNY]
+        sub     eax, MENU_ITEMS*24
+        shr     eax, 1
+        mov     [cnt_y], eax
         mov     dword [item_idx], 0
 .iloop:
         mov     eax, [item_idx]
         cmp     eax, MENU_ITEMS
         jae     .done
         imul    ecx, eax, 24
-        add     ecx, 90
-        mov     ebx, ecx
-        mov     eax, 40
-        mov     ecx, [item_idx]
-        cmp     ecx, [menu_sel]
+        add     ecx, [cnt_y]
+        mov     [tmp_y], ecx
+        mov     esi, [menu_items + eax*4]
+        mov     [tmp_w], esi
+        call    menu_cx
+        mov     [tmp_x], eax
+        mov     eax, [item_idx]
+        cmp     eax, [menu_sel]
         jne     .m0
         mov     esi, msg_sel
         mov     edx, MENU_HI
@@ -984,18 +1049,14 @@ menu_draw:
         mov     esi, msg_unsel
         mov     edx, MENU_NORMAL
 .m1:
+        mov     eax, [tmp_x]
+        sub     eax, 24
+        mov     ebx, [tmp_y]
         call    draw_str
-        mov     ecx, [item_idx]
-        mov     esi, [menu_items + ecx*4]
-        mov     eax, 64
-        mov     ecx, [item_idx]
-        cmp     ecx, [menu_sel]
-        jne     .l0
-        mov     edx, MENU_HI
-        jmp     .l1
-.l0:
-        mov     edx, MENU_NORMAL
-.l1:
+.m2:
+        mov     eax, [tmp_x]
+        mov     ebx, [tmp_y]
+        mov     esi, [tmp_w]
         call    draw_str
         inc     dword [item_idx]
         jmp     .iloop
@@ -1010,31 +1071,88 @@ menu_draw_count:
         movzx   eax, word [SCRNY]
         sub     eax, 28
         mov     [cnt_y], eax
-        mov     eax, 40
+        mov     eax, 0
         mov     ebx, [cnt_y]
-        mov     ecx, 560
+        movzx   ecx, word [SCRNX]
         mov     edx, 16
         mov     esi, MENU_BG
         call    fill_rect
-        mov     eax, 40
+        mov     esi, msg_count1
+        call    strpix8
+        mov     [cnt_pix1], eax
+        add     eax, 8
+        mov     [tmp_w], eax
+        mov     esi, msg_count2
+        call    strpix8
+        add     eax, [tmp_w]
+        movzx   ecx, word [SCRNX]
+        sub     ecx, eax
+        shr     ecx, 1
+        mov     [cnt_x], ecx
+        mov     eax, [cnt_x]
         mov     ebx, [cnt_y]
         mov     esi, msg_count1
         mov     edx, MENU_NORMAL
         call    draw_str
-        mov     eax, [menu_secs]
-        add     eax, '0'
-        mov     ecx, eax
-        mov     eax, 144
+        mov     eax, [cnt_x]
+        add     eax, [cnt_pix1]
         mov     ebx, [cnt_y]
+        mov     ecx, [menu_secs]
+        add     ecx, '0'
         mov     edx, MENU_HI
         call    draw_char
-        mov     eax, 152
+        mov     eax, [cnt_x]
+        add     eax, [cnt_pix1]
+        add     eax, 8
         mov     ebx, [cnt_y]
         mov     esi, msg_count2
         mov     edx, MENU_NORMAL
         call    draw_str
 .done:
         popad
+        ret
+
+menu_cx:
+        push    esi
+        push    ecx
+        push    edx
+        xor     ecx, ecx
+.cxl:
+        lodsb
+        test    al, al
+        jz      .cxd
+        inc     ecx
+        jmp     .cxl
+.cxd:
+        shl     ecx, 3
+        movzx   eax, word [SCRNX]
+        sub     eax, ecx
+        js      .cxz
+        shr     eax, 1
+        jmp     .cxr
+.cxz:
+        xor     eax, eax
+.cxr:
+        pop     edx
+        pop     ecx
+        pop     esi
+        ret
+
+strpix8:
+        push    esi
+        push    ecx
+        xor     ecx, ecx
+.spl:
+        lodsb
+        test    al, al
+        jz      .spd
+        inc     ecx
+        jmp     .spl
+.spd:
+        shl     ecx, 3
+        mov     eax, ecx
+        pop     ecx
+        pop     esi
         ret
 
 draw_str:
@@ -1045,7 +1163,7 @@ draw_str:
         lodsb
         test    al, al
         jz      .done
-        mov     ecx, eax
+        movzx   ecx, al               
         mov     eax, [cur_x]
         mov     ebx, [cur_y]
         call    draw_char
@@ -1189,6 +1307,7 @@ get_rtc_sec:
         mov     al, 0x00
         out     0x70, al
         in      al, 0x71
+        movzx   eax, al
         mov     ecx, eax
         and     ecx, 0x0F
         shr     eax, 4
@@ -1222,8 +1341,7 @@ l_cluster: dw   0
 l_fbyte:  dw    0
 l_buf:    dw    0
 l_lba:    dw    0
-l_off:    dw    0
-l_seg:    dw    0
+l_retryn: db    0
 l_kname:  db    "KERNEL  BIN"
 
 l_bestmode:   dw    0xFFFF
@@ -1246,6 +1364,8 @@ menu_secs:    dd    0
 menu_last_sec: dd  0
 item_idx:     dd    0
 cnt_y:        dd    0
+cnt_x:        dd    0
+cnt_pix1:     dd    0
 cur_x:        dd    0
 cur_y:        dd    0
 pitch:        dd    0
@@ -1313,14 +1433,37 @@ l_readsec:
         mov     word [dap+0x06], 0
         mov     word [dap+0x08], si
         mov     word [dap+0x0C], 0
+        call    l_retry13
+        pop     si
+        ret
+
+l_retry13:
+        mov     byte [l_retryn], 5
+.try:
         mov     si, dap
         mov     dl, byte [l_drive]
         mov     ah, 0x42
         int     0x13
-        pop     si
+        jnc     .chk
+        jmp     .fail
+.chk:
+        test    ah, ah
+        jz      .done
+.fail:
+        dec     byte [l_retryn]
+        jz      .err
+        xor     ah, ah
+        int     0x13
+        jmp     .try
+.done:
+        clc
+        ret
+.err:
+        stc
         ret
 
 kmsg:   db      0x0A, 0x0A, "kernel load error", 0
+kmsg2:  db      0x0A, 0x0A, "kernel too large", 0
 
 IDT0:
     %rep 256
@@ -1336,7 +1479,16 @@ IDTR0:
     dd  IDT0
 
 default_handler:
-    iret
+    bits 32
+    cli
+.h:
+    hlt
+    jmp .h
+    bits 16
+
+%if (default_handler - $$) >= (0x10000 - 0xC200)
+        %error "default_handler past 64KB: IDT gate offsets only encode the low 16 bits"
+%endif
 
 GDT0:
     db 0, 0, 0, 0, 0, 0, 0, 0

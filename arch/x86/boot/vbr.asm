@@ -47,13 +47,14 @@ FAT_BUF equ 0x0A00
 
 start:
         cli
+        cld
         xor     ax, ax
         mov     ds, ax
         mov     es, ax
         mov     ss, ax
         mov     sp, 0x7C00
         sti
-        mov     al, byte [0x0FFE]
+        mov     al, byte [0x0FF0]
         mov     byte [drive], al
 
         mov     word [loadcur], LOAD_ADDR
@@ -90,23 +91,8 @@ start:
         jnz     .entry
 
 .nextroot:
-        mov     ax, word [curclu]
-        shl     ax, 2
-        mov     word [fatbyte], ax
-        mov     ax, word [fatbyte]
-        shr     ax, 9
-        add     ax, FAT_LBA
-        mov     word [bufaddr], FAT_BUF
-        call    readsec
+        call    nextclu
         jc      fail
-        mov     ax, word [fatbyte]
-        and     ax, 0x1FF
-        mov     di, ax
-        mov     eax, dword [FAT_BUF + di]
-        and     eax, 0x0FFFFFFF
-        mov     word [curclu], ax      
-        cmp     eax, 0x0FFFFFF8
-        jae     fail                    
         jmp     .dirscan
 
 .found:
@@ -135,6 +121,13 @@ start:
         shl     ax, 9
         add     word [loadcur], ax
 
+        call    nextclu
+        jc      .doneload
+        jmp     .loadloop
+.doneload:
+        jmp     0x0000:LOAD_ADDR
+
+nextclu:
         mov     ax, word [curclu]
         shl     ax, 2
         mov     word [fatbyte], ax
@@ -151,10 +144,12 @@ start:
         and     eax, 0x0FFFFFFF
         mov     word [curclu], ax
         cmp     eax, 0x0FFFFFF8
-        jae     .doneload
-        jmp     .loadloop
-.doneload:
-        jmp     0x0000:LOAD_ADDR
+        jae     .end
+        clc
+        ret
+.end:
+        stc
+        ret
 
 readsec:
         push    si
@@ -165,10 +160,26 @@ readsec:
         mov     word [dap+0x06], 0
         mov     word [dap+0x08], si
         mov     word [dap+0x0C], 0
+        mov     cx, 5
+.try:
         mov     si, dap
         mov     dl, byte [drive]
         mov     ah, 0x42
         int     0x13
+        jnc     .chk
+        jmp     .fail
+.chk:
+        test    ah, ah
+        jz      .done
+.fail:
+        xor     ah, ah
+        int     0x13
+        loop    .try
+        stc
+        pop     si
+        ret
+.done:
+        clc
         pop     si
         ret
 
