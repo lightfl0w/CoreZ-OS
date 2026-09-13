@@ -59,6 +59,17 @@ static void mark_used(uint32_t start, uint32_t size) {
     }
 }
 
+static void mark_free(uint32_t start, uint32_t size) {
+    uint32_t end = start + size;
+    while (start < end) {
+        uint32_t idx = (start - kernel_pool.phy_addr_start) / PAGE_SIZE;
+        if (idx < kernel_pool.pool_bitmap.btmp_bytes_len * 8) {
+            bitmap_set(&kernel_pool.pool_bitmap, idx, 0);
+        }
+        start += PAGE_SIZE;
+    }
+}
+
 #define EFER_MSR 0xc0000080u
 #define EFER_NXE (1ull << 11)
 #define CPUID_NX (1u << 20)
@@ -95,6 +106,42 @@ void mm_init(void) {
     kernel_pool.pool_bitmap.bits = kernel_pool_bitmap;
     kernel_pool.pool_bitmap.btmp_bytes_len = sizeof(kernel_pool_bitmap);
     bitmap_init(&kernel_pool.pool_bitmap);
+    mark_used(kernel_pool.phy_addr_start, kernel_pool.pool_size);
+    {
+        const struct mb2_info *mb2 = mb2_get();
+        int freed_any = 0;
+        if (mb2 != NULL && mb2->has_mmap) {
+            for (uint32_t i = 0; i < mb2->mmap_count; i++) {
+                const struct mb2_mmap_entry *e = &mb2->mmap[i];
+                if (e->type != MB2_MMAP_AVAILABLE) {
+                    continue;
+                }
+                uint64_t s = e->addr;
+                uint64_t t = e->addr + e->len;
+                if (s < kernel_pool.phy_addr_start) {
+                    s = kernel_pool.phy_addr_start;
+                }
+                if (t > upper) {
+                    t = upper;
+                }
+                s = (s + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+                t &= ~(uint64_t)(PAGE_SIZE - 1);
+                if (s >= t) {
+                    continue;
+                }
+                mark_free((uint32_t)s, (uint32_t)(t - s));
+                freed_any = 1;
+            }
+        }
+        if (!freed_any) {
+            uint32_t legacy_end =
+                upper < 0x1000000u ? upper : 0x1000000u;
+            if (legacy_end > kernel_pool.phy_addr_start) {
+                mark_free(kernel_pool.phy_addr_start,
+                          legacy_end - kernel_pool.phy_addr_start);
+            }
+        }
+    }
     extern char _kernel_phys_start;
     extern char _kernel_phys_end;
     {
@@ -146,8 +193,6 @@ void mm_init(void) {
 
     kernel_pml4 = asm_read_cr3();
     lock_init(&mem_lock);
-
-    mark_used(0x1000000u, MAX_PHYS_MEM - 0x1000000u);
 
     {
         uint64_t *pd98 = (uint64_t *)VIRT_OF(0x98000);
