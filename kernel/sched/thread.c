@@ -277,8 +277,17 @@ void thread_yield(void) {
     asm_restore_eflags(old);
 }
 
+static void assert_stack_magic(const struct TASK *t) {
+    if (t->stack_magic != STACK_MAGIC) {
+        kprintf("[panic] stack_magic broken: pid=%d name=%s val=%#x\n",
+                t->pid, t->name, t->stack_magic);
+        ASSERT(t->stack_magic == STACK_MAGIC);
+    }
+}
+
 void schedule(void) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
+    assert_stack_magic(current);
 
     if (current->status == TASK_RUNNING) {
         ready_enqueue(current);
@@ -300,6 +309,7 @@ void schedule(void) {
     ready_bitmap &= ~(1ULL << slot);
     struct TASK *next = &task_table[slot];
     rr_cursor = slot;
+    assert_stack_magic(next);
     next->status = TASK_RUNNING;
 
     struct TASK *prev = current;
@@ -347,6 +357,7 @@ void thread_kill_pid(uint32_t pid) {
         return;
     if (t->pml4_phys == 0)
         return;
+    assert_stack_magic(t);
 
     uint32_t old = asm_save_eflags();
     asm_cli();
@@ -400,8 +411,8 @@ static void reap_died_threads(void) {
         struct TASK *t = list_entry(e, struct TASK, all_list_tag);
         struct LIST_ELEM *next = e->next;
         if (t->status == TASK_DIED && t != current) {
-            /* 正常退出的任务已在 proc_exit 里释放空间（pml4_phys==0）；
-             * 被直接杀死而未经 proc_exit 的任务在这里统一回收 */
+            assert_stack_magic(t);
+
             if (t->pml4_phys) {
                 task_release_space(t);
             }

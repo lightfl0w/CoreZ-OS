@@ -554,6 +554,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("path_probe", "path_probe.c", "_start", []),
         ("kaddr_probe", "kaddr_probe.c", "_start", []),
         ("sock_probe", "sock_probe.c", "_start", []),
+        ("gs_probe", "gs_probe.c", "_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
