@@ -29,6 +29,8 @@ static const char **exec_env_defaults(void) {
 #define EFLAGS_IOPL_0 0
 #define MAX_ARG_NR 16
 #define MAX_ARG_STR_LEN 256
+#define EXEC_STRBUF_HALF (MAX_ARG_NR * MAX_ARG_STR_LEN)
+#define EXEC_STRBUF_PAGES 2
 #define HEAP_ASLR_PAGES 2048
 
 struct LINUX_ELF64_NHDR {
@@ -559,24 +561,62 @@ done:
     return ret;
 }
 
-static int count_strs(const char *const *strs, uint32_t *lens, int kcaller) {
+/**
+ * 把 argv/envp 指针数组与各字符串原子拷入内核缓冲：指针数组项与字符串
+ * 都经 copy_from_user（校验与拷贝同页完成），消除"校验后另一线程 unmap"
+ * 的 TOCTOU——这是共享地址空间线程语义下的 UAF 前置加固。
+ *
+ * @param offs 输出第 i 个字符串在 buf 内的偏移
+ * @param bufcap buf 容量
+ * @returns 字符串个数；-1 表示任一指针不可达或超出缓冲
+ */
+static int copy_strs(const char *const *strs, uint32_t *lens, char *buf,
+                     uint32_t bufcap, int kcaller, uint32_t *offs) {
     int n = 0;
-    if (strs == NULL)
+    uint32_t used = 0;
+    if (strs == NULL) {
         return 0;
+    }
     while (n < MAX_ARG_NR) {
-        if (!kcaller && !user_range_readable((uint32_t)(uintptr_t)&strs[n],
-                                             sizeof(char *))) {
-            return -1;
+        const char *s;
+        if (!kcaller) {
+            char *sp;
+
+            if (copy_from_user(&sp, &strs[n], sizeof(char *)) != 0) {
+                return -1;
+            }
+            if (sp == NULL) {
+                break;
+            }
+            uint32_t room = (bufcap - used < MAX_ARG_STR_LEN)
+                                ? (bufcap - used)
+                                : MAX_ARG_STR_LEN;
+            int len = copy_str_from_user_len(buf + used, sp, room);
+            if (len < 0) {
+                return -1;
+            }
+            uint32_t need = (uint32_t)len + 1;
+            lens[n] = need;
+            offs[n] = used;
+            used += need;
+        } else {
+            s = strs[n];
+            if (s == NULL) {
+                break;
+            }
+            uint32_t len = (uint32_t)strlen(s);
+            if (len >= MAX_ARG_STR_LEN) {
+                return -1;
+            }
+            uint32_t need = len + 1;
+            if (used + need > bufcap) {
+                return -1;
+            }
+            memcpy(buf + used, s, need);
+            lens[n] = need;
+            offs[n] = used;
+            used += need;
         }
-        if (strs[n] == NULL) {
-            break;
-        }
-        int len = kcaller ? (int)strlen(strs[n])
-                          : user_strnlen(strs[n], MAX_ARG_STR_LEN);
-        if (len < 0) {
-            return -1;
-        }
-        lens[n] = (uint32_t)len + 1;
         n++;
     }
     return n;
@@ -605,10 +645,13 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t aux_random_addr = 0;
     uint32_t aux_bias = 0;
     uint32_t aux_brk_base = 0;
+
+    char *strbuf = NULL;
+    uint32_t argv_offs[MAX_ARG_NR];
+    uint32_t envp_offs[MAX_ARG_NR];
     cur = current;
     old_pml4_phys = cur->pml4_phys;
     if (cur->pml4_phys != 0) {
-        /* exec 替换整个地址空间：先终止共享该空间的其他线程 */
         space_detach_others(cur);
     }
     if (cur->pml4_phys == 0) {
@@ -632,7 +675,13 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     create_user_vaddr_bitmap(cur);
     {
         int kcaller = (regs != NULL) ? ((regs->cs & 3) == 0) : 1;
-        argc = count_strs(argv, slens, kcaller);
+        strbuf = (char *)get_kernel_pages(EXEC_STRBUF_PAGES);
+        if (strbuf == NULL) {
+            kprintf("[exec] strbuf alloc failed\n");
+            goto exec_fail;
+        }
+        argc = copy_strs(argv, slens, strbuf, EXEC_STRBUF_HALF, kcaller,
+                         argv_offs);
         if (argc < 0) {
             goto exec_fail;
         }
@@ -643,7 +692,9 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
                 envlens[ed_i] =
                     (uint32_t)strlen(env_def[ed_i]) + 1;
         } else {
-            envc = count_strs(envp, envlens, kcaller);
+            envc = copy_strs(envp, envlens,
+                             strbuf + EXEC_STRBUF_HALF, EXEC_STRBUF_HALF,
+                             kcaller, envp_offs);
             if (envc < 0) {
                 goto exec_fail;
             }
@@ -705,7 +756,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
                 kprintf("[exec] argv too large for user stack\n");
                 goto exec_fail;
             }
-            memcpy((void *)ustack_ptr, argv[i], slen);
+            memcpy((void *)ustack_ptr, strbuf + argv_offs[i], slen);
             argv_user_addrs[i] = ustack_ptr;
         }
     }
@@ -767,7 +818,10 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             if (ustack_ptr < cur->stack_bottom) {
                 goto exec_fail;
             }
-            memcpy((void *)ustack_ptr, envp ? envp[e] : exec_env_defaults()[e], slen);
+            memcpy((void *)ustack_ptr,
+                   envp ? strbuf + EXEC_STRBUF_HALF + envp_offs[e]
+                        : exec_env_defaults()[e],
+                   slen);
             envp_addrs[e] = ustack_ptr;
         }
 
@@ -795,6 +849,11 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     }
     goto exec_done;
 exec_fail:
+    if (strbuf != NULL) {
+        free_kernel_page((uint32_t)strbuf);
+        free_kernel_page((uint32_t)strbuf + PAGE_SIZE);
+        strbuf = NULL;
+    }
     if (cur->pml4_phys != old_pml4_phys) {
         uint32_t abandoned = cur->pml4_phys;
         cur->pml4_phys = old_pml4_phys;
@@ -806,6 +865,11 @@ exec_fail:
     }
     return -1;
 exec_done:
+    if (strbuf != NULL) {
+        free_kernel_page((uint32_t)strbuf);
+        free_kernel_page((uint32_t)strbuf + PAGE_SIZE);
+        strbuf = NULL;
+    }
     for (int32_t fd = 3; fd < MAX_FILES_OPEN_PER_PROC; ++fd) {
         if (cur->fd_table[fd] != (uint32_t)-1 && (cur->fd_cloexec >> fd) & 1) {
             cur->fd_cloexec &= ~(1ull << fd);

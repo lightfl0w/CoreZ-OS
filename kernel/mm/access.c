@@ -62,6 +62,42 @@ int copy_str_from_user(char *dst, const char *src, uint32_t max) {
     return user_str_span(src, max, dst) < 0 ? -1 : 0;
 }
 
+int copy_str_from_user_len(char *dst, const char *src, uint32_t max) {
+    return user_str_span(src, max, dst);
+}
+
+/**
+ * 把用户空间数据原子拷入内核缓冲，逐页校验可读后立即拷贝该页，校验与访问
+ *
+ * @param dst 内核缓冲
+ * @param src 用户地址
+ * @param len 字节数
+ * @returns 0 成功；-1 任一页不可读或地址越界
+ */
+int copy_from_user(void *dst, const void *src, uint32_t len) {
+    if (len == 0) {
+        return 0;
+    }
+    uint32_t a = (uint32_t)(uintptr_t)src;
+    if (a < USER_VADDR_BEGIN || a >= USER_SPACE_END ||
+        len > USER_SPACE_END - a) {
+        return -1;
+    }
+    uint8_t *d = (uint8_t *)dst;
+    uint32_t off = 0;
+    while (off < len) {
+        uint32_t va = a + off;
+        if (!user_page_readable(va)) {
+            return -1;
+        }
+        uint32_t room = PAGE_SIZE - (va & 0xFFFu);
+        uint32_t n = (room < len - off) ? room : (len - off);
+        memcpy(d + off, (const void *)(uintptr_t)va, n);
+        off += n;
+    }
+    return 0;
+}
+
 int user_strnlen(const char *src, uint32_t max) {
     return user_str_span(src, max, NULL);
 }
