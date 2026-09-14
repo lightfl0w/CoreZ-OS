@@ -461,17 +461,23 @@ int net_getsockopt(int fd, int level, int optname, void *val, uint32_t *len) {
         uint32_t e = s->err;
         s->err = 0;
         lock_release(&net_lock);
-        if (val && len && *len >= sizeof(int32_t))
+        if (val && len && *len >= sizeof(int32_t)) {
             *(int32_t *)val = (int32_t)e;
+            *len = sizeof(int32_t);
+        }
         return 0;
     }
     case SO_RCVBUF:
-        if (val && len && *len >= sizeof(int32_t))
+        if (val && len && *len >= sizeof(int32_t)) {
             *(int32_t *)val = (int32_t)TCP_RCV_BUF;
+            *len = sizeof(int32_t);
+        }
         return 0;
     case SO_SNDBUF:
-        if (val && len && *len >= sizeof(int32_t))
+        if (val && len && *len >= sizeof(int32_t)) {
             *(int32_t *)val = (int32_t)TCP_SND_BUF;
+            *len = sizeof(int32_t);
+        }
         return 0;
     default:
         return 0;

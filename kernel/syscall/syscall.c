@@ -722,15 +722,34 @@ static int64_t nsys_getpeername(struct X86_REGS *r) {
 }
 
 static int64_t nsys_getsockopt(struct X86_REGS *r) {
-    if (!ok_write(r, r->esi, 4) || !ok_write(r, r->edi, 4)) {
+    uint32_t klen = 0;
+    uint32_t kval = 0;
+    if (r->edi != 0 &&
+        copy_from_user(&klen, (const void *)r->edi, sizeof(klen)) != 0) {
         return (uint32_t)-1;
     }
-    return (uint32_t)net_getsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,
-                                    (void *)r->esi, (uint32_t *)r->edi);
+    if (r->esi != 0 && !ok_write(r, r->esi, sizeof(kval))) {
+        return (uint32_t)-1;
+    }
+    int32_t rc = (int32_t)net_getsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,
+                                         r->esi != 0 ? &kval : NULL,
+                                         r->edi != 0 ? &klen : NULL);
+    if (rc != 0) {
+        return (uint32_t)(int64_t)rc;
+    }
+    if (r->esi != 0 &&
+        copy_to_user((void *)r->esi, &kval, sizeof(kval)) != 0) {
+        return (uint32_t)-1;
+    }
+    if (r->edi != 0 &&
+        copy_to_user((void *)r->edi, &klen, sizeof(klen)) != 0) {
+        return (uint32_t)-1;
+    }
+    return 0;
 }
 
 static int64_t nsys_setsockopt(struct X86_REGS *r) {
-    if (!ok_write(r, r->esi, 4)) {
+    if (!ok_read(r, r->esi, r->edi)) {
         return (uint32_t)-1;
     }
     return (uint32_t)net_setsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,

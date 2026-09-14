@@ -637,21 +637,19 @@ static int64_t lc_socket(struct X86_REGS *r, uint64_t a, uint64_t b,
 static int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
                              uint64_t addrlen, uint32_t *ip,
                              uint16_t *port) {
-    if (addr == 0 || addrlen < 6)
+    if (addr == 0 || addrlen < 8) {
         return -1;
-    uint8_t tmp[6];
-    if (!user_ptr_ok(r, addr, 6, 0))
+    }
+
+    uint8_t tmp[8];
+    if (copy_from_user(tmp, (const void *)(uintptr_t)addr, sizeof(tmp)) != 0)
         return -1;
-    memcpy(tmp, (const void *)(uintptr_t)addr, 6);
     uint16_t family = (uint16_t)(tmp[0] | ((uint16_t)tmp[1] << 8));
     if (family != 2)
         return -1;
     *port = (uint16_t)((uint16_t)(tmp[2] << 8) | tmp[3]);
-    *ip = ((uint32_t)tmp[4]) | ((uint32_t)tmp[5] << 8);
-    if (!user_ptr_ok(r, addr + 6, 2, 0))
-        return -1;
-    memcpy(&tmp[0], (const void *)(uintptr_t)(addr + 6), 2);
-    *ip |= ((uint32_t)tmp[0] << 16) | ((uint32_t)tmp[1] << 24);
+    *ip = ((uint32_t)tmp[4]) | ((uint32_t)tmp[5] << 8) |
+          ((uint32_t)tmp[6] << 16) | ((uint32_t)tmp[7] << 24);
     return 0;
 }
 
@@ -660,7 +658,10 @@ static int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr,
                             uint16_t port) {
     if (addr == 0 || addrlen_ptr == 0)
         return 0;
-    if (!user_ptr_ok(r, addr, 8, 1) || !user_ptr_ok(r, addrlen_ptr, 4, 1))
+
+    uint32_t klen = 0;
+    if (copy_from_user(&klen, (const void *)(uintptr_t)addrlen_ptr,
+                       sizeof(klen)) != 0)
         return -1;
     uint8_t sa[8];
     sa[0] = 2;
@@ -671,8 +672,12 @@ static int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr,
     sa[5] = (uint8_t)(ip >> 8);
     sa[6] = (uint8_t)(ip >> 16);
     sa[7] = (uint8_t)(ip >> 24);
-    memcpy((void *)(uintptr_t)addr, sa, 8);
-    *(uint32_t *)(uintptr_t)addrlen_ptr = 16;
+    uint32_t n = (klen < sizeof(sa)) ? klen : (uint32_t)sizeof(sa);
+    if (n != 0 && copy_to_user((void *)(uintptr_t)addr, sa, n) != 0)
+        return -1;
+    uint32_t alen = 16;
+    if (copy_to_user((void *)(uintptr_t)addrlen_ptr, &alen, sizeof(alen)) != 0)
+        return -1;
     return 0;
 }
 
@@ -794,9 +799,12 @@ static int64_t lc_getpeername(struct X86_REGS *r, uint64_t a, uint64_t b,
 static int64_t lc_setsockopt(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e,
                              uint64_t f) {
-    (void)r; (void)f;
+    (void)f;
     if (unix_fd_slot(a) >= 0)
         return 0;
+
+    if (d != 0 && !user_ptr_ok(r, d, (uint32_t)e, 0))
+        return -LINUX_EFAULT;
     return net_setsockopt((int)a, (int)b, (int)c, (const void *)(uintptr_t)d,
                           (uint32_t)e);
 }
@@ -804,14 +812,34 @@ static int64_t lc_setsockopt(struct X86_REGS *r, uint64_t a, uint64_t b,
 static int64_t lc_getsockopt(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e,
                              uint64_t f) {
-    (void)r; (void)f;
+    (void)f;
+    uint32_t klen = 0;
+    uint32_t kval = 0;
+    if (e != 0 &&
+        copy_from_user(&klen, (const void *)(uintptr_t)e, sizeof(klen)) != 0)
+        return -LINUX_EFAULT;
     if (unix_fd_slot(a) >= 0) {
-        if (d != 0 && e != 0 && user_ptr_ok(r, d, 4, 1))
-            *(int32_t *)(uintptr_t)d = 0;
+        if (d != 0) {
+            if (klen < 4)
+                return -LINUX_EINVAL;
+            if (copy_to_user((void *)(uintptr_t)d, &kval, sizeof(kval)) != 0)
+                return -LINUX_EFAULT;
+        }
         return 0;
     }
-    return net_getsockopt((int)a, (int)b, (int)c, (void *)(uintptr_t)d,
-                          (uint32_t *)(uintptr_t)e);
+
+    if (d != 0 && e != 0 && klen < 4)
+        return -LINUX_EINVAL;
+    if (net_getsockopt((int)a, (int)b, (int)c, d != 0 ? &kval : NULL,
+                       e != 0 ? &klen : NULL) != 0)
+        return -LINUX_EINVAL;
+    if (d != 0 &&
+        copy_to_user((void *)(uintptr_t)d, &kval, sizeof(kval)) != 0)
+        return -LINUX_EFAULT;
+    if (e != 0 &&
+        copy_to_user((void *)(uintptr_t)e, &klen, sizeof(klen)) != 0)
+        return -LINUX_EFAULT;
+    return 0;
 }
 
 struct LINUX_MSGHDR {

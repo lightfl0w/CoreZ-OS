@@ -27,6 +27,26 @@ static int user_page_readable(uint32_t a) {
     return (*pte & PTE_P) && (*pte & PTE_U);
 }
 
+static int user_page_writable(uint32_t a) {
+    uint64_t *pde = pde_ptr(a);
+    if (pde == NULL || !(*pde & PTE_P)) {
+        return 0;
+    }
+    if (*pde & PTE_PS) {
+        return (*pde & (PTE_U | PTE_W)) == (PTE_U | PTE_W);
+    }
+    uint64_t *pte = pte_ptr(a);
+    if (!(*pte & PTE_P) || !(*pte & PTE_U)) {
+        return 0;
+    }
+
+    if (!(*pte & PTE_W) &&
+        (!(*pte & COW_FLAG) || !page_cow_resolve(a, *pte))) {
+        return 0;
+    }
+    return 1;
+}
+
 static int user_str_span(const char *src, uint32_t max, char *dst) {
     if (src == NULL || max == 0) {
         return -1;
@@ -93,6 +113,35 @@ int copy_from_user(void *dst, const void *src, uint32_t len) {
         uint32_t room = PAGE_SIZE - (va & 0xFFFu);
         uint32_t n = (room < len - off) ? room : (len - off);
         memcpy(d + off, (const void *)(uintptr_t)va, n);
+        off += n;
+    }
+    return 0;
+}
+
+/**
+ * copy_from_user 的写侧对偶
+ *
+ * @returns 0 成功；-1 任一页不可写或地址越界
+ */
+int copy_to_user(void *udst, const void *src, uint32_t len) {
+    if (len == 0) {
+        return 0;
+    }
+    uint32_t a = (uint32_t)(uintptr_t)udst;
+    if (a < USER_VADDR_BEGIN || a >= USER_SPACE_END ||
+        len > USER_SPACE_END - a) {
+        return -1;
+    }
+    const uint8_t *s = (const uint8_t *)src;
+    uint32_t off = 0;
+    while (off < len) {
+        uint32_t va = a + off;
+        if (!user_page_writable(va)) {
+            return -1;
+        }
+        uint32_t room = PAGE_SIZE - (va & 0xFFFu);
+        uint32_t n = (room < len - off) ? room : (len - off);
+        memcpy((void *)(uintptr_t)va, s + off, n);
         off += n;
     }
     return 0;
