@@ -30,7 +30,7 @@ FILES = [
     "cow_stress.elf",
     "cwd_test.elf",
     "echocat.elf",
-    "canary_test.elf", "clone_stress.elf", "clone_demo.elf",
+    "canary_test.elf", "clone_stress.elf", "clone_demo.elf", "path_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox"

@@ -551,6 +551,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
         ("clone_demo",  "clone_demo.c",  "_start", []),
         ("clone_stress","clone_stress.c","_start", []),
+        ("path_probe", "path_probe.c", "_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
