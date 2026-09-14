@@ -971,8 +971,10 @@ static int64_t lc_waitid(struct X86_REGS *r, uint64_t a, uint64_t b,
 
 static int64_t lc_sigaltstack(struct X86_REGS *r, uint64_t a, uint64_t b,
                               uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
-    (void)r;
     struct TASK *cur = current;
+   
+    if (b && !user_ptr_ok(r, b, sizeof(struct LINUX_STACK_T), 1))
+        return -LINUX_EFAULT;
     if (b) {
         struct LINUX_STACK_T o;
         o.ss_sp = cur->sigalt_sp;
@@ -1730,19 +1732,23 @@ static int64_t lc_wait4(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static int64_t lc_uname(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
-    (void)r;
+    // 输出缓冲必须落在用户可写区间：否则任意内核地址写（390 字节固定内容）
+    if (!user_ptr_ok(r, a, sizeof(struct LINUX_UTSNAME), 1))
+        return -LINUX_EFAULT;
     return compat_uname((void *)a);
 }
 
 static int64_t lc_sysinfo(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
-    (void)r;
+    if (!user_ptr_ok(r, a, sizeof(struct LINUX_SYSINFO), 1))
+        return -LINUX_EFAULT;
     return compat_sysinfo((void *)a);
 }
 
 static int64_t lc_times(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
-    (void)r;
+    if (a && !user_ptr_ok(r, a, sizeof(struct LINUX_TMS), 1))
+        return -LINUX_EFAULT;
     return (int64_t)(uint32_t)compat_times((void *)a);
 }
 
