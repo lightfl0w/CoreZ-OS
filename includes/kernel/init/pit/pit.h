@@ -10,5 +10,6 @@
 
 void pit_init(uint32_t hz);
 void mtime_sleep(uint32_t m_seconds);
+int32_t mtime_sleep_interruptible(uint32_t m_seconds);
 
 #endif

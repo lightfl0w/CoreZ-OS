@@ -70,7 +70,15 @@ int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) 
     if (ms > 0x7fffffffU) {
         ms = 0x7fffffffU;
     }
-    mtime_sleep(ms);
+    if (mtime_sleep_interruptible(ms) == -EINTR) {
+        if (rem != NULL) {
+            uint64_t ns = (uint64_t)current->sleep_left *
+                          (uint64_t)(1000000000u / PIT_HZ);
+            rem->tv_sec = (int32_t)(ns / 1000000000ull);
+            rem->tv_nsec = (int32_t)(ns % 1000000000ull);
+        }
+        return -EINTR;
+    }
     if (rem != NULL) {
         memset(rem, 0, sizeof(*rem));
     }
@@ -794,10 +802,17 @@ static int64_t nsys_sock_fcntl(struct X86_REGS *r) {
 }
 
 static int64_t nsys_select(struct X86_REGS *r) {
-    if ((r->ecx && !ok_write(r, r->ecx, 8)) ||
-        (r->edx && !ok_write(r, r->edx, 8)) ||
-        (r->esi && !ok_write(r, r->esi, 8))) {
+    int32_t nfds = (int32_t)r->ebx;
+    if (nfds < 0 || (uint32_t)nfds > SEL_FD_SET_FDS) {
         return (uint32_t)-1;
+    }
+    uint32_t bytes = ((uint32_t)nfds + 31u) / 32u * 4u;
+    if (bytes != 0) {
+        if ((r->ecx && !ok_write(r, r->ecx, bytes)) ||
+            (r->edx && !ok_write(r, r->edx, bytes)) ||
+            (r->esi && !ok_write(r, r->esi, bytes))) {
+            return (uint32_t)-1;
+        }
     }
     return (uint32_t)net_select((int)r->ebx, (uint32_t *)r->ecx,
                                 (uint32_t *)r->edx, (uint32_t *)r->esi,

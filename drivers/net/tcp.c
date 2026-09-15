@@ -372,9 +372,13 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
     if (flags & TCP_FLAG_SYN)
         return;
     if (flags & TCP_FLAG_ACK) {
+        if (seq_lt(pcb->snd_nxt, ack)) {
+            tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
+            return;
+        }
         if (seq_lt(pcb->snd_una, ack)) {
             uint32_t d = ack - pcb->snd_una;
-            if ((int32_t)d > (int32_t)pcb->tx_len)
+            if (d > pcb->tx_len)
                 d = pcb->tx_len;
             if (d) {
                 pcb->tx_len -= d;
@@ -398,17 +402,16 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
         return;
     }
     if (dlen) {
-        if (seq == pcb->rcv_nxt) {
-            uint32_t room = (uint32_t)tcp_rx_room(pcb);
-            if (dlen > room)
-                dlen = room;
-            if (dlen) {
-                tcp_rx_put(pcb, data, dlen);
-                pcb->rcv_nxt += dlen;
-                tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0,
-                         0);
-            }
-        } else if (seq_lt(seq, pcb->rcv_nxt)) {
+        uint32_t wnd_end = pcb->rcv_nxt + (uint32_t)tcp_rx_room(pcb);
+        uint32_t seg_last = seq + dlen - 1u;
+        int starts_in = !seq_lt(seq, pcb->rcv_nxt) && seq_lt(seq, wnd_end);
+        int ends_in =
+            !seq_lt(seg_last, pcb->rcv_nxt) && seq_lt(seg_last, wnd_end);
+        if (!starts_in && !ends_in) {
+            tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
+            return;
+        }
+        if (seq_lt(seq, pcb->rcv_nxt)) {
             uint32_t past = pcb->rcv_nxt - seq;
             if (past >= dlen) {
                 tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0,
@@ -418,13 +421,15 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
             seq += past;
             data += past;
             dlen -= past;
+        }
+        uint32_t room = (uint32_t)tcp_rx_room(pcb);
+        if (dlen > room)
+            dlen = room;
+        if (dlen) {
             tcp_rx_put(pcb, data, dlen);
             pcb->rcv_nxt += dlen;
-            tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
-        } else {
-            tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
-            return;
         }
+        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
     }
 }
 

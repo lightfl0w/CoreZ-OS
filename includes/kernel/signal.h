@@ -7,6 +7,7 @@ struct TASK;
 struct X86_REGS;
 
 #define NSIG 32
+#define EINTR 4
 
 #define SIGHUP 1
 #define SIGINT 2

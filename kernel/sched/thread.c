@@ -112,6 +112,11 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->all_list_tag.prev = t->all_list_tag.next = NULL;
     t->futex_tag.prev = t->futex_tag.next = NULL;
     t->futex_ready = 0;
+    t->futex_uaddr = 0;
+    t->futex_pml4 = 0;
+    t->sleep_intr = 0;
+    t->sleep_eintr = 0;
+    t->sleep_left = 0;
     /* 槽位可能复用：必须清掉上一任任务的 vaddr 位图指针，避免误用旧位图 */
     t->userprog_v_addr.vaddr_start = 0;
     t->userprog_v_addr.vaddr_bitmap.bits = NULL;
@@ -165,6 +170,11 @@ void thread_init(void) {
     task_table[0].futex_tag.prev = task_table[0].futex_tag.next = NULL;
     task_table[0].wait_tag.prev = task_table[0].wait_tag.next = NULL;
     task_table[0].futex_ready = 0;
+    task_table[0].futex_uaddr = 0;
+    task_table[0].futex_pml4 = 0;
+    task_table[0].sleep_intr = 0;
+    task_table[0].sleep_eintr = 0;
+    task_table[0].sleep_left = 0;
     task_table[0].slot_used = 1;
     list_append(&thread_all_list, &task_table[0].all_list_tag);
 
@@ -238,17 +248,30 @@ void thread_unblock(struct TASK *t) {
     thread_ready(t);
 }
 
-void thread_sleep_ticks(uint32_t ticks) {
+int32_t thread_sleep_ticks(uint32_t ticks) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     uint32_t slot = task_slot(current);
+    current->sleep_intr = 1;
+    current->sleep_eintr = 0;
+    current->sleep_left = 0;
     wake_tick[slot] = tick + ticks;
     wake_pid[slot] = current->pid;
     sleep_bitmap |= 1ULL << slot;
     ready_remove(current);
     current->status = TASK_BLOCKED;
     schedule();
+    current->sleep_intr = 0;
+    int32_t ret = 0;
+    if (current->sleep_eintr) {
+        current->sleep_eintr = 0;
+        sleep_bitmap &= ~(1ULL << slot);
+        int32_t left = (int32_t)(wake_tick[slot] - tick);
+        current->sleep_left = left > 0 ? (uint32_t)left : 0;
+        ret = -EINTR;
+    }
     asm_restore_eflags(old);
+    return ret;
 }
 
 void thread_timer_wake(void) {

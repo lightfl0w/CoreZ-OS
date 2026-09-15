@@ -16,15 +16,16 @@ void pit_init(uint32_t hz) {
     outb(PIT_CNT0, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
-static void ticks_to_sleep(uint32_t sleep_ticks) {
-    thread_sleep_ticks(sleep_ticks);
+static uint32_t ticks_of_ms(uint32_t m_seconds) {
+    uint32_t sleep_ticks =
+        (m_seconds + MIL_SECOND_PER_INTR - 1) / MIL_SECOND_PER_INTR;
+    return sleep_ticks == 0 ? 1 : sleep_ticks;
 }
 
 void mtime_sleep(uint32_t m_seconds) {
-    uint32_t sleep_ticks =
-        (m_seconds + MIL_SECOND_PER_INTR - 1) / MIL_SECOND_PER_INTR;
-    if (sleep_ticks == 0) {
-        sleep_ticks = 1;
-    }
-    ticks_to_sleep(sleep_ticks);
+    thread_sleep_ticks(ticks_of_ms(m_seconds));
+}
+
+int32_t mtime_sleep_interruptible(uint32_t m_seconds) {
+    return thread_sleep_ticks(ticks_of_ms(m_seconds));
 }

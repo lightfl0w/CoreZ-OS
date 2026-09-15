@@ -518,40 +518,34 @@ int net_shutdown(int fd, int how) {
     return rc;
 }
 
+static int sel_test(uint32_t *set, int fd, int ready) {
+    if (set == NULL || fd < 0 || (uint32_t)fd >= SEL_FD_SET_FDS)
+        return 0;
+    uint32_t mask = 1u << (fd % 32);
+    if ((set[fd / 32] & mask) == 0)
+        return 0;
+    if (ready)
+        return 1;
+    set[fd / 32] &= ~mask;
+    return 0;
+}
+
 int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
                int timeout_ms) {
-    int limit = nfds < MAX_SOCKET ? nfds : MAX_SOCKET;
+    if (nfds < 0 || (uint32_t)nfds > SEL_FD_SET_FDS)
+        return -EINVAL;
     uint32_t deadline = timeout_ms > 0 ? net_now_ms() + (uint32_t)timeout_ms : 0;
     for (;;) {
-        lock_acquire(&net_lock);
-        for (int fd = 0; fd < limit; fd++) {
-            struct SOCKET *s = &s_sock[fd];
-            if (!s->active)
-                continue;
-            if (rfds && ((rfds[fd / 32] >> (fd % 32)) & 1u)) {
-                if (sock_readable(s))
-                    rfds[fd / 32] |= (1u << (fd % 32));
-                else
-                    rfds[fd / 32] &= ~(1u << (fd % 32));
-            }
-            if (wfds && ((wfds[fd / 32] >> (fd % 32)) & 1u)) {
-                if (sock_writable(s))
-                    wfds[fd / 32] |= (1u << (fd % 32));
-                else
-                    wfds[fd / 32] &= ~(1u << (fd % 32));
-            }
-        }
         int total = 0;
-        for (int fd = 0; fd < limit; fd++) {
-            struct SOCKET *s = &s_sock[fd];
-            if (!s->active)
-                continue;
-            if (rfds && ((rfds[fd / 32] >> (fd % 32)) & 1u))
-                total++;
-            if (wfds && ((wfds[fd / 32] >> (fd % 32)) & 1u))
-                total++;
-            if (efds && ((efds[fd / 32] >> (fd % 32)) & 1u))
-                total++;
+        lock_acquire(&net_lock);
+        for (int fd = 0; fd < nfds; fd++) {
+            struct SOCKET *s = fd < MAX_SOCKET ? &s_sock[fd] : NULL;
+            int live = (s != NULL && s->active) ? 1 : 0;
+            int readable = live ? sock_readable(s) : 0;
+            int writable = live ? sock_writable(s) : 0;
+            total += sel_test(rfds, fd, readable);
+            total += sel_test(wfds, fd, writable);
+            total += sel_test(efds, fd, 0);
         }
         lock_release(&net_lock);
         if (total)

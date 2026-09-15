@@ -57,7 +57,14 @@ static uint32_t data_start = 0;
 static uint32_t free_blocks = 0;
 static uint32_t free_inodes = 0;
 
-static int ext2_read_block(uint32_t blk, void *buf) {
+#define EXT2_BCACHE_SLOTS 1024u
+
+static uint8_t *s_bc_data;
+static uint32_t s_bc_tag[EXT2_BCACHE_SLOTS];
+static uint8_t s_bc_valid[EXT2_BCACHE_SLOTS];
+static uint32_t s_bc_slots;
+
+static int ext2_disk_read(uint32_t blk, void *buf) {
     if (disk == NULL) {
         return -1;
     }
@@ -71,12 +78,94 @@ static int ext2_read_block(uint32_t blk, void *buf) {
     return 0;
 }
 
+static const uint8_t *ext2_bcache_peek(uint32_t blk) {
+    if (s_bc_data == NULL) {
+        return NULL;
+    }
+    uint32_t slot = blk % s_bc_slots;
+    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
+        return s_bc_data + slot * bs;
+    }
+    return NULL;
+}
+
+static void ext2_bcache_inval(uint32_t blk) {
+    if (s_bc_data == NULL) {
+        return;
+    }
+    uint32_t slot = blk % s_bc_slots;
+    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
+        s_bc_valid[slot] = 0;
+    }
+}
+
+static const uint8_t *ext2_bcache_get(uint32_t blk) {
+    const uint8_t *hit = ext2_bcache_peek(blk);
+    if (hit != NULL || s_bc_data == NULL) {
+        return hit;
+    }
+    uint32_t slot = blk % s_bc_slots;
+    if (s_bc_valid[slot]) {
+        return NULL;
+    }
+    uint8_t *dst = s_bc_data + slot * bs;
+    if (ext2_disk_read(blk, dst) != 0) {
+        return NULL;
+    }
+    s_bc_tag[slot] = blk;
+    s_bc_valid[slot] = 1;
+    return dst;
+}
+
+static void ext2_bcache_store(uint32_t blk, const void *src) {
+    if (s_bc_data == NULL) {
+        return;
+    }
+    uint32_t slot = blk % s_bc_slots;
+    if (s_bc_valid[slot]) {
+        return;
+    }
+    memcpy(s_bc_data + slot * bs, src, bs);
+    s_bc_tag[slot] = blk;
+    s_bc_valid[slot] = 1;
+}
+
+static int ext2_read_block(uint32_t blk, void *buf) {
+    const uint8_t *c = ext2_bcache_get(blk);
+    if (c != NULL) {
+        memcpy(buf, c, bs);
+        return 0;
+    }
+    return ext2_disk_read(blk, buf);
+}
+
 static int ext2_write_block(uint32_t blk, const void *buf) {
     if (disk == NULL) {
         return -1;
     }
     BLOCK.write_sectors(disk, start + blk * sect_per_block, (void *)buf,
                         sect_per_block);
+    ext2_bcache_inval(blk);
+    return 0;
+}
+
+static int ext2_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
+    if (disk == NULL) {
+        return -1;
+    }
+    if (blk >= total_blocks && total_blocks != 0) {
+        kprintf("[ext2] read out-of-range block %d (total %d)\n", blk,
+                total_blocks);
+        return -1;
+    }
+    if (cnt == 0) {
+        return 0;
+    }
+    if (blk + cnt > total_blocks && total_blocks != 0) {
+        cnt = total_blocks - blk;
+    }
+    BLOCK.read_sectors(disk, start + blk * sect_per_block, buf,
+                       cnt * sect_per_block);
     return 0;
 }
 
@@ -121,6 +210,20 @@ int ext2_init(void) {
             data_start = inode_table_blk + itable_blocks;
             free_kernel_page((uint32_t)gb);
             free_kernel_page((uint32_t)buf);
+            if (s_bc_data == NULL) {
+                s_bc_slots = EXT2_BCACHE_SLOTS;
+                while (s_bc_slots >= 64u) {
+                    uint32_t need = DIV_ROUND_UP(s_bc_slots * bs, PAGE_SIZE);
+                    s_bc_data = (uint8_t *)get_kernel_pages(need);
+                    if (s_bc_data != NULL) {
+                        break;
+                    }
+                    s_bc_slots /= 2u;
+                }
+                if (s_bc_data == NULL) {
+                    kprintf("ext2: block cache disabled (no memory)\n");
+                }
+            }
             kprintf("ext2 mounted on %s, block_size=%d, inodes_per_group=%d, "
                     "data_start=%d\n",
                     p->name, (int)bs, (int)inodes_per_group, (int)data_start);
@@ -314,6 +417,21 @@ static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in) {
     return 0;
 }
 
+static uint32_t ext2_walk_cached(uint32_t root, uint32_t fblk, uint32_t span) {
+    const uint8_t *p = ext2_bcache_get(root);
+    if (p == NULL) {
+        return 0;
+    }
+    uint32_t child = *(const uint32_t *)(p + 4 * (fblk / span));
+    if (child == 0) {
+        return 0;
+    }
+    if (span == 1) {
+        return child;
+    }
+    return ext2_walk_cached(child, fblk % span, span / (bs / 4u));
+}
+
 static uint32_t ext2_walk(uint32_t root, uint32_t fblk, uint32_t span,
                           uint8_t *buf, int alloc) {
     memset(buf, 0, 4096);
@@ -373,6 +491,14 @@ static int ext2_block_of(struct FS_INODE *ino, uint32_t fblk, int alloc,
     }
     if (root == 0) {
         return -1;
+    }
+    if (!alloc) {
+        uint32_t b = ext2_walk_cached(root, fblk, span);
+        if (b == 0) {
+            return -1;
+        }
+        *out = b;
+        return 0;
     }
     uint8_t *buf = (uint8_t *)get_kernel_pages(1);
     if (buf == NULL) {
@@ -665,6 +791,8 @@ int ext2_read_from_inode(const struct FS_INODE *ino, uint32_t off, void *buf,
     return rc;
 }
 
+#define EXT2_READ_BLOCKS 32u
+
 static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
                                      void *buf, uint32_t count) {
     if (ino->i_no == 0 || off >= ino->i_size) {
@@ -673,28 +801,59 @@ static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
     if (off + count > ino->i_size) {
         count = ino->i_size - off;
     }
-    uint8_t *blk = (uint8_t *)get_kernel_pages(1);
+    uint32_t pages = DIV_ROUND_UP(EXT2_READ_BLOCKS * bs, PAGE_SIZE);
+    uint8_t *blk = (uint8_t *)get_kernel_pages(pages);
     if (blk == NULL) {
         return 0;
     }
     uint32_t done = 0;
     while (done < count) {
-        uint32_t fblk = (off + done) / bs;
-        uint32_t within = (off + done) % bs;
+        uint32_t pos = off + done;
+        uint32_t fblk = pos / bs;
+        uint32_t within = pos % bs;
         uint32_t addr = 0;
         if (ext2_map_block(ino, fblk, &addr)) {
             break;
         }
-        memset(blk, 0, 4096);
-        ext2_read_block(addr, blk);
-        uint32_t chunk = bs - within;
-        if (chunk > count - done) {
-            chunk = count - done;
+        uint32_t run = 1;
+        while (run < EXT2_READ_BLOCKS && within + run * bs < count) {
+            uint32_t next = 0;
+            if (ext2_map_block(ino, fblk + run, &next)) {
+                break;
+            }
+            if (next != addr + run) {
+                break;
+            }
+            run++;
+        }
+        uint32_t cached = 1;
+        for (uint32_t i = 0; i < run; i++) {
+            if (ext2_bcache_peek(addr + i) == NULL) {
+                cached = 0;
+                break;
+            }
+        }
+        if (cached) {
+            for (uint32_t i = 0; i < run; i++) {
+                memcpy(blk + i * bs, ext2_bcache_peek(addr + i), bs);
+            }
+        } else {
+            ext2_read_blocks(addr, run, blk);
+            for (uint32_t i = 0; i < run; i++) {
+                ext2_bcache_store(addr + i, blk + i * bs);
+            }
+        }
+        uint32_t avail = run * bs - within;
+        uint32_t chunk = count - done;
+        if (chunk > avail) {
+            chunk = avail;
         }
         memcpy((uint8_t *)buf + done, blk + within, chunk);
         done += chunk;
     }
-    free_kernel_page((uint32_t)blk);
+    for (uint32_t i = 0; i < pages; i++) {
+        free_kernel_page((uint32_t)blk + i * PAGE_SIZE);
+    }
     return (int)done;
 }
 

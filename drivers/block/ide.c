@@ -9,6 +9,7 @@
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "kernel/init/pit/pit.h"
+#include "arch/cpu.h"
 #include "lib/str/str.h"
 #include "libc/user/stdio.h"
 #include "kernel/mm/pool/pool.h"
@@ -115,8 +116,8 @@ static void channel_send_cmd(struct IDE_CHANNEL *channel, uint8_t cmd) {
 }
 
 static void read_from_sector(struct DISK *hd, void *buf, uint8_t sec_cnt) {
-    uint32_t words = sec_cnt ? (uint32_t)sec_cnt << 8 : 256 << 8;
-    insw(reg_data(hd->my_channel), buf, words);
+    uint32_t dwords = sec_cnt ? (uint32_t)sec_cnt << 7 : 256u << 7;
+    cpu_ins(reg_data(hd->my_channel), buf, (int)dwords, 4);
 }
 
 static void write_to_sector(struct DISK *hd, void *buf, uint8_t sec_cnt) {
