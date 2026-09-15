@@ -20,7 +20,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/ssp.h"
 #include "drivers/net/net.h"
-#include "kernel/shell/shell.h"
+#include "kernel/userprog/process.h"
 #include "lib/rand/rand.h"
 #include "kernel/syscall/futex.h"
 #include "kernel/syscall/syscall.h"
@@ -147,7 +147,7 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     if (net_enable)
         net_init();
 
-    kernel_thread("shell", 4, my_shell, 0);
+    process_execute("/init_sh.elf", "shell");
     for (;;) {
         net_check_guards();
         cpu_idle();

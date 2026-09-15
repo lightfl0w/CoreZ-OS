@@ -1,4 +1,5 @@
 #include "libc/user/syscall.h"
+#include "kernel/fs/dir.h"
 
 #include "kernel/syscall_nr.h"
 #include "libc/user/signal.h"
@@ -145,8 +146,12 @@ int32_t closedir(struct FS_DIR *dir) {
     return (int32_t)syscall1(SYS_CLOSEDIR, (uint64_t)(uintptr_t)dir);
 }
 
+static struct FS_DIRENT user_dirent;
+
 struct FS_DIRENT *readdir(struct FS_DIR *dir) {
-    return (struct FS_DIRENT *)syscall1(SYS_READDIR, (uint64_t)(uintptr_t)dir);
+    uint32_t ret = (uint32_t)syscall2(SYS_READDIR, (uint32_t)(uintptr_t)dir,
+                                      (uint32_t)(uintptr_t)&user_dirent);
+    return ret ? &user_dirent : NULL;
 }
 
 void rewinddir(struct FS_DIR *dir) {

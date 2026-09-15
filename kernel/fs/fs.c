@@ -504,6 +504,18 @@ int32_t sys_mkdir(const char *pathname) {
     return r > 0 ? 0 : -1;
 }
 
+#define OPEN_DIR_MAX 16
+static struct FS_DIR *open_dir_table[OPEN_DIR_MAX];
+
+static int open_dir_registered(struct FS_DIR *dir) {
+    for (int i = 0; i < OPEN_DIR_MAX; i++) {
+        if (open_dir_table[i] == dir) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 struct FS_DIR *sys_opendir(const char *name) {
     uint32_t ino = 0;
     int is_dir = 0;
@@ -524,12 +536,35 @@ struct FS_DIR *sys_opendir(const char *name) {
         current->errno = 13;
         return NULL;
     }
-    return dir_open(cur_part, ino);
+    struct FS_DIR *dir = dir_open(cur_part, ino);
+    if (dir == NULL) {
+        return NULL;
+    }
+    int registered = 0;
+    for (int i = 0; i < OPEN_DIR_MAX; i++) {
+        if (open_dir_table[i] == NULL) {
+            open_dir_table[i] = dir;
+            registered = 1;
+            break;
+        }
+    }
+    if (!registered) {
+        dir_close(dir);
+        current->errno = 24;
+        return NULL;
+    }
+    return dir;
 }
 
 int32_t sys_closedir(struct FS_DIR *dir) {
     int32_t ret = -1;
-    if (dir != NULL) {
+    if (dir != NULL && open_dir_registered(dir)) {
+        for (int i = 0; i < OPEN_DIR_MAX; i++) {
+            if (open_dir_table[i] == dir) {
+                open_dir_table[i] = NULL;
+                break;
+            }
+        }
         dir_close(dir);
         ret = 0;
     }
@@ -537,11 +572,16 @@ int32_t sys_closedir(struct FS_DIR *dir) {
 }
 
 struct FS_DIRENT *sys_readdir(struct FS_DIR *dir) {
+    if (!open_dir_registered(dir)) {
+        return NULL;
+    }
     return dir_read(dir);
 }
 
 void sys_rewinddir(struct FS_DIR *dir) {
-    dir_rewind(dir);
+    if (open_dir_registered(dir)) {
+        dir_rewind(dir);
+    }
 }
 
 int32_t sys_rmdir(const char *pathname) {

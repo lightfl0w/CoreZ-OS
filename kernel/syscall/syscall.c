@@ -10,6 +10,7 @@
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
+#include "kernel/fs/dir.h"
 #include "kernel/gui/gui.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/gdt/gdt.h"
@@ -242,14 +243,14 @@ static const char *path_arg_reg(struct X86_REGS *r, uint32_t reg, char *kbuf,
     if (kern_call(r)) {
         return (const char *)reg;
     }
-    if (copy_str_from_user(kbuf, (const char *)reg, cap) != 0) {
+    if (copy_str_from_user(kbuf, (const char *)(uintptr_t)reg, cap) != 0) {
         return NULL;
     }
     return kbuf;
 }
 
 static const char *path_arg(struct X86_REGS *r, char *kbuf, uint32_t cap) {
-    return path_arg_reg(r, r->ebx, kbuf, cap);
+    return path_arg_reg(r, (uint32_t)r->ebx, kbuf, cap);
 }
 
 static int64_t nsys_getpid(struct X86_REGS *r) {
@@ -352,7 +353,7 @@ static int64_t nsys_opendir(struct X86_REGS *r) {
     if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_opendir(p);
+    return (uint32_t)(uintptr_t)sys_opendir(p);
 }
 
 static int64_t nsys_closedir(struct X86_REGS *r) {
@@ -360,7 +361,18 @@ static int64_t nsys_closedir(struct X86_REGS *r) {
 }
 
 static int64_t nsys_readdir(struct X86_REGS *r) {
-    return (uint32_t)sys_readdir((struct FS_DIR *)r->ebx);
+    struct FS_DIRENT *dir_e =
+        sys_readdir((struct FS_DIR *)(uintptr_t)r->ebx);
+    if (dir_e == NULL) {
+        return 0;
+    }
+    if (!ok_write(r, r->ecx, sizeof(struct FS_DIRENT))) {
+        return 0;
+    }
+    if (copy_to_user((void *)r->ecx, dir_e, sizeof(struct FS_DIRENT)) != 0) {
+        return 0;
+    }
+    return r->ecx;
 }
 
 static int64_t nsys_rewinddir(struct X86_REGS *r) {
@@ -590,6 +602,27 @@ static int64_t nsys_mknod(struct X86_REGS *r) {
     return (uint32_t)sys_mknod(p, (uint32_t)r->ecx, (uint32_t)r->edx);
 }
 
+static int64_t nsys_setfgpid(struct X86_REGS *r) {
+    extern uint32_t foreground_pid;
+    foreground_pid = (uint32_t)r->ebx;
+    return 0;
+}
+
+__attribute__((noinline)) static void smash_frame(void) {
+    char buf[8];
+    kprintf("[smash] overflowing kernel stack frame\n");
+    for (int32_t i = 0; i < 128; i++) {
+        buf[i] = 0x41;
+    }
+}
+
+static int64_t nsys_smash(struct X86_REGS *r) {
+    (void)r;
+    smash_frame();
+    kprintf("[smash] returned, canary failed to detect\n");
+    return 0;
+}
+
 static int64_t nsys_clock_gettime(struct X86_REGS *r) {
     if (!ok_write(r, r->ecx, sizeof(struct SYS_TIMESPEC))) {
         return (uint32_t)-1;
@@ -816,6 +849,7 @@ static const nsys_fn nsys_table[] = {
     [SYS_GETSOCKOPT] = nsys_getsockopt, [SYS_SETSOCKOPT] = nsys_setsockopt,
     [SYS_SOCK_FCNTL] = nsys_sock_fcntl, [SYS_SELECT] = nsys_select,
     [SYS_MKNOD] = nsys_mknod,         [SYS_SYMLINK] = nsys_symlink,
+    [SYS_SETFGPID] = nsys_setfgpid,   [SYS_SMASH] = nsys_smash,
 };
 
 uint64_t syscall_handler(struct X86_REGS *r) {
