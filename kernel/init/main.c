@@ -118,6 +118,10 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     kprintf("[init] ppmode\n");
     kprintf("[OK] long mode (CR0.PG=1 CR4.PAE=1 EFER.LME=1 CS.L=1)\n");
 
+    kprintf("[init] acpi\n");
+    /* MADT 给出 APIC 的 MMIO 物理页与处理器拓扑，必须先于 apic_init 解析 */
+    acpi_init();
+
     kprintf("[init] apic\n");
     /* 系统 tick 统一来自 PIT（固定 1.193182MHz 分频 PIT_HZ）：无论是否走 APIC
      * 路径都需要它，因此先于 apic_init/pic_init 编程。 */
@@ -126,9 +130,6 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
         kprintf("[WARN] apic_init failed, fallback PIC\n");
         pic_init();
     }
-
-    kprintf("[init] acpi\n");
-    acpi_init();
 
     kprintf("[init] drivers char\n");
     drivers_init(0, 19);

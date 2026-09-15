@@ -5,6 +5,7 @@
 #include "kernel/asm_func.h"
 #include "drivers/char/console/io.h"
 #include "kernel/mm/pool/pool.h"
+#include "kernel/init/acpi/acpi.h"
 #include "kernel/init/pit/pit.h"
 
 #define MSR_APIC_BASE 0x1B
@@ -31,10 +32,10 @@
 #define IO_IR_TRIGGER (1u << 15)
 #define IO_IR_POLARITY (1u << 13)
 
-#define PIN_TIMER 2
-#define PIN_KEYBOARD 1
-#define PIN_MOUSE 12
-#define PIN_IDE 14
+#define IRQ_TIMER 0
+#define IRQ_KEYBOARD 1
+#define IRQ_MOUSE 12
+#define IRQ_IDE 14
 
 #define VECTOR_BASE 0x20
 
@@ -107,10 +108,58 @@ static void ioapic_write(uint32_t reg, uint32_t v) {
     ioapic[4] = v;
 }
 
-static void ioapic_route(uint32_t pin, uint32_t vector) {
-    uint32_t reg = IOREG_TABLE + 2 * pin;
+/**
+ * 取 ISA IRQ 在 IOAPIC 上的引脚号。
+ *
+ * @param irq 逻辑 IRQ 号，同时决定中断向量（VECTOR_BASE + irq）
+ * @returns 引脚号
 
-    ioapic_write(reg, vector);
+ */
+static uint32_t irq_pin(uint32_t irq) {
+    const struct ACPI_MADT_INFO *madt = acpi_madt();
+
+    if (madt && irq < ACPI_LEGACY_IRQ_NR &&
+        madt->irq_gsi[irq] >= madt->ioapic_gsi_base) {
+        return madt->irq_gsi[irq] - madt->ioapic_gsi_base;
+    }
+    return irq;
+}
+
+/**
+ * 取 ISA IRQ 对应的重定向表极性/触发位。
+ *
+ * @param irq 逻辑 IRQ 号
+ * @returns 可直接或进向量的低位掩码
+ */
+static uint32_t irq_route_flags(uint32_t irq) {
+    const struct ACPI_MADT_INFO *madt = acpi_madt();
+    uint16_t iso;
+    uint32_t flags = 0;
+
+    if (!madt || irq >= ACPI_LEGACY_IRQ_NR) {
+        return 0;
+    }
+    iso = madt->irq_flags[irq];
+    if ((iso & 3u) == 3u) {
+        flags |= IO_IR_POLARITY;
+    }
+    if (((iso >> 2) & 3u) == 3u) {
+        flags |= IO_IR_TRIGGER;
+    }
+    return flags;
+}
+
+static void ioapic_route(uint32_t irq, uint32_t vector) {
+    uint32_t pin = irq_pin(irq);
+    uint32_t reg;
+
+    if (pin > IOAPIC_MAX_PINS) {
+        kprintf("[APIC] irq%u -> pin%u exceeds ioapic pins, not routed\n",
+                (unsigned)irq, (unsigned)pin);
+        return;
+    }
+    reg = IOREG_TABLE + 2 * pin;
+    ioapic_write(reg, vector | irq_route_flags(irq));
     ioapic_write(reg + 1, 0);
 }
 
@@ -127,10 +176,10 @@ static void ioapic_init(void) {
         ioapic_write(reg + 1, 0);
     }
 
-    ioapic_route(PIN_TIMER, VECTOR_BASE + 0);
-    ioapic_route(PIN_KEYBOARD, VECTOR_BASE + PIN_KEYBOARD);
-    ioapic_route(PIN_MOUSE, VECTOR_BASE + PIN_MOUSE);
-    ioapic_route(PIN_IDE, VECTOR_BASE + PIN_IDE);
+    ioapic_route(IRQ_TIMER, VECTOR_BASE + IRQ_TIMER);
+    ioapic_route(IRQ_KEYBOARD, VECTOR_BASE + IRQ_KEYBOARD);
+    ioapic_route(IRQ_MOUSE, VECTOR_BASE + IRQ_MOUSE);
+    ioapic_route(IRQ_IDE, VECTOR_BASE + IRQ_IDE);
 }
 
 static void disable_pic(void) {
@@ -142,6 +191,7 @@ static void disable_pic(void) {
 
 int apic_init(void) {
     uint32_t base = rdmsr(MSR_APIC_BASE);
+    const struct ACPI_MADT_INFO *madt = acpi_madt();
 
     if (!(base & APIC_BASE_ENABLE)) {
         base |= APIC_BASE_ENABLE;
@@ -170,7 +220,11 @@ int apic_init(void) {
     disable_pic();
 
     s_apic_active = 1;
-    kprintf("[APIC] id=%u timer=irq0->vector%u (PIT)\n",
-            (unsigned)lapic_get_id(), (unsigned)(VECTOR_BASE + 0));
+    kprintf("[APIC] id=%u lapic=0x%x ioapic=0x%x\n", (unsigned)lapic_get_id(),
+            madt ? madt->lapic_addr : ACPI_APIC_DEFAULT_LAPIC,
+            madt ? madt->ioapic_addr : ACPI_APIC_DEFAULT_IOAPIC);
+    kprintf("[APIC] timer irq%u -> pin%u vector%u (PIT)\n",
+            (unsigned)IRQ_TIMER, (unsigned)irq_pin(IRQ_TIMER),
+            (unsigned)(VECTOR_BASE + IRQ_TIMER));
     return 0;
 }

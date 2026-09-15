@@ -99,8 +99,68 @@ struct ACPI_FADT {
     GENERIC_ADDRESS_STRUCT x_gpe1_block;
 };
 
+struct ACPI_MADT {
+    struct ACPI_SDT_HEADER header;
+    uint32_t lapic_addr;
+    uint32_t flags;
+};
+
+struct ACPI_MADT_LAPIC {
+    uint8_t type;
+    uint8_t length;
+    uint8_t acpi_processor_id;
+    uint8_t apic_id;
+    uint32_t flags;
+};
+
+struct ACPI_MADT_IOAPIC {
+    uint8_t type;
+    uint8_t length;
+    uint8_t ioapic_id;
+    uint8_t reserved;
+    uint32_t ioapic_addr;
+    uint32_t gsi_base;
+};
+
+struct ACPI_MADT_ISO {
+    uint8_t type;
+    uint8_t length;
+    uint8_t bus;
+    uint8_t source_irq;
+    uint32_t gsi;
+    uint16_t flags;
+};
+
+#define ACPI_MADT_TYPE_LAPIC 0u
+#define ACPI_MADT_TYPE_IOAPIC 1u
+#define ACPI_MADT_TYPE_ISO 2u
+
+#define ACPI_MADT_FIXED_LEN 44u
+#define ACPI_MADT_LAPIC_LEN 8u
+#define ACPI_MADT_IOAPIC_LEN 12u
+#define ACPI_MADT_ISO_LEN 10u
+
+#define ACPI_LEGACY_IRQ_NR 16u
+#define ACPI_MAX_CPUS 64u
+
+#define ACPI_APIC_DEFAULT_LAPIC 0xFEE00000u
+#define ACPI_APIC_DEFAULT_IOAPIC 0xFEC00000u
+
+struct ACPI_MADT_INFO {
+    uint32_t lapic_addr;
+    uint32_t ioapic_addr;
+    uint32_t ioapic_gsi_base;
+    uint32_t lapic_nr;
+    uint32_t lapic_apic_id[ACPI_MAX_CPUS];
+    uint32_t irq_gsi[ACPI_LEGACY_IRQ_NR];
+    uint16_t irq_flags[ACPI_LEGACY_IRQ_NR];
+};
+
 void acpi_init(void);
 void acpi_shutdown(void);
+
+
+const struct ACPI_MADT_INFO *acpi_madt(void);
 
 extern struct ACPI_RSDP *RSDP;
 extern struct ACPI_XSDT *XSDT;

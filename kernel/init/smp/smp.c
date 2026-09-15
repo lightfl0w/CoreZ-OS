@@ -7,6 +7,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/percpu.h"
+#include "kernel/init/acpi/acpi.h"
 #include "kernel/init/apic/apic.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/init/tss/tss.h"
@@ -28,6 +29,37 @@ struct GDT_REG {
 static struct GDT_REG ap_gdtr[NR_CPU];
 
 static uint32_t ap_ready[NR_CPU];
+
+static uint32_t cpu_apic_id[NR_CPU];
+static uint32_t cpu_nr;
+
+static void cpu_table_init(void) {
+    const struct ACPI_MADT_INFO *madt = acpi_madt();
+    uint32_t bsp = lapic_get_id();
+    uint32_t total = madt ? madt->lapic_nr : 0;
+
+    cpu_nr = 0;
+    if (total == 0) {
+        for (uint32_t i = 0; i < NR_CPU; i++) {
+            cpu_apic_id[i] = i;
+        }
+        cpu_nr = NR_CPU;
+        kprintf("[SMP] no MADT, assume %u CPUs with identity APIC ids\n",
+                (unsigned)NR_CPU);
+        return;
+    }
+
+    cpu_apic_id[cpu_nr++] = bsp;
+    for (uint32_t i = 0; i < total && cpu_nr < NR_CPU; i++) {
+        if (madt->lapic_apic_id[i] != bsp) {
+            cpu_apic_id[cpu_nr++] = madt->lapic_apic_id[i];
+        }
+    }
+    if (total > NR_CPU) {
+        kprintf("[SMP] firmware reports %u CPUs, capped at %u\n",
+                (unsigned)total, (unsigned)NR_CPU);
+    }
+}
 
 static void ap_desc_init(struct GDT_DESC *d, uint32_t base, uint32_t limit,
                          uint8_t attr_low, uint8_t attr_high) {
@@ -63,7 +95,7 @@ static void ap_main(uint32_t idx) {
     }
 }
 
-static void wakeup_ap(uint32_t idx) {
+static void wakeup_ap(uint32_t idx, uint32_t apic_id) {
     volatile struct SMP_BOOT_INFO *info =
         (volatile struct SMP_BOOT_INFO *)AP_BOOT_INFO_ADDR;
 
@@ -84,11 +116,11 @@ static void wakeup_ap(uint32_t idx) {
     info->index = idx;
     __asm__ volatile("mfence" ::: "memory");
 
-    lapic_send_ipi_init((uint32_t)idx);
+    lapic_send_ipi_init(apic_id);
     mtime_sleep(10);
-    lapic_send_ipi_sipi((uint32_t)idx, AP_TRAMPOLINE_VECTOR);
+    lapic_send_ipi_sipi(apic_id, AP_TRAMPOLINE_VECTOR);
     mtime_sleep(10);
-    lapic_send_ipi_sipi((uint32_t)idx, AP_TRAMPOLINE_VECTOR);
+    lapic_send_ipi_sipi(apic_id, AP_TRAMPOLINE_VECTOR);
 
     for (uint32_t spins = 0; spins < 1000000u; spins++) {
         if (__atomic_load_n(&ap_ready[idx], __ATOMIC_ACQUIRE)) {
@@ -102,6 +134,8 @@ void smp_init(void) {
     uint32_t bsp_id = lapic_get_id();
     kprintf("[SMP] BSP LAPIC id=0x%x\n", (unsigned)bsp_id);
 
+    cpu_table_init();
+
     uint8_t *src = _binary_ap_trampoline_bin_start;
     uint32_t size = (uint32_t)(_binary_ap_trampoline_bin_end -
                                _binary_ap_trampoline_bin_start);
@@ -113,15 +147,16 @@ void smp_init(void) {
     memcpy((void *)AP_TRAMPOLINE_ADDR, src, size);
 
     uint32_t online = 1;
-    for (uint32_t i = 1; i < NR_CPU; i++) {
-        wakeup_ap(i);
+    for (uint32_t i = 1; i < cpu_nr; i++) {
+        wakeup_ap(i, cpu_apic_id[i]);
         if (__atomic_load_n(&ap_ready[i], __ATOMIC_ACQUIRE)) {
             online++;
-            kprintf("[SMP] cpu%u online (apic id=0x%x)\n", i, (unsigned)i);
+            kprintf("[SMP] cpu%u online (apic id=0x%x)\n", i,
+                    (unsigned)cpu_apic_id[i]);
         } else {
             kprintf("[SMP] cpu%u no response, skip\n", i);
         }
     }
 
-    kprintf("[SMP] %u/%u CPU online\n", (unsigned)online, (unsigned)NR_CPU);
+    kprintf("[SMP] %u/%u CPU online\n", (unsigned)online, (unsigned)cpu_nr);
 }
