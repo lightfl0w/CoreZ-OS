@@ -318,10 +318,12 @@ class Task:
             dfile = self.out.with_suffix(".d")
             if dfile.exists():
                 text = dfile.read_text(errors="replace")
-                for line in text.splitlines():
+
+                joined = text.replace("\\\r\n", " ").replace("\\\n", " ")
+                for line in joined.splitlines():
                     if ":" not in line:
                         continue
-                    for tok in line.split(":", 1)[1].replace("\\\n", " ").split():
+                    for tok in line.split(":", 1)[1].split():
                         if not tok:
                             continue
                         p = Path(tok)
