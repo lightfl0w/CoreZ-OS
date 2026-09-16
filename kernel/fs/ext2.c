@@ -105,9 +105,6 @@ static const uint8_t *ext2_bcache_get(uint32_t blk) {
         return hit;
     }
     uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot]) {
-        return NULL;
-    }
     uint8_t *dst = s_bc_data + slot * bs;
     if (ext2_disk_read(blk, dst) != 0) {
         return NULL;
@@ -122,9 +119,6 @@ static void ext2_bcache_store(uint32_t blk, const void *src) {
         return;
     }
     uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot]) {
-        return;
-    }
     memcpy(s_bc_data + slot * bs, src, bs);
     s_bc_tag[slot] = blk;
     s_bc_valid[slot] = 1;

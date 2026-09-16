@@ -1354,6 +1354,31 @@ static int64_t lc_read(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
     return n < 0 ? -n : n;
 }
 
+/**
+ * pread64：从指定文件偏移读取，读完不改变文件位置。
+ *
+ * @param a fd，b 目标缓冲，c 长度，d 文件偏移
+ */
+static int64_t lc_pread64(struct X86_REGS *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    int32_t fd = (int32_t)a;
+    int32_t saved;
+    int32_t n;
+
+    if (!user_ptr_ok(r, b, (uint32_t)c, 1))
+        return -LINUX_EFAULT;
+    if (fd < 0 || (uint32_t)d > 0x7fffffffu)
+        return -LINUX_EINVAL;
+    saved = sys_lseek(fd, 0, SEEK_CUR);
+    if (saved < 0)
+        return -LINUX_ESPIPE;
+    if (sys_lseek(fd, (int32_t)d, SEEK_SET) < 0)
+        return -LINUX_EINVAL;
+    n = compat_read(fd, (void *)b, (uint32_t)c);
+    sys_lseek(fd, saved, SEEK_SET);
+    return n;
+}
+
 static int64_t lc_exit(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
     (void)r;
@@ -1998,6 +2023,7 @@ static int64_t lc0_open(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_read] = lc_read,
+    [SYS_LINUX_pread64] = lc_pread64,
     [SYS_LINUX_write] = lc_write,
     [SYS_LINUX_open] = lc_open,
     [SYS_LINUX_close] = lc_close,

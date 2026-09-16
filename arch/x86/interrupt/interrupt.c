@@ -80,9 +80,9 @@ void isr_handler(struct X86_REGS *r) {
             if (sig == SIGSEGV) {
                 uint64_t cr2u;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2u));
-                kprintf("[user-segv] pid=%d rip=%x cr2=%x err=%x gs=%x "
+                kprintf("[user-segv] pid=%d vec=%d rip=%x cr2=%x err=%x gs=%x "
                         "name=%s\n",
-                        current->pid, (uint32_t)r->rip, (uint32_t)cr2u,
+                        current->pid, (int)n, (uint32_t)r->rip, (uint32_t)cr2u,
                         (uint32_t)r->err_code, (uint32_t)r->gs_saved,
                         current->name);
             }

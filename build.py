@@ -741,7 +741,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             f"include/alltypes.h.in > obj/include/bits/alltypes.h; "
             f"CC={shlex.quote(cc_str)} "
             f"./configure --prefix={shlex.quote(str(MUSL_PREFIX))} "
-            f"--disable-shared --enable-static --disable-option-checking; "
+            f"--enable-shared --enable-static --disable-option-checking; "
             f"make -j\"$(nproc 2>/dev/null || echo 4)\" "
             f"2>&1 | tee {shlex.quote(str(MUSL_PREFIX / 'build.log'))}; "
             f"make install"
@@ -750,6 +750,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             name="musl-native-lib",
             cmd=[sh, "-c", musl_script],
             out=MUSL_PREFIX / "lib" / "libc.a",
+            deps=[ROOT / "build.py"],
             optional=True,
             group="musl-lib",
             description="configure+make+install native musl 1.2.6",
@@ -860,6 +861,73 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
              BUILD_DIR / "test_basename.o", BUILD_DIR / "test_dirname.o",
              BUILD_DIR / "test_fnmatch.o"])
         tasks.append(libc_tests_elf)
+
+        # 动态链接：ld.so（musl 的 libc.so 本身就是动态加载器）要落到 build/ 根下，
+        # make_ext2.py 按名字把它们装进 /lib。x86_64 下两个名字内容相同，都放一份
+        for dst_name in ("libc.so", "ld-musl-x86_64.so.1"):
+            tasks.append(Task(
+                name=f"musl-dyn-{dst_name}",
+                cmd=[sh, "-c",
+                     f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+                     f"{shlex.quote(str(BUILD_DIR / dst_name))}"],
+                out=BUILD_DIR / dst_name,
+                deps=[MUSL_LIB / "libc.so"],
+                optional=True, group="musl-dyn",
+                description=f"install {dst_name} into build/",
+            ))
+
+        dyn_lib_c = task_cc("dyn_lib.o", APPS_DIR / "dyn_lib.c",
+                            BUILD_DIR / "dyn_lib.o", tools, MUSL_DEMO_CFLAGS)
+        dyn_lib_c.optional = True
+        dyn_lib_c.group = "musl-dyn"
+        tasks.append(dyn_lib_c)
+        # 动态链接不用 -z pack-relative-relocs：ld 生成的 .relr.dyn 段无法放进
+        # user_dyn.ld 的段布局（拒绝分配），而 RELR 只是体积优化，musl 的 ld.so
+        # 与内核侧都支持普通 .rela.dyn，这里用后者
+        dyn_lib_so = Task(
+            name="libdyndemo.so",
+            cmd=[shutil.which("ld") or "/usr/bin/ld",
+                 "-m", "elf_x86_64", "-shared", "-nostdlib", "-e", "0",
+                 "-T", str(ROOT / "linker" / "user_dyn.ld"),
+                 str(BUILD_DIR / "dyn_lib.o"),
+                 "-L", str(MUSL_LIB), "-lc",
+                 "-o", str(BUILD_DIR / "libdyndemo.so")],
+            out=BUILD_DIR / "libdyndemo.so",
+            deps=[BUILD_DIR / "dyn_lib.o"],
+            optional=True, group="musl-dyn",
+            description="link libdyndemo.so (shared)",
+        )
+        tasks.append(dyn_lib_so)
+
+        dyn_demo_c = task_cc("dyn_demo.o", APPS_DIR / "dyn_demo.c",
+                             BUILD_DIR / "dyn_demo.o", tools, MUSL_DEMO_CFLAGS)
+        dyn_demo_c.optional = True
+        dyn_demo_c.group = "musl-dyn"
+        tasks.append(dyn_demo_c)
+
+        def link_musl_dynamic(name, elf, objs, needed_dir):
+            ld = shutil.which("ld") or "/usr/bin/ld"
+            # musl 自己的 specs 规定：非 -shared 的动态链接用 Scrt1.o（PIC 版 crt1），
+            # 而不是静态 PIE 用的 crt1.o/rcrt1.o
+            cmd = [ld, "-m", "elf_x86_64", "-nostdlib", "-pie",
+                   "--dynamic-linker", "/lib/ld-musl-x86_64.so.1",
+                   "-T", str(ROOT / "linker" / "user_dyn.ld"), "-e", "_start",
+                   str(MUSL_LIB / "Scrt1.o"), str(MUSL_LIB / "crti.o"),
+                   *map(str, objs), str(MUSL_LIB / "crtn.o"),
+                   "-L", str(MUSL_LIB), "-L", str(needed_dir),
+                   "-lc", "-ldyndemo",
+                   "-o", str(elf)]
+            return Task(name=name, cmd=cmd, out=elf, optional=True,
+                        group="musl-dyn",
+                        description=f"link {elf.name} (dynamic, PT_INTERP)",
+                        cwd=BUILD_DIR)
+
+        dyn_demo_elf = link_musl_dynamic(
+            "dyn_demo.elf", BUILD_DIR / "dyn_demo.elf",
+            [BUILD_DIR / "dyn_demo.o"], BUILD_DIR)
+        dyn_demo_elf.deps = [BUILD_DIR / "dyn_demo.o",
+                             BUILD_DIR / "libdyndemo.so"]
+        tasks.append(dyn_demo_elf)
     return BuildPlan(tasks=tasks, user_elves=user_elves,
                      musl_enabled=plan_musl_enabled)
 @dataclass
@@ -986,9 +1054,11 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         console.info("musl 库未生成 (configure/make 失败或被跳过), "
                      "demo/testsuite 跳过 — 不影响内核/用户程序")
     else:
-        musl_tasks = [t for t in plan.tasks if t.group in ("cc", "link", "musl") and
-                      ("musl_" in t.name or "test_" in t.name or
-                       "libc_tests" in t.name)]
+        musl_tasks = [t for t in plan.tasks if
+                      t.group == "musl-dyn" or
+                      (t.group in ("cc", "link", "musl") and
+                       ("musl_" in t.name or "test_" in t.name or
+                        "libc_tests" in t.name))]
         with console.progress(len(musl_tasks), "musl", Ansi.BR_BLU) as update:
             for i, t in enumerate(musl_tasks, 1):
                 run_task(t)

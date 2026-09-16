@@ -11,6 +11,7 @@
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/userprog/elf.h"
 #include "kernel/userprog/process.h"
 #include "kernel/fs/file.h"
 static const char **exec_env_defaults(void) {
@@ -23,7 +24,6 @@ static const char **exec_env_defaults(void) {
 
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
-#define PF_X 0x1
 #define EFLAGS_MBS (1 << 1)
 #define EFLAGS_IF_1 (1 << 9)
 #define EFLAGS_IOPL_0 0
@@ -32,100 +32,7 @@ static const char **exec_env_defaults(void) {
 #define EXEC_STRBUF_HALF (MAX_ARG_NR * MAX_ARG_STR_LEN)
 #define EXEC_STRBUF_PAGES 2
 #define HEAP_ASLR_PAGES 2048
-
-struct LINUX_ELF64_NHDR {
-    uint32_t namesz;
-    uint32_t descsz;
-    uint32_t type;
-};
-
-#define NT_GNU_ABI_TAG 1
-#define EM_X86_64 62
-#define EM_386 3
-struct LINUX_ELF32_EHDR {
-    unsigned char e_ident[16];
-    uint16_t e_type;
-    uint16_t e_machine;
-    uint32_t e_version;
-    uint32_t e_entry;
-    uint32_t e_phoff;
-    uint32_t e_shoff;
-    uint32_t e_flags;
-    uint16_t e_ehsize;
-    uint16_t e_phentsize;
-    uint16_t e_phnum;
-    uint16_t e_shentsize;
-    uint16_t e_shnum;
-    uint16_t e_shstrndx;
-};
-struct LINUX_ELF32_PHDR {
-    uint32_t p_type;
-    uint32_t p_offset;
-    uint32_t p_vaddr;
-    uint32_t p_paddr;
-    uint32_t p_filesz;
-    uint32_t p_memsz;
-    uint32_t p_flags;
-    uint32_t p_align;
-};
-enum LINUX_SEG_TYPE {
-    PT_NULL,
-    PT_LOAD,
-    PT_DYNAMIC,
-    PT_INTERP,
-    PT_NOTE,
-    PT_SHLIB,
-    PT_PHDR
-};
-struct LINUX_ELF64_EHDR {
-    unsigned char e_ident[16];
-    uint16_t e_type;
-    uint16_t e_machine;
-    uint32_t e_version;
-    uint64_t e_entry;
-    uint64_t e_phoff;
-    uint64_t e_shoff;
-    uint32_t e_flags;
-    uint16_t e_ehsize;
-    uint16_t e_phentsize;
-    uint16_t e_phnum;
-    uint16_t e_shentsize;
-    uint16_t e_shnum;
-    uint16_t e_shstrndx;
-};
-struct LINUX_ELF64_PHDR {
-    uint32_t p_type;
-    uint32_t p_flags;
-    uint64_t p_offset;
-    uint64_t p_vaddr;
-    uint64_t p_paddr;
-    uint64_t p_filesz;
-    uint64_t p_memsz;
-    uint64_t p_align;
-};
-struct LINUX_ELF64_DYN {
-    int64_t d_tag;
-    uint64_t d_val;
-};
-struct LINUX_ELF64_RELA {
-    uint64_t r_offset;
-    uint64_t r_info;
-    int64_t r_addend;
-};
-#define DT_NULL 0
-#define DT_RELA 7
-#define DT_RELASZ 8
-#define DT_RELAENT 9
-#define DT_RELRSZ 35
-#define DT_RELR 36
-#define DT_RELRENT 37
-#define ELF64_R_TYPE(i) ((i) & 0xffffffffu)
-#define R_X86_64_RELATIVE 8
-
-struct MM_WX_RANGE {
-    uint32_t base;
-    uint32_t pages;
-};
+#define MAX_INTERP_PATH 128
 
 static void apply_rx(uint32_t base, uint32_t pages) {
     for (uint32_t i = 0; i < pages; i++) {
@@ -289,282 +196,511 @@ static int32_t segment_load(int32_t fd, uint32_t offset, uint32_t filesz,
         vaddr_page += PAGE_SIZE;
     }
     sys_lseek(fd, offset, SEEK_SET);
-    read_file(fd, (void *)vaddr, filesz);
+    if (read_file(fd, (void *)vaddr, filesz) != filesz) {
+        kprintf("[exec] segment short read: off=%x want=%x vaddr=%x\n", offset,
+                filesz, vaddr);
+        return -1;
+    }
     return 0;
 }
 
-static int32_t load(const char *pathname, int *is64, int *is_linux,
-                    uint32_t *phdr_vaddr, uint32_t *phentsize, uint32_t *phnum,
-                    uint32_t *bias_out, uint32_t *brk_base_out) {
-    *phdr_vaddr = 0;
-    *phentsize = 0;
-    *phnum = 0;
-    *bias_out = 0;
-    *brk_base_out = 0;
-    int32_t ret = -1;
-    uint32_t image_end = 0;
-    unsigned char ident[16];
+/**
+ * 以只读方式打开镜像并校验读权限。
+ *
+ * @param pathname 镜像路径
+ * @returns 文件描述符；不存在返回 -1，无读权限返回 -1 并置 errno=13
+ */
+static int32_t open_image(const char *pathname) {
     int32_t fd = open_file(pathname, O_RDONLY);
-    {
-        uint32_t gfd = fd_local2global((uint32_t)fd);
-        struct FILE *xf = file_get(gfd);
-        if (xf == NULL || xf->fd_inode == NULL ||
-            fs_check_perm(xf->fd_inode, 1u)) {
-            if (fd >= 0)
-                close_file(fd);
-            current->errno = 13;
-            return -1;
-        }
-    }
-    if (fd == -1) {
+    uint32_t gfd;
+    struct FILE *xf;
+
+    if (fd < 0) {
         return -1;
     }
-    if (read_file(fd, ident, sizeof(ident)) != sizeof(ident)) {
-        goto done;
+    gfd = fd_local2global((uint32_t)fd);
+    xf = file_get(gfd);
+    if (xf == NULL || xf->fd_inode == NULL || fs_check_perm(xf->fd_inode, 1u)) {
+        close_file(fd);
+        current->errno = 13;
+        return -1;
     }
-
-    if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' ||
-        ident[3] != 'F' || (ident[4] != 1 && ident[4] != 2)) {
-        goto done;
-    }
-    *is64 = (ident[4] == 2);
-    *is_linux = 0;
-    sys_lseek(fd, 0, SEEK_SET);
-    if (*is64) {
-        struct LINUX_ELF64_EHDR elf64_header;
-        memset(&elf64_header, 0, sizeof(elf64_header));
-        if (read_file(fd, &elf64_header, sizeof(elf64_header)) !=
-            sizeof(elf64_header)) {
-            goto done;
-        }
-        int is_dyn = (elf64_header.e_type == 3);
-        if ((elf64_header.e_type != 2 && !is_dyn) ||
-            elf64_header.e_machine != EM_X86_64 ||
-            elf64_header.e_version != 1 || elf64_header.e_phnum > 1024 ||
-            elf64_header.e_phentsize != sizeof(struct LINUX_ELF64_PHDR)) {
-            goto done;
-        }
-
-        uint32_t bias = 0;
-        uint32_t dyn_vaddr = 0;
-        if (is_dyn) {
-            uint32_t min_v = 0xffffffffu, max_e = 0;
-            uint64_t pho = elf64_header.e_phoff;
-            for (uint32_t i = 0; i < elf64_header.e_phnum; i++) {
-                struct LINUX_ELF64_PHDR ph;
-                sys_lseek(fd, pho, SEEK_SET);
-                if (read_file(fd, &ph, sizeof(ph)) != sizeof(ph))
-                    goto done;
-                pho += elf64_header.e_phentsize;
-                if (ph.p_type != PT_LOAD)
-                    continue;
-                if ((uint32_t)ph.p_vaddr < min_v)
-                    min_v = (uint32_t)ph.p_vaddr;
-                uint32_t e = (uint32_t)(ph.p_vaddr + ph.p_memsz);
-                if (e > max_e)
-                    max_e = e;
-            }
-            uint32_t span = max_e - min_v;
-            uint32_t avail = USER_LOW_CEILING - USER_VADDR_START;
-            if (min_v > max_e || span >= avail)
-                goto done;
-            uint32_t off = rand_u32() % (avail - span);
-            off &= ~(PAGE_SIZE - 1);
-            bias = USER_VADDR_START + off;
-        }
-
-        struct MM_WX_RANGE wx[16];
-        int wxn = 0;
-        uint64_t prog_header_offset = elf64_header.e_phoff;
-        for (uint32_t prog_idx = 0; prog_idx < elf64_header.e_phnum;
-             prog_idx++) {
-            struct LINUX_ELF64_PHDR prog64_header;
-            memset(&prog64_header, 0, sizeof(prog64_header));
-            sys_lseek(fd, prog_header_offset, SEEK_SET);
-            if (read_file(fd, &prog64_header, sizeof(prog64_header)) !=
-                sizeof(prog64_header)) {
-                goto done;
-            }
-            if (prog64_header.p_type == PT_INTERP) {
-                goto done;
-            }
-
-            if (prog64_header.p_type == PT_NOTE) {
-                scan_note_abi(fd, (uint32_t)prog64_header.p_offset,
-                              (uint32_t)prog64_header.p_filesz, is_linux);
-                sys_lseek(fd,
-                          prog_header_offset +
-                              prog_idx * elf64_header.e_phentsize +
-                              sizeof(struct LINUX_ELF64_PHDR),
-                          SEEK_SET);
-            }
-
-            if (prog64_header.p_type == PT_DYNAMIC)
-                dyn_vaddr = (uint32_t)prog64_header.p_vaddr;
-
-            if (elf64_header.e_phoff >= prog64_header.p_offset &&
-                elf64_header.e_phoff <
-                    prog64_header.p_offset + prog64_header.p_filesz) {
-                if ((is_dyn && prog64_header.p_vaddr < USER_STACK3_VADDR) ||
-                    (!is_dyn && prog64_header.p_vaddr >= USER_VADDR_START &&
-                     prog64_header.p_vaddr < USER_STACK3_VADDR)) {
-                    *phdr_vaddr = (uint32_t)(prog64_header.p_vaddr +
-                                             (elf64_header.e_phoff -
-                                              prog64_header.p_offset));
-                    *phentsize = elf64_header.e_phentsize;
-                    *phnum = elf64_header.e_phnum;
-                }
-            }
-            if (prog64_header.p_type == PT_LOAD) {
-                uint32_t va = (uint32_t)prog64_header.p_vaddr;
-                if (!is_dyn &&
-                    (va < USER_VADDR_START || va >= USER_STACK3_VADDR)) {
-                    prog_header_offset += elf64_header.e_phentsize;
-                    continue;
-                }
-                uint32_t map_at = va + bias;
-                if (map_at >= USER_STACK3_VADDR)
-                    goto done;
-                if (segment_load(fd, (uint32_t)prog64_header.p_offset,
-                                 (uint32_t)prog64_header.p_filesz,
-                                 (uint32_t)prog64_header.p_memsz,
-                                 map_at) == -1) {
-                    goto done;
-                }
-                uint32_t seg_end = map_at + (uint32_t)prog64_header.p_memsz;
-                if (seg_end > image_end) {
-                    image_end = seg_end;
-                }
-                if ((prog64_header.p_flags & PF_X) && wxn < 16) {
-                    uint32_t first = map_at & ~0xfffu;
-                    uint32_t sz_first = PAGE_SIZE - (map_at & 0xfffu);
-                    wx[wxn].base = first;
-                    wx[wxn].pages =
-                        (prog64_header.p_memsz > sz_first)
-                            ? DIV_ROUND_UP(prog64_header.p_memsz - sz_first,
-                                           PAGE_SIZE) +
-                                  1
-                            : 1;
-                    wxn++;
-                }
-            }
-            prog_header_offset += elf64_header.e_phentsize;
-        }
-        apply_relocs(bias, dyn_vaddr);
-        for (int i = 0; i < wxn; i++)
-            apply_rx(wx[i].base, wx[i].pages);
-    ret = (int32_t)((uint64_t)elf64_header.e_entry + bias);
-        *bias_out = bias;
-        {
-            uint32_t gfd2 = fd_local2global((uint32_t)fd);
-            struct FILE *xf = file_get(gfd2);
-            if (xf != NULL && xf->fd_inode != NULL &&
-                (xf->fd_inode->i_mode & 0xF000u) == 0x8000u) {
-                uint32_t xm = xf->fd_inode->i_mode;
-                struct TASK *xt = current;
-                if (xm & 0x800u) {
-                    xt->euid = xf->fd_inode->i_uid;
-                    xt->suid = xt->euid;
-                }
-                if (xm & 0x400u) {
-                    xt->egid = xf->fd_inode->i_gid;
-                    xt->sgid = xt->egid;
-                }
-            }
-        }
-        if (image_end <= USER_VADDR_START ||
-            image_end + PAGE_SIZE >= USER_LOW_CEILING) {
-            goto done;
-        }
-        *brk_base_out = pick_brk_base(image_end);
-    } else {
-        struct LINUX_ELF32_EHDR elf_header;
-        struct LINUX_ELF32_PHDR prog_header;
-        memset(&elf_header, 0, sizeof(elf_header));
-        if (read_file(fd, &elf_header, sizeof(elf_header)) !=
-            sizeof(elf_header)) {
-            goto done;
-        }
-        if (memcmp(elf_header.e_ident, "\177ELF\1\1\1", 7) ||
-            elf_header.e_type != 2 || elf_header.e_machine != EM_386 ||
-            elf_header.e_version != 1 || elf_header.e_phnum > 1024 ||
-            elf_header.e_phentsize != sizeof(struct LINUX_ELF32_PHDR)) {
-            goto done;
-        }
-
-        uint32_t prog_header_offset = elf_header.e_phoff;
-        for (uint32_t prog_idx = 0; prog_idx < elf_header.e_phnum; prog_idx++) {
-            memset(&prog_header, 0, sizeof(prog_header));
-            sys_lseek(fd, prog_header_offset, SEEK_SET);
-            if (read_file(fd, &prog_header, sizeof(prog_header)) !=
-                sizeof(prog_header)) {
-                goto done;
-            }
-
-            if (prog_header.p_type == PT_NOTE) {
-                scan_note_abi(fd, prog_header.p_offset, prog_header.p_filesz,
-                              is_linux);
-                sys_lseek(fd,
-                          prog_header_offset +
-                              prog_idx * elf_header.e_phentsize +
-                              sizeof(struct LINUX_ELF32_PHDR),
-                          SEEK_SET);
-            }
-
-            if (elf_header.e_phoff >= prog_header.p_offset &&
-                elf_header.e_phoff <
-                    prog_header.p_offset + prog_header.p_filesz &&
-                prog_header.p_vaddr >= USER_VADDR_START &&
-                prog_header.p_vaddr < USER_STACK3_VADDR) {
-                *phdr_vaddr =
-                    (uint32_t)(prog_header.p_vaddr +
-                               (elf_header.e_phoff - prog_header.p_offset));
-                *phentsize = elf_header.e_phentsize;
-                *phnum = elf_header.e_phnum;
-            }
-            if (prog_header.p_type == PT_LOAD &&
-                prog_header.p_vaddr >= USER_VADDR_START &&
-                prog_header.p_vaddr < USER_STACK3_VADDR) {
-                if (segment_load(fd, prog_header.p_offset, prog_header.p_filesz,
-                                 prog_header.p_memsz,
-                                 prog_header.p_vaddr) == -1) {
-                    goto done;
-                }
-                uint32_t seg_end = prog_header.p_vaddr + prog_header.p_memsz;
-                if (seg_end > image_end) {
-                    image_end = seg_end;
-                }
-                if (prog_header.p_flags & PF_X) {
-                    uint32_t first = prog_header.p_vaddr & ~0xfffu;
-                    uint32_t sz_first =
-                        PAGE_SIZE - (prog_header.p_vaddr & 0xfffu);
-                    uint32_t pages =
-                        (prog_header.p_memsz > sz_first)
-                            ? DIV_ROUND_UP(prog_header.p_memsz - sz_first,
-                                           PAGE_SIZE) +
-                                  1
-                            : 1;
-                    apply_rx(first, pages);
-                }
-            }
-            prog_header_offset += elf_header.e_phentsize;
-        }
-        ret = elf_header.e_entry;
-        if (image_end <= USER_VADDR_START ||
-            image_end + PAGE_SIZE >= USER_LOW_CEILING) {
-            goto done;
-        }
-        *brk_base_out = pick_brk_base(image_end);
-    }
-done:
-    close_file(fd);
-    return ret;
+    return fd;
 }
 
 /**
- * 把 argv/envp 指针数组与各字符串原子拷入内核缓冲：指针数组项与字符串
- * 都经 copy_from_user（校验与拷贝同页完成），消除"校验后另一线程 unmap"
- * 的 TOCTOU——这是共享地址空间线程语义下的 UAF 前置加固。
+ * 读入并校验 ELF64 头。
+ *
+ * @param fd   已打开的镜像
+ * @param ehdr 输出，ELF 头
+ * @returns 成功返回 0；魔数、位宽、机型、版本或程序头表尺寸非法返回 -1
+ */
+static int32_t probe_elf64(int32_t fd, struct LINUX_ELF64_EHDR *ehdr) {
+    unsigned char ident[16];
+
+    sys_lseek(fd, 0, SEEK_SET);
+    if (read_file(fd, ident, sizeof(ident)) != sizeof(ident)) {
+        return -1;
+    }
+    if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' ||
+        ident[3] != 'F' || ident[4] != 2) {
+        return -1;
+    }
+    sys_lseek(fd, 0, SEEK_SET);
+    memset(ehdr, 0, sizeof(*ehdr));
+    if (read_file(fd, ehdr, sizeof(*ehdr)) != sizeof(*ehdr)) {
+        return -1;
+    }
+    if ((ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) ||
+        ehdr->e_machine != EM_X86_64 || ehdr->e_version != 1 ||
+        ehdr->e_phnum > 1024 ||
+        ehdr->e_phentsize != sizeof(struct LINUX_ELF64_PHDR)) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * 读 ELF64 头与 PT_LOAD 覆盖范围，用于挑选互不重叠的加载基址。
+ *
+ * @param fd    已打开的镜像
+ * @param ehdr  输出，ELF 头
+ * @param min_v 输出，PT_LOAD 的最低虚拟地址
+ * @param span  输出，最低到最高虚拟地址的跨度
+ * @returns 成功返回 0；头非法或没有有效 PT_LOAD 返回 -1
+ */
+static int32_t probe_image64(int32_t fd, struct LINUX_ELF64_EHDR *ehdr,
+                             uint32_t *min_v, uint32_t *span) {
+    uint32_t lo = 0xffffffffu, hi = 0;
+    uint64_t pho;
+
+    if (probe_elf64(fd, ehdr) != 0) {
+        return -1;
+    }
+    pho = ehdr->e_phoff;
+    for (uint32_t i = 0; i < ehdr->e_phnum; i++, pho += ehdr->e_phentsize) {
+        struct LINUX_ELF64_PHDR ph;
+        uint32_t e;
+
+        sys_lseek(fd, pho, SEEK_SET);
+        if (read_file(fd, &ph, sizeof(ph)) != sizeof(ph)) {
+            return -1;
+        }
+        if (ph.p_type != PT_LOAD) {
+            continue;
+        }
+        if ((uint32_t)ph.p_vaddr < lo) {
+            lo = (uint32_t)ph.p_vaddr;
+        }
+        e = (uint32_t)(ph.p_vaddr + ph.p_memsz);
+        if (e > hi) {
+            hi = e;
+        }
+    }
+    if (hi <= lo) {
+        return -1;
+    }
+    *min_v = lo;
+    *span = hi - lo;
+    return 0;
+}
+
+/**
+ * 按 PT_LOAD 把 ELF64 镜像映射到 bias + p_vaddr，并把 PF_X 段收成 RX。
+ *
+ * @param fd      已打开的镜像
+ * @param ehdr    已校验的 ELF 头
+ * @param bias    加载基址
+ * @param bounded 非 0 时跳过落在用户映像区间之外的段（固定地址镜像用）
+ * @param end     输出，镜像最高虚拟地址
+ * @returns 成功返回 0；映射失败或段越界返回 -1
+ *
+ * @remarks
+ * 只做映射，不做重定位。静态 PIE 的重定位由 apply_relocs 另行完成，
+ * 带解释器的动态镜像则整段留给用户态 ld.so
+ */
+static int32_t map_image64(int32_t fd, const struct LINUX_ELF64_EHDR *ehdr,
+                           uint32_t bias, int bounded, uint32_t *end) {
+    struct MM_WX_RANGE wx[EXEC_WX_MAX];
+    int wxn = 0;
+    uint32_t image_end = 0;
+    uint64_t pho = ehdr->e_phoff;
+
+    for (uint32_t i = 0; i < ehdr->e_phnum; i++, pho += ehdr->e_phentsize) {
+        struct LINUX_ELF64_PHDR ph;
+        uint32_t va, map_at, seg_end, first, sz_first;
+
+        sys_lseek(fd, pho, SEEK_SET);
+        if (read_file(fd, &ph, sizeof(ph)) != sizeof(ph)) {
+            return -1;
+        }
+        if (ph.p_type != PT_LOAD) {
+            continue;
+        }
+        va = (uint32_t)ph.p_vaddr;
+        if (bounded && (va < USER_VADDR_START || va >= USER_STACK3_VADDR)) {
+            continue;
+        }
+        map_at = va + bias;
+        if (map_at >= USER_STACK3_VADDR) {
+            return -1;
+        }
+        if (segment_load(fd, (uint32_t)ph.p_offset, (uint32_t)ph.p_filesz,
+                         (uint32_t)ph.p_memsz, map_at) == -1) {
+            return -1;
+        }
+        seg_end = map_at + (uint32_t)ph.p_memsz;
+        if (seg_end > image_end) {
+            image_end = seg_end;
+        }
+        if ((ph.p_flags & PF_X) && wxn < EXEC_WX_MAX) {
+            first = map_at & ~0xfffu;
+            sz_first = PAGE_SIZE - (map_at & 0xfffu);
+            wx[wxn].base = first;
+            wx[wxn].pages = (ph.p_memsz > sz_first)
+                                ? DIV_ROUND_UP(ph.p_memsz - sz_first, PAGE_SIZE) + 1
+                                : 1;
+            wxn++;
+        }
+    }
+    for (int i = 0; i < wxn; i++) {
+        apply_rx(wx[i].base, wx[i].pages);
+    }
+    *end = image_end;
+    return 0;
+}
+
+/**
+ * 读出 PT_INTERP 指定的解释器路径。
+ *
+ * @param fd      主程序镜像
+ * @param ph      已读出的 PT_INTERP 程序头
+ * @param buf     输出缓冲区
+ * @param buf_len 缓冲区长度
+ * @returns 成功返回 0；长度非法、未以 NUL 结尾或不是绝对路径返回 -1
+ */
+static int32_t read_interp_path(int32_t fd, const struct LINUX_ELF64_PHDR *ph,
+                                char *buf, uint32_t buf_len) {
+    uint32_t sz = (uint32_t)ph->p_filesz;
+
+    if (sz < 2 || sz > buf_len) {
+        return -1;
+    }
+    sys_lseek(fd, (uint32_t)ph->p_offset, SEEK_SET);
+    if (read_file(fd, buf, sz) != sz) {
+        return -1;
+    }
+    buf[sz - 1] = 0;
+    return (buf[0] == '/') ? 0 : -1;
+}
+
+/**
+ * 加载 ELF64 镜像并填好入口、phdr 与堆基址。
+ *
+ * @param fd  已打开的镜像，由调用者负责关闭
+ * @param img 输出，加载结果
+ * @returns 成功返回 0；任何校验或映射失败返回 -1
+ */
+static int32_t load64(int32_t fd, struct EXEC_IMAGE *img) {
+    struct LINUX_ELF64_EHDR ehdr;
+    struct LINUX_ELF64_EHDR interp_ehdr;
+    char interp_path[MAX_INTERP_PATH];
+    uint32_t dyn_vaddr = 0;
+    uint32_t min_v = 0xffffffffu, max_e = 0;
+    uint32_t bias = 0, image_end = 0;
+    uint32_t interp_min_v = 0, interp_span = 0, interp_base = 0;
+    uint32_t interp_end = 0;
+    uint64_t pho;
+    int32_t interp_fd = -1;
+    int has_interp = 0;
+    int is_dyn;
+    int rc = -1;
+
+    if (probe_elf64(fd, &ehdr) != 0) {
+        return -1;
+    }
+    is_dyn = (ehdr.e_type == ET_DYN);
+
+    pho = ehdr.e_phoff;
+    for (uint32_t i = 0; i < ehdr.e_phnum; i++, pho += ehdr.e_phentsize) {
+        struct LINUX_ELF64_PHDR ph;
+        uint32_t e;
+
+        sys_lseek(fd, pho, SEEK_SET);
+        if (read_file(fd, &ph, sizeof(ph)) != sizeof(ph)) {
+            return -1;
+        }
+        if (ph.p_type == PT_INTERP) {
+            if (read_interp_path(fd, &ph, interp_path, sizeof(interp_path)) != 0) {
+                return -1;
+            }
+            has_interp = 1;
+        } else if (ph.p_type == PT_DYNAMIC) {
+            dyn_vaddr = (uint32_t)ph.p_vaddr;
+        } else if (ph.p_type == PT_NOTE) {
+            scan_note_abi(fd, (uint32_t)ph.p_offset, (uint32_t)ph.p_filesz,
+                          &img->is_linux);
+        }
+        if (ph.p_type != PT_LOAD) {
+            continue;
+        }
+        if ((uint32_t)ph.p_vaddr < min_v) {
+            min_v = (uint32_t)ph.p_vaddr;
+        }
+        e = (uint32_t)(ph.p_vaddr + ph.p_memsz);
+        if (e > max_e) {
+            max_e = e;
+        }
+        if (ehdr.e_phoff >= ph.p_offset &&
+            ehdr.e_phoff < ph.p_offset + ph.p_filesz &&
+            ((is_dyn && ph.p_vaddr < USER_STACK3_VADDR) ||
+             (!is_dyn && ph.p_vaddr >= USER_VADDR_START &&
+              ph.p_vaddr < USER_STACK3_VADDR))) {
+            img->phdr_vaddr =
+                (uint32_t)(ph.p_vaddr + (ehdr.e_phoff - ph.p_offset));
+            img->phentsize = ehdr.e_phentsize;
+            img->phnum = ehdr.e_phnum;
+        }
+    }
+
+    if (has_interp) {
+        interp_fd = open_image(interp_path);
+        if (interp_fd < 0) {
+            kprintf("[exec] interp %s: not found or unreadable\n", interp_path);
+            return -1;
+        }
+        if (probe_image64(interp_fd, &interp_ehdr, &interp_min_v,
+                          &interp_span) != 0 ||
+            interp_ehdr.e_type != ET_DYN) {
+            kprintf("[exec] interp %s: not a loadable ET_DYN image\n",
+                    interp_path);
+            goto out;
+        }
+    }
+
+    if (is_dyn) {
+        uint32_t span = max_e - min_v;
+        uint32_t avail = USER_LOW_CEILING - USER_VADDR_START;
+        uint32_t reserve = span;
+        uint32_t off;
+
+        if (min_v > max_e) {
+            goto out;
+        }
+        if (has_interp) {
+            reserve += PAGE_SIZE + DIV_ROUND_UP(interp_span, PAGE_SIZE) * PAGE_SIZE;
+        }
+        if (reserve >= avail) {
+            goto out;
+        }
+        off = rand_u32() % (avail - reserve);
+        off &= ~(PAGE_SIZE - 1);
+        bias = USER_VADDR_START + off;
+    }
+
+    if (map_image64(fd, &ehdr, bias, !is_dyn, &image_end) != 0) {
+        goto out;
+    }
+
+    if (has_interp) {
+        uint32_t below = (image_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        uint32_t room, gap;
+
+        if (below + interp_span > USER_LOW_CEILING) {
+            kprintf("[exec] no room for interp above 0x%x\n", below);
+            goto out;
+        }
+        room = (USER_LOW_CEILING - below - interp_span) / PAGE_SIZE;
+        gap = room ? rand_u32() % room : 0;
+        interp_base = below + gap * PAGE_SIZE;
+        if (map_image64(interp_fd, &interp_ehdr, interp_base - interp_min_v, 0,
+                        &interp_end) != 0) {
+            goto out;
+        }
+        if (interp_end > image_end) {
+            image_end = interp_end;
+        }
+    }
+
+    img->bias = bias;
+    img->base = bias;
+    img->entry = (int32_t)(bias + (uint32_t)ehdr.e_entry);
+    img->app_entry = img->entry;
+    if (has_interp) {
+        uint32_t interp_bias = interp_base - interp_min_v;
+
+        img->has_interp = 1;
+        img->base = interp_bias;
+        img->entry = (int32_t)(interp_bias + (uint32_t)interp_ehdr.e_entry);
+    } else {
+        apply_relocs(bias, dyn_vaddr);
+    }
+
+    {
+        uint32_t gfd2 = fd_local2global((uint32_t)fd);
+        struct FILE *xf = file_get(gfd2);
+        if (xf != NULL && xf->fd_inode != NULL &&
+            (xf->fd_inode->i_mode & 0xF000u) == 0x8000u) {
+            uint32_t xm = xf->fd_inode->i_mode;
+            struct TASK *xt = current;
+            if (xm & 0x800u) {
+                xt->euid = xf->fd_inode->i_uid;
+                xt->suid = xt->euid;
+            }
+            if (xm & 0x400u) {
+                xt->egid = xf->fd_inode->i_gid;
+                xt->sgid = xt->egid;
+            }
+        }
+    }
+    if (image_end <= USER_VADDR_START ||
+        image_end + PAGE_SIZE >= USER_LOW_CEILING) {
+        goto out;
+    }
+    img->brk_base = pick_brk_base(image_end);
+    rc = 0;
+out:
+    if (interp_fd >= 0) {
+        close_file(interp_fd);
+    }
+    return rc;
+}
+
+/**
+ * 加载 i386 固定地址镜像。
+ *
+ * @param fd  已打开的镜像，由调用者负责关闭
+ * @param img 输出，加载结果
+ * @returns 成功返回 0；校验或映射失败返回 -1
+ *
+ * @remarks
+ * 只接受 ET_EXEC：32 位动态链接不在支持范围内，遇到 PT_INTERP 的镜像
+ * 会因为段落在映像区间之外而失败
+ */
+static int32_t load32(int32_t fd, struct EXEC_IMAGE *img) {
+    struct LINUX_ELF32_EHDR elf_header;
+    struct LINUX_ELF32_PHDR prog_header;
+    uint32_t image_end = 0;
+    uint32_t prog_header_offset;
+
+    memset(&elf_header, 0, sizeof(elf_header));
+    if (read_file(fd, &elf_header, sizeof(elf_header)) !=
+        sizeof(elf_header)) {
+        return -1;
+    }
+    if (memcmp(elf_header.e_ident, "\177ELF\1\1\1", 7) ||
+        elf_header.e_type != 2 || elf_header.e_machine != EM_386 ||
+        elf_header.e_version != 1 || elf_header.e_phnum > 1024 ||
+        elf_header.e_phentsize != sizeof(struct LINUX_ELF32_PHDR)) {
+        return -1;
+    }
+
+    prog_header_offset = elf_header.e_phoff;
+    for (uint32_t prog_idx = 0; prog_idx < elf_header.e_phnum; prog_idx++) {
+        memset(&prog_header, 0, sizeof(prog_header));
+        sys_lseek(fd, prog_header_offset, SEEK_SET);
+        if (read_file(fd, &prog_header, sizeof(prog_header)) !=
+            sizeof(prog_header)) {
+            return -1;
+        }
+
+        if (prog_header.p_type == PT_NOTE) {
+            scan_note_abi(fd, prog_header.p_offset, prog_header.p_filesz,
+                          &img->is_linux);
+            sys_lseek(fd,
+                      prog_header_offset +
+                          prog_idx * elf_header.e_phentsize +
+                          sizeof(struct LINUX_ELF32_PHDR),
+                      SEEK_SET);
+        }
+
+        if (elf_header.e_phoff >= prog_header.p_offset &&
+            elf_header.e_phoff <
+                prog_header.p_offset + prog_header.p_filesz &&
+            prog_header.p_vaddr >= USER_VADDR_START &&
+            prog_header.p_vaddr < USER_STACK3_VADDR) {
+            img->phdr_vaddr =
+                (uint32_t)(prog_header.p_vaddr +
+                           (elf_header.e_phoff - prog_header.p_offset));
+            img->phentsize = elf_header.e_phentsize;
+            img->phnum = elf_header.e_phnum;
+        }
+        if (prog_header.p_type == PT_LOAD &&
+            prog_header.p_vaddr >= USER_VADDR_START &&
+            prog_header.p_vaddr < USER_STACK3_VADDR) {
+            if (segment_load(fd, prog_header.p_offset, prog_header.p_filesz,
+                             prog_header.p_memsz,
+                             prog_header.p_vaddr) == -1) {
+                return -1;
+            }
+            uint32_t seg_end = prog_header.p_vaddr + prog_header.p_memsz;
+            if (seg_end > image_end) {
+                image_end = seg_end;
+            }
+            if (prog_header.p_flags & PF_X) {
+                uint32_t first = prog_header.p_vaddr & ~0xfffu;
+                uint32_t sz_first = PAGE_SIZE - (prog_header.p_vaddr & 0xfffu);
+                uint32_t pages =
+                    (prog_header.p_memsz > sz_first)
+                        ? DIV_ROUND_UP(prog_header.p_memsz - sz_first,
+                                       PAGE_SIZE) +
+                              1
+                        : 1;
+                apply_rx(first, pages);
+            }
+        }
+        prog_header_offset += elf_header.e_phentsize;
+    }
+    img->entry = (int32_t)elf_header.e_entry;
+    img->app_entry = img->entry;
+    if (image_end <= USER_VADDR_START ||
+        image_end + PAGE_SIZE >= USER_LOW_CEILING) {
+        return -1;
+    }
+    img->brk_base = pick_brk_base(image_end);
+    return 0;
+}
+
+/**
+ * 打开并加载镜像。
+ *
+ * @param pathname 可执行文件路径
+ * @param img      输出，加载结果
+ * @returns 成功返回进程入口地址；失败返回 -1
+ *
+ * @remarks
+ * 解释器路径等仅在内核态使用，不写入用户可见状态
+ */
+static int32_t load(const char *pathname, struct EXEC_IMAGE *img) {
+    unsigned char ident[16];
+    int32_t fd = open_image(pathname);
+    int32_t rc;
+
+    if (fd < 0) {
+        return -1;
+    }
+    memset(img, 0, sizeof(*img));
+    if (read_file(fd, ident, sizeof(ident)) != sizeof(ident)) {
+        goto fail;
+    }
+    if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' ||
+        ident[3] != 'F' || (ident[4] != 1 && ident[4] != 2)) {
+        goto fail;
+    }
+    img->is64 = (ident[4] == 2);
+    rc = img->is64 ? load64(fd, img) : load32(fd, img);
+    if (rc != 0) {
+        goto fail;
+    }
+    close_file(fd);
+    return img->entry;
+fail:
+    close_file(fd);
+    return -1;
+}
+
+/**
+ * 把 argv/envp 指针数组与各字符串原子拷入内核缓冲
  *
  * @param offs 输出第 i 个字符串在 buf 内的偏移
  * @param bufcap buf 容量
@@ -637,14 +773,12 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     int32_t i;
     uint32_t slen;
     struct X86_REGS *ps;
+    struct EXEC_IMAGE img;
     int is64 = 0;
     int is_linux = 0;
-    uint32_t aux_phdr_vaddr = 0;
-    uint32_t aux_phentsize = 0;
-    uint32_t aux_phnum = 0;
     uint32_t aux_random_addr = 0;
-    uint32_t aux_bias = 0;
-    uint32_t aux_brk_base = 0;
+    uint32_t aux_app_entry = 0;
+    uint32_t aux_base = 0;
 
     char *strbuf = NULL;
     uint32_t argv_offs[MAX_ARG_NR];
@@ -700,15 +834,18 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             }
         }
     }
-    entry_point = load(path, &is64, &is_linux, &aux_phdr_vaddr, &aux_phentsize,
-                       &aux_phnum, &aux_bias, &aux_brk_base);
+    entry_point = load(path, &img);
     if (entry_point == -1) {
         goto exec_fail;
     }
+    is64 = img.is64;
+    is_linux = img.is_linux;
+    aux_app_entry = (uint32_t)img.app_entry;
+    aux_base = img.base;
     memcpy(cur->name, path, 15);
     cur->name[15] = 0;
     cur->user_brk = 0;
-    cur->brk_base = aux_brk_base;
+    cur->brk_base = img.brk_base;
     signal_reset_user(cur);
     for (uint32_t sp = USER_STACK_BOTTOM; sp < USER_STACK_TOP;
          sp += PAGE_SIZE) {
@@ -767,7 +904,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         uint32_t aux_dst = 0;
         uint32_t aw = is64 ? 8u : 4u;
         uint32_t amask = is64 ? 0x7u : 0x3u;
-        uint64_t aux[32];
+        uint64_t aux[48];
         int naw = 0;
         int e;
 #define PVAL(p, v)                                                             \
@@ -790,12 +927,17 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         A(AT_EXECFN, 0);
         A(AT_PAGESZ, PAGE_SIZE);
         A(AT_CLKTCK, 100);
-        A(AT_ENTRY, entry_point);
-        A(AT_PHDR, aux_phdr_vaddr + (is64 ? aux_bias : 0));
-        A(AT_PHENT, aux_phentsize);
-        A(AT_PHNUM, aux_phnum);
+        A(AT_ENTRY, aux_app_entry);
+        A(AT_PHDR, img.phdr_vaddr + (is64 ? img.bias : 0));
+        A(AT_PHENT, img.phentsize);
+        A(AT_PHNUM, img.phnum);
+        A(AT_UID, cur->uid);
+        A(AT_EUID, cur->euid);
+        A(AT_GID, cur->gid);
+        A(AT_EGID, cur->egid);
+        A(AT_SECURE, 0);
         if (is64)
-            A(AT_BASE, aux_bias);
+            A(AT_BASE, aux_base);
         A(AT_FLAGS, 0);
         A(AT_HWCAP, 0);
         A(AT_RANDOM, aux_random_addr);
