@@ -27,7 +27,8 @@ typedef 仅允许两种：函数指针类型（小写下划线，如 `thread_fun
 | `FS_` / `EXT2_` / `PROC_` | kernel/fs | `EXT2_DIRENT` |
 | `NET_` / `ETH_` / `ARP_` / `IP_` / `TCP_` / `UDP_` | 网络协议栈 | `TCP_PCB` |
 | `E1000_` / `RTL8139_` | 网卡驱动 | — |
-| `IDE_` / `DISK_` | drivers/block | `IDE_CHANNEL` |
+| `PCI_` | drivers/pci 总线枚举 | `PCI_BDF` |
+| `IDE_` / `DISK_` / `BLOCK_` / `NVME_` | drivers/block | `IDE_CHANNEL` |
 | `WL_` / `GFX_` / `COMP_` / `GUI_` / `VGPU_` | kernel/gui | `WL_SURFACE`、`GFX_RGB`、`COMP_BAR_H` |
 | `SYS_` | kernel/syscall 原生 ABI | `SYS_BRK` |
 | `LINUX_` | musl/Linux ABI 兼容层，只用于 ABI 镜像类型 | `LINUX_STAT` |
@@ -87,7 +88,7 @@ syscall 三层前缀，语义固定：
 
 目录即层：
 
-- `drivers/` 只放硬件驱动，如 e1000、rtl8139、ide、keyboard、tty；
+- `drivers/` 只放硬件驱动，如 e1000、rtl8139、ide、nvme、pci 总线枚举、keyboard、tty；
 - 网络协议栈不属于驱动，目标位置 `kernel/net/`；
 - 设备驱动不得放进子系统目录；
 - 无主头文件要么归位，要么删除。

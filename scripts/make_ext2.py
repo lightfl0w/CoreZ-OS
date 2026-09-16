@@ -145,7 +145,8 @@ def build(build_dir, out, smoke=False):
             pre[name] = src.read_bytes()
     names = [n for n in names if n in pre]
     if smoke:
-        pre["autoexec"] = (b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
+        pre["autoexec"] = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
+                           b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
                            b"dev_demo.elf\ntoybox cat /proc/meminfo\n"
                            b"toybox echo TOYBOX_ECHO_OK\n"
                            b"toybox id\ntoybox ls -l /etc/passwd\n"
@@ -395,4 +396,8 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--smoke"]
     arg1 = args[0] if len(args) > 0 else "build"
     arg2 = args[1] if len(args) > 1 else "test_hd.img"
-    build(arg1, arg2, smoke="--smoke" in sys.argv)
+    smoke = "--smoke" in sys.argv
+    build(arg1, arg2, smoke=smoke)
+    nvme_img = Path(arg2).with_name("nvme.img")
+    build(arg1, str(nvme_img), smoke=smoke)
+    print(f"OK: {nvme_img} (nvme copy for -device nvme)")
