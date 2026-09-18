@@ -172,3 +172,58 @@ void lock_release(struct SCHED_LOCK *plock) {
     spinlock_release(&plock->semaphore.lock);
     asm_restore_eflags(old);
 }
+
+/**
+ * 读写锁实现。
+ *
+ * @remarks
+ * 不变量：
+ *  1. readers > 0 时 wlock 已被首个读者持有，写者阻塞在 sema_down(wlock) 上；
+ *  2. 写者自 sema_down(gate) 起直到 sema_up(gate) 为止持有 gate，故写者在等待与
+ *     持锁期间新读者无法进入，实现写者优先；
+ *  3. readers 由 rmutex 保护。
+ * 首个读者获取 wlock 时必然成功（gate 已保证无活跃写者），因此不会在持 rmutex
+ * 的窗口内阻塞。对外契约见 includes/kernel/sched/sync.h。
+ */
+void rwlock_init(struct SCHED_RWLOCK *rw) {
+    sema_init(&rw->gate, 1);
+    sema_init(&rw->rmutex, 1);
+    sema_init(&rw->wlock, 1);
+    rw->readers = 0;
+}
+
+void rwlock_read_acquire(struct SCHED_RWLOCK *rw) {
+    if (current == 0)
+        return;
+    sema_down(&rw->gate);
+    sema_down(&rw->rmutex);
+    if (++rw->readers == 1) {
+        sema_down(&rw->wlock);
+    }
+    sema_up(&rw->rmutex);
+    sema_up(&rw->gate);
+}
+
+void rwlock_read_release(struct SCHED_RWLOCK *rw) {
+    if (current == 0)
+        return;
+    sema_down(&rw->rmutex);
+    if (--rw->readers == 0) {
+        sema_up(&rw->wlock);
+    }
+    sema_up(&rw->rmutex);
+}
+
+void rwlock_write_acquire(struct SCHED_RWLOCK *rw) {
+    if (current == 0)
+        return;
+    sema_down(&rw->gate);
+    sema_down(&rw->wlock);
+}
+
+void rwlock_write_release(struct SCHED_RWLOCK *rw) {
+    if (current == 0)
+        return;
+    sema_up(&rw->wlock);
+    sema_up(&rw->gate);
+}

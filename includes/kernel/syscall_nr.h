@@ -79,7 +79,9 @@ enum SYS_NR {
     SYS_SOCK_FCNTL,
     SYS_SELECT,
     SYS_MKNOD,
-    SYS_SYMLINK
+    SYS_SYMLINK,
+    SYS_SETFGPID,
+    SYS_SMASH
 };
 
 #endif

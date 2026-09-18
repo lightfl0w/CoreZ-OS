@@ -8,5 +8,7 @@ int font_line_height(int px);
 int font_text_width(const char *utf8, int px);
 int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
               gfx_color fg);
+int font_draw_clip(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
+                   gfx_color fg, const struct GFX_RECT *clip);
 int font_utf8_next(const char **sp);
 #endif

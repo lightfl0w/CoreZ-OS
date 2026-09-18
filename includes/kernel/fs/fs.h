@@ -1,7 +1,7 @@
 #ifndef FS_FS_H
 #define FS_FS_H
 
-#include "drivers/block/ide.h"
+#include "drivers/block/block.h"
 #include <stdint.h>
 
 #define MAX_FILES_PER_PART 4096

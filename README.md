@@ -22,7 +22,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | 引导 (Boot)    | `arch/x86/boot/boot.asm`：512 字节主引导扇区，从硬盘分区加载 loader                                                       |
 | 加载器 (Loader) | `arch/x86/boot/loader.asm`：FAT32 读取内核、VBE 图形模式、E820 内存探测、Boot Menu（倒计时/上下键选择 + 重启项）、KASLR 内核加载地址随机化、进入保护模式 → 长模式、构造 Multiboot2 信息 |
 | 中断           | `arch/x86/interrupt`：256 门 IDT，ring3 异常转信号（SIGSEGV 等），COW 缺页处理                                                          |
-| 中断控制器        | `kernel/init/apic`：Local APIC + IPI + LAPIC 定时器（校准 per-tick）；`kernel/init/pic`、`kernel/init/pit`：PIC + PIT 回退路径     |
+| 中断控制器        | `kernel/init/apic`：Local APIC（IPI/EOI）+ IOAPIC 路由；`kernel/init/pic`、`kernel/init/pit`：PIT 是唯一的系统 tick 源（固定 1.193182MHz 分频，无需校准），PIC 仅作无 APIC 时的回退 |
 | ACPI         | `kernel/init/acpi`：RSDP/RSDT/FADT 探测与 ACPI 使能                                                                       |
 | SMP          | `kernel/init/smp`：AP trampoline（低 1MB 实模式跳板）+ INIT/SIPI 唤醒 + 每 CPU GDT/栈                                            |
 | 屏幕输出         | `drivers/char/console`：VBE 线性帧缓冲上绘制字库文本，`kprintf`/`console_putc`，debugcon (0xE9) 镜像输出                               |
@@ -31,10 +31,10 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 
 | 模块       | 说明                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------ |
-| 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框，`palloc`/`pfree`/`palloc_pages`，`mem_lock` 保护                 |
+| 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框；`pool_lock`(物理位图) 与 `map_lock`(页表/虚拟位图) 分离，单页分配走每 CPU 缓存，空闲页数由原子计数 O(1) 读出                 |
 | 内核虚拟地址池  | `KERNEL_VADDR_START` 起的 vaddr 位图，`ioremap` 设备映射（NX/PCD）                                          |
 | 内核堆      | `get_kernel_pages`：高半区（`VIRT_OF = phys + 0xC0000000`）直接映射分配                                       |
-| COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时 `page_cow_resolve` 原子完成决策/拷贝/递减 |
+| COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时在 `map_lock` 下 `page_cow_resolve` 一次完成决策/拷贝/递减 |
 | 用户地址空间   | 每进程独立 PML4 + 用户 vaddr 位图；`mmap`/`brk` 堆扩展                                                        |
 
 ### 进程与调度
@@ -43,7 +43,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | ---------- | ----------------------------------------------------------------------------- |
 | 线程/进程      | `kernel/sched/thread`：任务槽（`MAX_TASKS=64`，可回收）+ 红黑树就绪队列 + 时间片抢占调度，DIED 线程由调度器统一回收（栈/页目录/槽位） |
 | 用户进程       | `kernel/userprog/process`：ring3（`intr_exit` 模拟中断返回）、TSS、TLS（`set_thread_area`） |
-| fork/clone | `kernel/userprog/fork`、`kernel/userprog/clone`：COW 地址空间复制；clone 共享页目录与 fd 表（线程语义） |
+| fork/clone | `kernel/userprog/fork`、`kernel/userprog/clone`：fork 为 COW 地址空间复制；clone 按 flags 解释——`CLONE_VM` 共享页目录与 vaddr 位图（引用计数，最后退出者释放），无 `CLONE_VM` 时为 COW 私有副本，`CLONE_THREAD` 分离线程（不进父子树、退出即回收），`CLONE_SETTLS` 取第 5 参数；`CLONE_FS/FILES/SIGHAND` 无共享结构，按带引用计数的拷贝处理。libc 的 clone 包装为 `clone(fn, stack, flags, arg)`（`apps/lc_clone.asm` 分叉父子路径） |
 | exec       | `kernel/userprog/exec`：ELF32/ELF64 加载、辅助向量（auxv）、参数/环境入栈、W^X（可执行段 RX）          |
 | 退出/等待      | `kernel/userprog/wait_exit`：资源释放、孤儿进程自动终止回收、`wait`/`waitpid`                   |
 
@@ -51,13 +51,13 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 
 | 模块       | 说明                                                                                                                          |
 | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| 同步原语     | `kernel/sched/sync`：信号量、可重入锁（`holder`/`holder_repeat_nr` 由信号量自带 spinlock 保护，多核安全）、自旋锁                                        |
+| 同步原语     | `kernel/sched/sync`：信号量、可重入锁（`holder`/`holder_repeat_nr` 由信号量自带 spinlock 保护，多核安全）、自旋锁、写者优先读写锁（`rwlock_*`）                                        |
 | 系统调用     | `kernel/syscall`：`int 0x80`（原生 ABI）+ `syscall` 指令路径 + musl 兼容层（`linux_compat.c`）；ring0 内核线程调用与 ring3 用户调用分别校验（`access_ok` 仅约束用户指针） |
 | 信号       | `kernel/syscall/signal`：SIGSEGV/SIGINT 等常用信号、`sigaction`/`sigprocmask`/`sigreturn`、Ctrl+C 终止前台进程                             |
 | futex    | `kernel/syscall/futex`：FUTEX\_WAIT/WAKE                                                                                      |
-| 文件系统     | `kernel/fs/ext2`：ext2 只读元数据 + 读写的完整实现（inode/块分配释放、目录项增删、间接块、truncate），全局可重入锁串行化元数据操作                                          |
+| 文件系统     | `kernel/fs/ext2`：ext2 只读元数据 + 读写的完整实现（inode/块分配释放、目录项增删、间接块、truncate），读写锁保护——只读路径并行、写路径排他                                          |
 | 伪文件系统    | `kernel/fs/proc`：`/proc/meminfo`                                                                                             |
-| 文件表      | `kernel/fs/file`：全局 file 表 + 每进程 fd 表，引用计数（fork/clone/dup 共享），`file_table_lock` 保护槽位分配                                        |
+| 文件表      | `kernel/fs/file`：全局 file 表 + 每进程 fd 表，引用计数（fork/clone/dup 共享）为原子操作，槽位分配走 CAS 位图（无需锁）                                        |
 | 管道       | `kernel/shell/pipe`：ioqueue 实现的匿名管道，`pipe`/`fd_redirect`，shell 支持 `cmd1 \| cmd2`                                              |
 | inode 缓存 | `kernel/fs/inode`：每分区红黑树缓存打开的 inode（`i_open_cnt` 引用计数，开/关中断对称保护）                                                             |
 
@@ -69,7 +69,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | 鼠标  | `drivers/char/mouse`：PS/2 aux 通道，三字节包解析                                                                                                    |
 | 磁盘  | `drivers/block/ide`：IDE 通道 + 分区表解析，对接 block\_ops                                                                                           |
 | 网卡  | `drivers/net/e1000`、`drivers/net/rtl8139`：PCI 探测、MMIO/IO 寄存器、TX/RX 描述符环                                                                     |
-| 网络栈 | `drivers/net`：Ethernet/ARP/IP/ICMP/TCP/UDP + BSD socket API（`socket`/`bind`/`connect`/`send`/`recv`/`select`），QEMU user 网络下自动配置 `10.0.2.15` |
+| 网络栈 | `drivers/net`：Ethernet/ARP/IP/ICMP/TCP/UDP + BSD socket API（`socket`/`bind`/`connect`/`send`/`recv`/`select`），QEMU user 网络下自动配置 `10.0.2.15`；收包在 net 线程轮询完成（非中断上下文），共享状态由 `net_lock` 互斥，不再关中断跑完整条协议栈 |
 | GUI | `kernel/gui`：合成器（类 Wayland 的 surface/client 模型）、可替换平铺布局（Master-Stack/Tall/Wide/Monocle）、鼠标键盘事件分发，shell 输入 `gui` 进入                            |
 
 ### Shell 与用户程序
@@ -174,13 +174,21 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 内核所有 `kprintf`/控制台输出会同步镜像到 QEMU debugcon（端口 0xE9），
 `-debugcon stdio`/`file:...` 可在终端或文件中查看内核日志，便于无头调试。
 
+## 安全边界与威胁模型
+
+- **不在范围**：多用户登录与认证、进程间信任隔离（namespace/沙箱）、
+  崩溃后的数据完整性、侧信道防护。GS 段在用户态为 `NULL` 选择子（基址 0），
+  未实现 `swapgs`/`MSR_KERNEL_GS_BASE` 模式。
+  用户态无法自定义 GS 基址，故无泄漏面；引入该接口时须同步实现。
+
 ## 已知问题
 
-- 用户 fork 的子进程在进入用户态后触发 SIGSEGV（退出码 139），fork 子进程侧
-  功能暂不可用；父进程路径与 COW 建页正常。与 exec 的 W^X / COW / NX 互作用有关。
 - e1000 初始化在大规模内存分配压力下可能缺页（`ioremap` 的映射丢失，原因待查），
   正常负载下网络工作正常。
-- ext2 与 file\_table 采用粗粒度全局锁，正确性优先、吞吐串行化。
+- 并发：物理页池按 `pool_lock`(位图)/`map_lock`(页表) 拆分，单页分配经每 CPU 缓存、
+  空闲页数用原子计数；ext2 元数据用读写锁（读并行/写排他）；file 表槽位分配与引用计数
+  无锁；网络栈共享状态由 `net_lock` 保护（收包在 net 线程任务上下文，用可阻塞锁而非
+  关中断）。SMP 调度尚未启用（AP 仅验证可启动），这些机制是为多核做的前置准备。
 
 ## 参考资料与致谢
 

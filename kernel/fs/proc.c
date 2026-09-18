@@ -64,15 +64,9 @@ static int proc_node_of(const char *path) {
 }
 
 static uint32_t meminfo_build(char *dst, uint32_t cap) {
-    uint32_t bytes = kernel_pool.pool_bitmap.btmp_bytes_len;
-    uint32_t used = 0;
-    for (uint32_t i = 0; i < bytes; i++) {
-        used += __builtin_popcount(kernel_pool.pool_bitmap.bits[i]);
-    }
-    uint32_t nframes = bytes * 8;
-    uint32_t total_kb = nframes * (PAGE_SIZE / 1024);
-    uint32_t free_kb = (nframes - used) * (PAGE_SIZE / 1024);
-    uint32_t used_kb = used * (PAGE_SIZE / 1024);
+    uint32_t total_kb = kernel_pool.pool_size / 1024;
+    uint32_t free_kb = kernel_pool_free_count() * (PAGE_SIZE / 1024);
+    uint32_t used_kb = total_kb > free_kb ? total_kb - free_kb : 0;
     (void)cap;
     return sprintf(dst,
                    "MemTotal:     %d kB\n"

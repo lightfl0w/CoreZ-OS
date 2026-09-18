@@ -57,14 +57,13 @@ int32_t sys_dup(int32_t oldfd) {
         return -1;
     }
     uint32_t global_fd = (uint32_t)(pf - file_table);
-    lock_acquire(&file_table_lock);
+
+    file_table_ref(global_fd);
     int newfd = fd_install((int32_t)global_fd);
     if (newfd == -1) {
-        lock_release(&file_table_lock);
+        file_table_unref(global_fd);
         return -1;
     }
-    file_table_ref(global_fd);
-    lock_release(&file_table_lock);
     return newfd;
 }
 
@@ -81,13 +80,11 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     }
     uint32_t global_fd = (uint32_t)(pf - file_table);
 
-    lock_acquire(&file_table_lock);
+    file_table_ref(global_fd);
     if (current->fd_table[newfd] != (uint32_t)-1) {
         close_file(newfd);
     }
     current->fd_table[newfd] = global_fd;
-    file_table_ref(global_fd);
-    lock_release(&file_table_lock);
     return newfd;
 }
 

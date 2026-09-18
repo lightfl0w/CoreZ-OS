@@ -303,6 +303,15 @@ static int sig_default_terminates(struct TASK *t, int sig) {
     return 0;
 }
 
+static int signal_wake_interruptible(struct TASK *t) {
+    if (!t->sleep_intr) {
+        return 0;
+    }
+    t->sleep_eintr = 1;
+    thread_ready(t);
+    return 1;
+}
+
 int sys_kill(int pid, int sig) {
     if (pid < 0) {
         uint32_t pgid = (uint32_t)(-pid);
@@ -313,7 +322,9 @@ int sys_kill(int pid, int sig) {
                 continue;
             if (t->pid != pgid)
                 continue;
-            thread_kill_pid(t->pid);
+            if (!signal_wake_interruptible(t)) {
+                thread_kill_pid(t->pid);
+            }
             t->signal_pending |= (1u << (sig & 31));
             n++;
         }
@@ -343,6 +354,9 @@ int sys_kill(int pid, int sig) {
         return 0;
     }
     t->signal_pending |= (1u << sig);
+    if (signal_wake_interruptible(t)) {
+        return 0;
+    }
     if (t->status == TASK_WAITING) {
         thread_ready(t);
     } else if (t->status & (TASK_BLOCKED | TASK_STOPPED)) {
@@ -435,7 +449,7 @@ void itimer_tick(void) {
         }
         t->signal_pending |= (1u << SIGALRM);
         t->itimer_expire = t->itimer_interval ? now + t->itimer_interval : 0;
-        if (t->status == TASK_WAITING) {
+        if (!signal_wake_interruptible(t) && t->status == TASK_WAITING) {
             thread_ready(t);
         }
     }

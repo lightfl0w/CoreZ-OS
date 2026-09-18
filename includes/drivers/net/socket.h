@@ -18,6 +18,9 @@
 #define EINPROGRESS 115
 #define EOPNOTSUPP 95
 
+#define SEL_FD_SET_BYTES 128u
+#define SEL_FD_SET_FDS (SEL_FD_SET_BYTES * 8u)
+
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2

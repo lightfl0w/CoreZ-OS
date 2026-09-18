@@ -134,8 +134,18 @@ static void scroll_screen(void) {
 }
 
 static void putc(char c) {
+    if (gui_active) {
+        if (c == '\n')
+            outb(DEBUG_CONSOLE_PORT, (uint8_t)'\r');
+        outb(DEBUG_CONSOLE_PORT, (uint8_t)c);
+        return;
+    }
     if (c == '\r') {
         cursor_x = 0;
+    } else if (c == '\b') {
+        if (cursor_x >= 8) {
+            cursor_x -= 8;
+        }
     } else if (c == '\n') {
         cursor_y += PRINTF_LINE_GAP;
         cursor_x = 0;

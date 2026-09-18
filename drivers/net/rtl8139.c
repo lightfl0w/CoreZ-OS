@@ -15,6 +15,8 @@
 #define REG_TSD0 0x10
 #define REG_TSAD0 0x20
 
+#define RTL8139_TX_WAIT_SPINS 100000u
+
 #define V2P(x)                                                                 \
     ((uint32_t)(x) >= 0xC0000000u                                              \
          ? ((uint32_t)(x) - 0xC0000000u)                                       \
@@ -82,17 +84,23 @@ int rtl8139_init(NETIF *ifp) {
     return 0;
 }
 
+static int rtl8139_tx_wait(uint32_t slot) {
+    for (uint32_t i = 0; i < RTL8139_TX_WAIT_SPINS; i++) {
+        if (inl(ioaddr + REG_TSD0 + slot * 4) & (1u << 13))
+            return 1;
+        asm_pause();
+    }
+    return 0;
+}
+
 int rtl8139_tx(NETIF *ifp, const void *frame, uint32_t len) {
     (void)ifp;
     outl(ioaddr + REG_TSAD0 + tx_slot * 4, V2P(frame));
     outl(ioaddr + REG_TSD0 + tx_slot * 4, len);
 
-    for (uint32_t i = 0; i < 100000; i++) {
-        if (inl(ioaddr + REG_TSD0 + tx_slot * 4) & (1 << 13))
-            break;
-    }
+    int done = rtl8139_tx_wait(tx_slot);
     tx_slot = (tx_slot + 1) & 3;
-    return (int)len;
+    return done ? (int)len : -1;
 }
 
 int rtl8139_rx(NETIF *ifp, void *buf, uint32_t maxlen) {

@@ -104,6 +104,9 @@ void gfx_blit_round(struct GFX_CANVAS *dst, int dx, int dy,
                     int corners);
 int gfx_rect_intersect(struct GFX_RECT a, struct GFX_RECT b,
                        struct GFX_RECT *out);
+void gfx_blit_scale(struct GFX_CANVAS *dst, int dx, int dy, int dw, int dh,
+                    const struct GFX_CANVAS *src, int sx, int sy, int sw,
+                    int sh);
 void gfx_present(struct GFX_CANVAS *dst, int dx, int dy,
                  const struct GFX_CANVAS *src, int sx, int sy, int w, int h);
 

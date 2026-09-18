@@ -10,6 +10,7 @@
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
+#include "kernel/fs/dir.h"
 #include "kernel/gui/gui.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/gdt/gdt.h"
@@ -69,7 +70,15 @@ int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) 
     if (ms > 0x7fffffffU) {
         ms = 0x7fffffffU;
     }
-    mtime_sleep(ms);
+    if (mtime_sleep_interruptible(ms) == -EINTR) {
+        if (rem != NULL) {
+            uint64_t ns = (uint64_t)current->sleep_left *
+                          (uint64_t)(1000000000u / PIT_HZ);
+            rem->tv_sec = (int32_t)(ns / 1000000000ull);
+            rem->tv_nsec = (int32_t)(ns % 1000000000ull);
+        }
+        return -EINTR;
+    }
     if (rem != NULL) {
         memset(rem, 0, sizeof(*rem));
     }
@@ -227,14 +236,29 @@ static int ok_write(struct X86_REGS *r, uint32_t p, uint32_t n) {
     return kern_call(r) || access_ok((const void *)p, (size_t)n, 1);
 }
 
-static const char *path_arg(struct X86_REGS *r, char *kbuf, uint32_t cap) {
+/**
+ * 从指定参数寄存器取路径参数。
+ *
+ * @param reg 寄存器里的原始指针
+ * @param kbuf 用户路径的内核拷贝缓冲
+ * @param cap kbuf 容量
+ * @returns 可供文件系统使用的路径指针；用户指针不可达时返回 NULL
+ * @remarks 内核调用方直接透传；用户调用方经 copy_str_from_user 逐页校验
+ *          PTE_U 后拷入内核缓冲，杜绝内核 strlen 越过未映射页引发 panic
+ */
+static const char *path_arg_reg(struct X86_REGS *r, uint32_t reg, char *kbuf,
+                                uint32_t cap) {
     if (kern_call(r)) {
-        return (const char *)r->ebx;
+        return (const char *)reg;
     }
-    if (copy_str_from_user(kbuf, (const char *)r->ebx, cap) != 0) {
+    if (copy_str_from_user(kbuf, (const char *)(uintptr_t)reg, cap) != 0) {
         return NULL;
     }
     return kbuf;
+}
+
+static const char *path_arg(struct X86_REGS *r, char *kbuf, uint32_t cap) {
+    return path_arg_reg(r, (uint32_t)r->ebx, kbuf, cap);
 }
 
 static int64_t nsys_getpid(struct X86_REGS *r) {
@@ -337,7 +361,7 @@ static int64_t nsys_opendir(struct X86_REGS *r) {
     if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_opendir(p);
+    return (uint32_t)(uintptr_t)sys_opendir(p);
 }
 
 static int64_t nsys_closedir(struct X86_REGS *r) {
@@ -345,7 +369,18 @@ static int64_t nsys_closedir(struct X86_REGS *r) {
 }
 
 static int64_t nsys_readdir(struct X86_REGS *r) {
-    return (uint32_t)sys_readdir((struct FS_DIR *)r->ebx);
+    struct FS_DIRENT *dir_e =
+        sys_readdir((struct FS_DIR *)(uintptr_t)r->ebx);
+    if (dir_e == NULL) {
+        return 0;
+    }
+    if (!ok_write(r, r->ecx, sizeof(struct FS_DIRENT))) {
+        return 0;
+    }
+    if (copy_to_user((void *)r->ecx, dir_e, sizeof(struct FS_DIRENT)) != 0) {
+        return 0;
+    }
+    return r->ecx;
 }
 
 static int64_t nsys_rewinddir(struct X86_REGS *r) {
@@ -509,54 +544,91 @@ static int64_t nsys_getdents(struct X86_REGS *r) {
 }
 
 static int64_t nsys_readlink(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1) || !ok_write(r, r->ecx, r->edx)) {
+    char kp[MAX_PATH_LEN];
+    const char *p = path_arg(r, kp, MAX_PATH_LEN);
+    if (p == NULL || !ok_write(r, r->ecx, r->edx)) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_readlink((const char *)r->ebx, (char *)r->ecx,
-                                  (uint32_t)r->edx);
+    return (uint32_t)sys_readlink(p, (char *)r->ecx, (uint32_t)r->edx);
 }
 
 static int64_t nsys_access(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1)) {
+    char kp[MAX_PATH_LEN];
+    const char *p = path_arg(r, kp, MAX_PATH_LEN);
+    if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_access((const char *)r->ebx, (int32_t)r->ecx);
+    return (uint32_t)sys_access(p, (int32_t)r->ecx);
 }
 
 static int64_t nsys_rename(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1) || !ok_read(r, r->ecx, 1)) {
+    char kp_old[MAX_PATH_LEN];
+    char kp_new[MAX_PATH_LEN];
+    const char *po = path_arg(r, kp_old, MAX_PATH_LEN);
+    const char *pn = path_arg_reg(r, r->ecx, kp_new, MAX_PATH_LEN);
+    if (po == NULL || pn == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_rename((const char *)r->ebx, (const char *)r->ecx);
+    return (uint32_t)sys_rename(po, pn);
 }
 
 static int64_t nsys_truncate(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1)) {
+    char kp[MAX_PATH_LEN];
+    const char *p = path_arg(r, kp, MAX_PATH_LEN);
+    if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_truncate((const char *)r->ebx, (int32_t)r->ecx);
+    return (uint32_t)sys_truncate(p, (int32_t)r->ecx);
 }
 
 static int64_t nsys_chmod(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1)) {
+    char kp[MAX_PATH_LEN];
+    const char *p = path_arg(r, kp, MAX_PATH_LEN);
+    if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_chmod((const char *)r->ebx, (uint32_t)r->ecx);
+    return (uint32_t)sys_chmod(p, (uint32_t)r->ecx);
 }
 
 static int64_t nsys_symlink(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1) || !ok_read(r, r->ecx, 1)) {
+    char kp_target[MAX_PATH_LEN];
+    char kp_link[MAX_PATH_LEN];
+    const char *pt = path_arg(r, kp_target, MAX_PATH_LEN);
+    const char *pl = path_arg_reg(r, r->ecx, kp_link, MAX_PATH_LEN);
+    if (pt == NULL || pl == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_symlink((const char *)r->ebx, (const char *)r->ecx);
+    return (uint32_t)sys_symlink(pt, pl);
 }
 
 static int64_t nsys_mknod(struct X86_REGS *r) {
-    if (!ok_read(r, r->ebx, 1)) {
+    char kp[MAX_PATH_LEN];
+    const char *p = path_arg(r, kp, MAX_PATH_LEN);
+    if (p == NULL) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_mknod((const char *)r->ebx, (uint32_t)r->ecx,
-                               (uint32_t)r->edx);
+    return (uint32_t)sys_mknod(p, (uint32_t)r->ecx, (uint32_t)r->edx);
+}
+
+static int64_t nsys_setfgpid(struct X86_REGS *r) {
+    extern uint32_t foreground_pid;
+    foreground_pid = (uint32_t)r->ebx;
+    return 0;
+}
+
+__attribute__((noinline)) static void smash_frame(void) {
+    char buf[8];
+    kprintf("[smash] overflowing kernel stack frame\n");
+    for (int32_t i = 0; i < 128; i++) {
+        buf[i] = 0x41;
+    }
+}
+
+static int64_t nsys_smash(struct X86_REGS *r) {
+    (void)r;
+    smash_frame();
+    kprintf("[smash] returned, canary failed to detect\n");
+    return 0;
 }
 
 static int64_t nsys_clock_gettime(struct X86_REGS *r) {
@@ -691,15 +763,34 @@ static int64_t nsys_getpeername(struct X86_REGS *r) {
 }
 
 static int64_t nsys_getsockopt(struct X86_REGS *r) {
-    if (!ok_write(r, r->esi, 4) || !ok_write(r, r->edi, 4)) {
+    uint32_t klen = 0;
+    uint32_t kval = 0;
+    if (r->edi != 0 &&
+        copy_from_user(&klen, (const void *)r->edi, sizeof(klen)) != 0) {
         return (uint32_t)-1;
     }
-    return (uint32_t)net_getsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,
-                                    (void *)r->esi, (uint32_t *)r->edi);
+    if (r->esi != 0 && !ok_write(r, r->esi, sizeof(kval))) {
+        return (uint32_t)-1;
+    }
+    int32_t rc = (int32_t)net_getsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,
+                                         r->esi != 0 ? &kval : NULL,
+                                         r->edi != 0 ? &klen : NULL);
+    if (rc != 0) {
+        return (uint32_t)(int64_t)rc;
+    }
+    if (r->esi != 0 &&
+        copy_to_user((void *)r->esi, &kval, sizeof(kval)) != 0) {
+        return (uint32_t)-1;
+    }
+    if (r->edi != 0 &&
+        copy_to_user((void *)r->edi, &klen, sizeof(klen)) != 0) {
+        return (uint32_t)-1;
+    }
+    return 0;
 }
 
 static int64_t nsys_setsockopt(struct X86_REGS *r) {
-    if (!ok_write(r, r->esi, 4)) {
+    if (!ok_read(r, r->esi, r->edi)) {
         return (uint32_t)-1;
     }
     return (uint32_t)net_setsockopt((int)r->ebx, (int)r->ecx, (int)r->edx,
@@ -711,10 +802,17 @@ static int64_t nsys_sock_fcntl(struct X86_REGS *r) {
 }
 
 static int64_t nsys_select(struct X86_REGS *r) {
-    if ((r->ecx && !ok_write(r, r->ecx, 8)) ||
-        (r->edx && !ok_write(r, r->edx, 8)) ||
-        (r->esi && !ok_write(r, r->esi, 8))) {
+    int32_t nfds = (int32_t)r->ebx;
+    if (nfds < 0 || (uint32_t)nfds > SEL_FD_SET_FDS) {
         return (uint32_t)-1;
+    }
+    uint32_t bytes = ((uint32_t)nfds + 31u) / 32u * 4u;
+    if (bytes != 0) {
+        if ((r->ecx && !ok_write(r, r->ecx, bytes)) ||
+            (r->edx && !ok_write(r, r->edx, bytes)) ||
+            (r->esi && !ok_write(r, r->esi, bytes))) {
+            return (uint32_t)-1;
+        }
     }
     return (uint32_t)net_select((int)r->ebx, (uint32_t *)r->ecx,
                                 (uint32_t *)r->edx, (uint32_t *)r->esi,
@@ -766,6 +864,7 @@ static const nsys_fn nsys_table[] = {
     [SYS_GETSOCKOPT] = nsys_getsockopt, [SYS_SETSOCKOPT] = nsys_setsockopt,
     [SYS_SOCK_FCNTL] = nsys_sock_fcntl, [SYS_SELECT] = nsys_select,
     [SYS_MKNOD] = nsys_mknod,         [SYS_SYMLINK] = nsys_symlink,
+    [SYS_SETFGPID] = nsys_setfgpid,   [SYS_SMASH] = nsys_smash,
 };
 
 uint64_t syscall_handler(struct X86_REGS *r) {

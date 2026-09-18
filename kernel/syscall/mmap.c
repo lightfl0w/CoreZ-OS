@@ -50,8 +50,8 @@ static uint32_t map_run(uint32_t base, uint32_t pages, uint32_t prot) {
 }
 
 static void fill_file(uint32_t fd, uint32_t off, uint32_t base, uint32_t len) {
-    int32_t old = sys_lseek((int32_t)fd, 0, 1);
-    if (sys_lseek((int32_t)fd, (int32_t)off, 0) < 0)
+    int32_t old = sys_lseek((int32_t)fd, 0, SEEK_CUR);
+    if (sys_lseek((int32_t)fd, (int32_t)off, SEEK_SET) < 0)
         return;
     for (uint32_t done = 0; done < len;) {
         int32_t n =
@@ -112,10 +112,13 @@ uint32_t sys_mmap(const struct SYS_MMAP_ARGS *a) {
     } else {
         base = find_free_region(pages);
     }
-    if (base == 0 || map_run(base, pages, a->prot) == 0)
+    if (base == 0 || map_run(base, pages, PROT_READ | PROT_WRITE) == 0)
         return -LINUX_ENOMEM;
     if (!(a->flags & MAP_ANONYMOUS) && (int32_t)a->fd >= 0)
         fill_file(a->fd, a->offset, base, len);
+
+    for (uint32_t i = 0; i < pages; i++)
+        apply_prot(base + i * PAGE_SIZE, a->prot);
     return base;
 }
 

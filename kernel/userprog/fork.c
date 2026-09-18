@@ -7,23 +7,12 @@
 #include "kernel/mm/bitmap/bitmap.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/shell/pipe.h"
-#include "kernel/shell/shell.h"
+#include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/exec.h"
 #include "kernel/userprog/process.h"
 #include "kernel/userprog/wait_exit.h"
 extern void intr_exit(void);
-extern char *argv[];
-
-static void kthread_fork_exec(void *unused) {
-    (void)unused;
-    if (sys_execv(final_path, (const char **)argv, NULL) == -1) {
-        kprintf("execv %s failed.\n", final_path);
-        sys_exit(-1);
-    }
-    for (;;) {
-    }
-}
 
 static void mark_child_bitmap(struct TASK *child, uint32_t vaddr) {
     uint32_t bit = (vaddr - USER_VADDR_START) / PAGE_SIZE;
@@ -113,24 +102,24 @@ static void share_user_space_cow(struct TASK *child, uint64_t *pdp,
     }
 }
 
-static void copy_user_space(struct TASK *parent,
-                            struct TASK *child) {
+int copy_user_space(struct TASK *parent, struct TASK *child) {
     if (parent->pml4_phys == 0) {
-        return;
+        return 0;
     }
 
     uint64_t *parent_pml4 = (uint64_t *)VIRT_OF(parent->pml4_phys);
     uint64_t *child_pml4 = (uint64_t *)VIRT_OF(child->pml4_phys);
     uint64_t pml4e = parent_pml4[0];
     if (!(pml4e & PTE_P)) {
-        return;
+        return 0;
     }
     uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
     uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
     if (alloc_child_page_tables(child, pdp, child_pdp) != 0) {
-        return;
+        return -1;
     }
     share_user_space_cow(child, pdp, child_pdp);
+    return 0;
 }
 
 static void build_child_stack(struct TASK *child,
@@ -151,6 +140,9 @@ static void build_child_stack(struct TASK *child,
 
 pid_t sys_fork(struct X86_REGS *r) {
     struct TASK *parent = current;
+    if (parent->pml4_phys == 0) {
+        return -1;
+    }
     struct TASK *child =
         thread_alloc_slot(parent->name, parent->priority);
     if (child == NULL) {
@@ -189,26 +181,30 @@ pid_t sys_fork(struct X86_REGS *r) {
     create_user_vaddr_bitmap(child);
     child->pml4_phys = (uint32_t)create_page_dir();
     if (child->pml4_phys == 0) {
-        return -1;
+        goto fork_fail;
     }
-    copy_user_space(parent, child);
-    if (parent->pml4_phys == 0) {
-        struct TASK_STACK *ts =
-            (struct TASK_STACK *)((uint8_t *)child->kernel_stack_top -
-                                    sizeof(struct TASK_STACK));
-        memset(ts, 0, sizeof(struct TASK_STACK));
-        ts->rflags = RFLAGS_INIT;
-        ts->r15 = (uint64_t)kthread_fork_exec;
-        ts->r14 = 0;
-        ts->rip = kernel_thread_entry;
-        child->self_kstack = (uint64_t *)ts;
-    } else {
-        build_child_stack(child, r);
+    space_ref(child->pml4_phys);
+    if (copy_user_space(parent, child) != 0) {
+        goto fork_fail;
     }
+    build_child_stack(child, r);
     child->status = TASK_BLOCKED;
     if (foreground_pid == parent->pid) {
         foreground_pid = child->pid;
     }
     thread_ready(child);
     return (pid_t)child->pid;
+
+fork_fail:
+    free_user_space(child, child->pml4_phys);
+    for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
+        uint32_t g = child->fd_table[i];
+        if (g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
+            if (file_table[g].ref_cnt > 0) {
+                file_table_unref(g);
+            }
+        }
+    }
+    thread_exit(child, 0);
+    return -1;
 }

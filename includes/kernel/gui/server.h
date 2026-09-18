@@ -48,10 +48,12 @@ struct WL_SURFACE {
     int x, y, w, h;
     int ws;
     int floating;
-
+    uint8_t alpha;
     uint8_t *buf;
     int buf_w, buf_h;
     int frame_pending;
+    void *x11_owner;
+    uint32_t x11_xid;
 };
 
 struct WL_CLIENT *wl_display_connect(const char *name);
@@ -69,6 +71,9 @@ void comp_run(void);
 void comp_request_exit(void);
 void comp_damage_rect(int x, int y, int w, int h);
 void comp_damage_surface(struct WL_SURFACE *s);
+
+void comp_set_wallpaper(const uint32_t *pixels, int w, int h);
+void comp_damage_content(struct WL_SURFACE *s);
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods);
 void comp_post_mouse(int dx, int dy, uint8_t buttons);
 void comp_log(const char *s);
@@ -79,15 +84,17 @@ int comp_screen_h(void);
 void comp_send_configure(struct WL_SURFACE *s, int w, int h);
 void comp_send_close(struct WL_SURFACE *s);
 void comp_send_key(struct WL_SURFACE *s, int scancode, int pressed, int mods);
-
 void comp_destroy_surface_pool(struct WL_SURFACE *s, struct WL_SHM_POOL **pool);
+int comp_pointer_x(void);
+int comp_pointer_y(void);
+uint8_t comp_pointer_buttons(void);
+void wl_surface_set_alpha(struct WL_SURFACE *s, int alpha);
 
-#define COMP_BAR_H 22
-#define COMP_TITLE_H 18
-#define COMP_BORDER 2
-#define COMP_GAP 8
+#define COMP_BAR_H 30
+#define COMP_TITLE_H 26
+#define COMP_BORDER 1
 
-#define WIN_RADIUS 8
-#define WIN_SHADOW 6
+#define WIN_RADIUS 10
+#define WIN_RESIZE_GRAB 5
 
 #endif

@@ -14,6 +14,15 @@ struct ACPI_FADT *FADT = NULL;
 #define ACPI_MAP_PAGE 0x200000u
 #define ACPI_MAP_MAX 128
 
+#define APIC_MMIO_IOAPIC_VADDR 0x40000000u
+#define APIC_MMIO_LAPIC_VADDR 0x40200000u
+#define APIC_MMIO_PD_IOAPIC 0u
+#define APIC_MMIO_PD_LAPIC 1u
+#define PTE_KERN_RW 0x83u
+
+static struct ACPI_MADT_INFO s_madt;
+static int s_madt_ok;
+
 static uint32_t acpi_mapped_phys[ACPI_MAP_MAX];
 static uint32_t acpi_map_nr;
 
@@ -120,6 +129,110 @@ struct ACPI_SDT_HEADER *acpi_find_table(const char *signature) {
     return NULL;
 }
 
+static void madt_remap_mmio(void) {
+    uint64_t *pd = phys_to_virt(ACPI_SHARED_PD);
+
+    pd[APIC_MMIO_PD_IOAPIC] =
+        (uint64_t)(s_madt.ioapic_addr & ~0xFFFu) | PTE_KERN_RW;
+    pd[APIC_MMIO_PD_LAPIC] =
+        (uint64_t)(s_madt.lapic_addr & ~0xFFFu) | PTE_KERN_RW;
+    __asm__ volatile("invlpg (%0)" ::"r"(APIC_MMIO_IOAPIC_VADDR) : "memory");
+    __asm__ volatile("invlpg (%0)" ::"r"(APIC_MMIO_LAPIC_VADDR) : "memory");
+}
+
+static void madt_parse(void) {
+    struct ACPI_SDT_HEADER *hdr = acpi_find_table("APIC");
+    if (!hdr) {
+        kprintf("[ACPI] MADT not found, APIC topology unavailable\n");
+        return;
+    }
+    if (hdr->len < ACPI_MADT_FIXED_LEN ||
+        !acpi_checksum((uint8_t *)hdr, hdr->len)) {
+        kprintf("[ACPI] MADT invalid\n");
+        return;
+    }
+
+    struct ACPI_MADT *madt = (struct ACPI_MADT *)hdr;
+    s_madt.lapic_addr =
+        madt->lapic_addr ? madt->lapic_addr : ACPI_APIC_DEFAULT_LAPIC;
+    s_madt.ioapic_addr = 0;
+    s_madt.ioapic_gsi_base = 0;
+    s_madt.lapic_nr = 0;
+    for (uint32_t i = 0; i < ACPI_LEGACY_IRQ_NR; i++) {
+        s_madt.irq_gsi[i] = i;
+        s_madt.irq_flags[i] = 0;
+    }
+
+    uint32_t raw_gsi[ACPI_LEGACY_IRQ_NR];
+    uint16_t raw_flags[ACPI_LEGACY_IRQ_NR];
+    uint8_t raw_seen[ACPI_LEGACY_IRQ_NR];
+    memset(raw_seen, 0, sizeof(raw_seen));
+
+    uint8_t *p = (uint8_t *)hdr + ACPI_MADT_FIXED_LEN;
+    uint8_t *end = (uint8_t *)hdr + hdr->len;
+    while (p + 2 <= end) {
+        uint8_t type = p[0];
+        uint8_t len = p[1];
+        if (len < 2 || p + len > end) {
+            kprintf("[ACPI] MADT entry truncated at offset %u\n",
+                    (unsigned)(p - (uint8_t *)hdr));
+            break;
+        }
+        if (type == ACPI_MADT_TYPE_LAPIC && len >= ACPI_MADT_LAPIC_LEN) {
+            struct ACPI_MADT_LAPIC *e = (struct ACPI_MADT_LAPIC *)p;
+            if ((e->flags & 1u) && s_madt.lapic_nr < ACPI_MAX_CPUS) {
+                s_madt.lapic_apic_id[s_madt.lapic_nr++] = e->apic_id;
+            }
+        } else if (type == ACPI_MADT_TYPE_IOAPIC && len >= ACPI_MADT_IOAPIC_LEN) {
+            struct ACPI_MADT_IOAPIC *e = (struct ACPI_MADT_IOAPIC *)p;
+            if (s_madt.ioapic_addr == 0) {
+                s_madt.ioapic_addr = e->ioapic_addr;
+                s_madt.ioapic_gsi_base = e->gsi_base;
+            }
+        } else if (type == ACPI_MADT_TYPE_ISO && len >= ACPI_MADT_ISO_LEN) {
+            struct ACPI_MADT_ISO *e = (struct ACPI_MADT_ISO *)p;
+            if (e->bus == 0 && e->source_irq < ACPI_LEGACY_IRQ_NR) {
+                raw_gsi[e->source_irq] = e->gsi;
+                raw_flags[e->source_irq] = e->flags;
+                raw_seen[e->source_irq] = 1;
+            }
+        }
+        p += len;
+    }
+
+    if (s_madt.ioapic_addr == 0) {
+        s_madt.ioapic_addr = ACPI_APIC_DEFAULT_IOAPIC;
+    }
+    for (uint32_t i = 0; i < ACPI_LEGACY_IRQ_NR; i++) {
+        if (!raw_seen[i]) {
+            continue;
+        }
+        if (raw_gsi[i] < s_madt.ioapic_gsi_base) {
+            kprintf("[ACPI] ISO irq%u -> gsi%u before ioapic base, ignored\n",
+                    i, (unsigned)raw_gsi[i]);
+            continue;
+        }
+        s_madt.irq_gsi[i] = raw_gsi[i];
+        s_madt.irq_flags[i] = raw_flags[i];
+    }
+
+    s_madt_ok = 1;
+    kprintf("[ACPI] MADT lapic=0x%x ioapic=0x%x gsi_base=%u cpus=%u\n",
+            s_madt.lapic_addr, s_madt.ioapic_addr,
+            (unsigned)s_madt.ioapic_gsi_base, (unsigned)s_madt.lapic_nr);
+    for (uint32_t i = 0; i < ACPI_LEGACY_IRQ_NR; i++) {
+        if (raw_seen[i]) {
+            kprintf("[ACPI]   ISO irq%u -> gsi%u flags=0x%x\n", i,
+                    (unsigned)s_madt.irq_gsi[i], (unsigned)s_madt.irq_flags[i]);
+        }
+    }
+    madt_remap_mmio();
+}
+
+const struct ACPI_MADT_INFO *acpi_madt(void) {
+    return s_madt_ok ? &s_madt : NULL;
+}
+
 void acpi_init(void) {
     kprintf("[ACPI] searching for RSDP...\n");
     RSDP = acpi_find_rsdp();
@@ -127,7 +240,7 @@ void acpi_init(void) {
         kprintf("[ACPI] RSDP not found\n");
         return;
     }
-    kprintf("[ACPI] RSDP found, revision %d\n", RSDP, RSDP->revision);
+    kprintf("[ACPI] RSDP found, revision %u\n", (unsigned)RSDP->revision);
 
     if (RSDP->revision >= 2 && RSDP->xsdt_address) {
         kprintf("[ACPI] mapping XSDT at 0x%lx\n", RSDP->xsdt_address);
@@ -148,6 +261,8 @@ void acpi_init(void) {
         }
         kprintf("[ACPI] RSDT found\n");
     }
+
+    madt_parse();
 
     FADT = (struct ACPI_FADT *)acpi_find_table("FACP");
     if (!FADT || !acpi_checksum((uint8_t *)FADT, FADT->header.len)) {

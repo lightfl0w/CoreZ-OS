@@ -38,34 +38,45 @@ static uint16_t udp_sum(const uint8_t *pkt, uint32_t len, uint32_t saddr,
 }
 
 struct UDP_PCB *udp_pcb_alloc(void) {
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_UDP_PCB; i++) {
         if (!s_upcb[i].active) {
             memset(&s_upcb[i], 0, sizeof s_upcb[i]);
             s_upcb[i].active = 1;
+            lock_release(&net_lock);
             return &s_upcb[i];
         }
     }
+    lock_release(&net_lock);
     return 0;
 }
 
 void udp_pcb_free(struct UDP_PCB *pcb) {
+    lock_acquire(&net_lock);
     pcb->active = 0;
+    lock_release(&net_lock);
 }
 
 int udp_bind(struct UDP_PCB *pcb, uint32_t ip, uint16_t port) {
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_UDP_PCB; i++) {
         struct UDP_PCB *o = &s_upcb[i];
-        if (o->active && o != pcb && o->local_port == port)
+        if (o->active && o != pcb && o->local_port == port) {
+            lock_release(&net_lock);
             return -1;
+        }
     }
     pcb->local_ip = ip;
     pcb->local_port = port;
+    lock_release(&net_lock);
     return 0;
 }
 
 void udp_connect(struct UDP_PCB *pcb, uint32_t ip, uint16_t port) {
+    lock_acquire(&net_lock);
     pcb->remote_ip = ip;
     pcb->remote_port = port;
+    lock_release(&net_lock);
 }
 
 int udp_sendto(NETIF *ifp, struct UDP_PCB *pcb, const void *data, uint32_t len,
@@ -74,6 +85,7 @@ int udp_sendto(NETIF *ifp, struct UDP_PCB *pcb, const void *data, uint32_t len,
     uint32_t tot = UDP_HDR_LEN + len;
     if (tot > sizeof seg)
         return -1;
+    lock_acquire(&net_lock);
     uint32_t laddr = pcb->local_ip ? pcb->local_ip : ifp->ip;
     net_put16(seg + 0, pcb->local_port);
     net_put16(seg + 2, dport);
@@ -82,7 +94,9 @@ int udp_sendto(NETIF *ifp, struct UDP_PCB *pcb, const void *data, uint32_t len,
     if (len)
         memcpy(seg + UDP_HDR_LEN, data, len);
     net_put16(seg + 6, udp_sum(seg, tot, laddr, daddr));
-    return ip_output(ifp, daddr, IPPROTO_UDP, seg, tot);
+    int rc = ip_output(ifp, daddr, IPPROTO_UDP, seg, tot);
+    lock_release(&net_lock);
+    return rc;
 }
 
 static int udp_rx_room(struct UDP_PCB *pcb) {
@@ -90,13 +104,19 @@ static int udp_rx_room(struct UDP_PCB *pcb) {
 }
 
 int udp_rx_ready(struct UDP_PCB *pcb) {
-    return (uint16_t)(pcb->rx_tail - pcb->rx_head) != 0;
+    lock_acquire(&net_lock);
+    int ready = (uint16_t)(pcb->rx_tail - pcb->rx_head) != 0;
+    lock_release(&net_lock);
+    return ready;
 }
 
 int udp_recv(struct UDP_PCB *pcb, void *buf, uint32_t len, uint32_t *saddr,
              uint16_t *sport) {
-    if (!udp_rx_ready(pcb))
+    lock_acquire(&net_lock);
+    if (!udp_rx_ready(pcb)) {
+        lock_release(&net_lock);
         return -1;
+    }
     uint32_t n = 0;
     n |= (uint32_t)pcb->rx[pcb->rx_head & UDP_MASK] << 8;
     pcb->rx_head = (uint16_t)(pcb->rx_head + 1) & UDP_MASK;
@@ -123,6 +143,7 @@ int udp_recv(struct UDP_PCB *pcb, void *buf, uint32_t len, uint32_t *saddr,
     if (sport)
         *sport = sp;
     pcb->rx_head = (uint16_t)(pcb->rx_head + (n & 0xFFFFu)) & UDP_MASK;
+    lock_release(&net_lock);
     return (int)dlen;
 }
 
@@ -153,9 +174,7 @@ void udp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         return;
     uint16_t csum_seg = net_be16(pkt + 6);
     if (csum_seg) {
-        net_put16((uint8_t *)pkt + 6, 0);
         uint16_t sum = udp_sum(pkt, udp_len, src, ifp->ip);
-        net_put16((uint8_t *)pkt + 6, csum_seg);
         if (sum != 0)
             return;
     }
@@ -163,7 +182,7 @@ void udp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     const uint8_t *data = pkt + UDP_HDR_LEN;
 
     struct UDP_PCB *pcb = 0;
-    asm_cli();
+    lock_acquire(&net_lock);
     for (int i = 0; i < MAX_UDP_PCB; i++) {
         struct UDP_PCB *p = &s_upcb[i];
         if (!p->active || p->local_port != dport)
@@ -177,5 +196,5 @@ void udp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     }
     if (pcb)
         udp_rx_put(pcb, data, dlen, src, sport);
-    asm_sti();
+    lock_release(&net_lock);
 }

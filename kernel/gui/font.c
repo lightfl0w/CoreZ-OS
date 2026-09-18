@@ -365,8 +365,8 @@ int font_text_width(const char *utf8, int px) {
     return w;
 }
 
-int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
-              gfx_color fg) {
+static int font_draw_impl(struct GFX_CANVAS *c, int x, int y, const char *utf8,
+                          int px, gfx_color fg, const struct GFX_RECT *clip) {
     if (!g_ready || !c || !c->pixels || !utf8)
         return x;
     lock_acquire(&g_font_lock);
@@ -396,11 +396,15 @@ int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
                 int py = py0 + gy;
                 if (py < 0 || py >= c->h)
                     continue;
+                if (clip && (py < clip->y || py >= clip->y + clip->h))
+                    continue;
                 gfx_color *row = gfx_row(c, py);
                 const uint8_t *sr = g->bm + (size_t)gy * (size_t)g->w;
                 for (int gx = 0; gx < g->w; gx++) {
                     int pxx = px0 + gx;
                     if (pxx < 0 || pxx >= c->w)
+                        continue;
+                    if (clip && (pxx < clip->x || pxx >= clip->x + clip->w))
                         continue;
                     int cov = sr[gx];
                     if (!cov)
@@ -421,4 +425,19 @@ int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
     fpu_leave(ef);
     lock_release(&g_font_lock);
     return penx;
+}
+
+int font_draw(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
+              gfx_color fg) {
+    return font_draw_impl(c, x, y, utf8, px, fg, 0);
+}
+
+int font_draw_clip(struct GFX_CANVAS *c, int x, int y, const char *utf8, int px,
+                   gfx_color fg, const struct GFX_RECT *clip) {
+    if (!clip)
+        return font_draw_impl(c, x, y, utf8, px, fg, 0);
+    struct GFX_RECT cv = {0, 0, c->w, c->h}, v;
+    if (!gfx_rect_intersect(*clip, cv, &v))
+        return x;
+    return font_draw_impl(c, x, y, utf8, px, fg, &v);
 }

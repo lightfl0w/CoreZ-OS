@@ -318,10 +318,12 @@ class Task:
             dfile = self.out.with_suffix(".d")
             if dfile.exists():
                 text = dfile.read_text(errors="replace")
-                for line in text.splitlines():
+
+                joined = text.replace("\\\r\n", " ").replace("\\\n", " ")
+                for line in joined.splitlines():
                     if ":" not in line:
                         continue
-                    for tok in line.split(":", 1)[1].replace("\\\n", " ").split():
+                    for tok in line.split(":", 1)[1].split():
                         if not tok:
                             continue
                         p = Path(tok)
@@ -467,6 +469,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("str.o",        ROOT / "lib" / "str" / "str.c"),
         ("rand.o",       ROOT / "lib" / "rand" / "rand.c"),
         ("rbtree.o",     ROOT / "lib" / "rbtree" / "rbtree.c"),
+        ("png.o",        ROOT / "lib" / "png" / "png.c"),
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
@@ -479,6 +482,9 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("tty.o",        ROOT / "drivers" / "char" / "tty.c"),
         ("keyboard.o",   ROOT / "drivers" / "char" / "keyboard.c"),
         ("ide.o",        ROOT / "drivers" / "block" / "ide.c"),
+        ("block.o",      ROOT / "drivers" / "block" / "block.c"),
+        ("nvme.o",       ROOT / "drivers" / "block" / "nvme.c"),
+        ("pci.o",        ROOT / "drivers" / "pci" / "pci.c"),
         ("ext2.o",       KERNEL_DIR / "fs" / "ext2.c"),
         ("fs.o",         KERNEL_DIR / "fs" / "fs.c"),
         ("inode.o",      KERNEL_DIR / "fs" / "inode.c"),
@@ -489,8 +495,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("tss.o",        KERNEL_DIR / "init" / "tss" / "tss.c"),
         ("process.o",    KERNEL_DIR / "userprog" / "process.c"),
         ("exec.o",       KERNEL_DIR / "userprog" / "exec.c"),
-        ("shell.o",      KERNEL_DIR / "shell" / "shell.c"),
-        ("buildin_cmd.o",KERNEL_DIR / "shell" / "buildin_cmd.c"),
         ("pipe.o",       KERNEL_DIR / "shell" / "pipe.c"),
         ("ksyscall.o",   KERNEL_DIR / "syscall" / "syscall.c"),
         ("signal.o",     KERNEL_DIR / "syscall" / "signal.c"),
@@ -505,18 +509,21 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
+        ("gpu.o",        KERNEL_DIR / "gui" / "gpu.c"),
         ("display.o",    KERNEL_DIR / "gui" / "display.c"),
         ("input.o",      KERNEL_DIR / "gui" / "input.c"),
         ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
         ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
         ("udi_vmware.o", KERNEL_DIR / "gui" / "udi_vmware.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
+        ("theme.o",      KERNEL_DIR / "gui" / "theme.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
-        ("layout.o",     KERNEL_DIR / "gui" / "layout.c"),
         ("wm.o",         KERNEL_DIR / "gui" / "wm.c"),
         ("guiclients.o", KERNEL_DIR / "gui" / "clients.c"),
         ("gui.o",        KERNEL_DIR / "gui" / "gui.c"),
+        ("x11.o",        KERNEL_DIR / "gui" / "x11.c"),
+        ("x11_server.o", KERNEL_DIR / "gui" / "x11_server.c"),
     ]
 
     tasks.append(Task(
@@ -550,6 +557,15 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("futex_demo",  "futex_demo.c",  "_start", []),
         ("fsyscall_demo","fsyscall_demo.c","_start", []),
         ("clone_demo",  "clone_demo.c",  "_start", []),
+        ("clone_stress","clone_stress.c","_start", []),
+        ("path_probe", "path_probe.c", "_start", []),
+        ("kaddr_probe", "kaddr_probe.c", "_start", []),
+        ("sock_probe", "sock_probe.c", "_start", []),
+        ("init_sh",    "init_sh.c",    "_start", []),
+        ("futex_probe", "futex_probe.c", "_start", []),
+        ("eintr_probe", "eintr_probe.c", "_start", []),
+        ("sel_probe",  "sel_probe.c",  "_start", []),
+        ("gs_probe", "gs_probe.c", "_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
@@ -590,13 +606,18 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         elf = BUILD_DIR / f"{prog_name}.elf"
         elf_task = task_link(
             f"{prog_name}.elf", elf, tools,
-            [BUILD_DIR / "up_start.o", prog_obj, *lib_objs],
+            [BUILD_DIR / "up_start.o", BUILD_DIR / "lc_clone.o", prog_obj,
+             *lib_objs],
             flags=elf_flags,
         )
         tasks.append(elf_task)
         user_elves.append(elf_task)
     tasks.append(task_assemble_elf64(
         "lc_start.o", APPS_DIR / "lc_crt0.asm", BUILD_DIR / "lc_start.o", tools,
+    ))
+    tasks.append(task_assemble_elf64(
+        "lc_clone.o", APPS_DIR / "lc_clone.asm", BUILD_DIR / "lc_clone.o",
+        tools,
     ))
     lc_libc = task_cc("lc_libc.o", ROOT / "libc" / "compat" / "lc_libc.c",
                       BUILD_DIR / "lc_libc.o", tools, LC_CFLAGS)
@@ -663,21 +684,43 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         cwd=BUILD_DIR, out=BUILD_DIR / "font_kernel.o", deps=[],
         description="embed font_kernel.ttf", group="objcopy",
     ))
+    asset_specs = (("wallpaper.png", 1024, 768, 0),
+                   ("pic1.png", 768, 512, 1),
+                   ("pic2.png", 640, 480, 2))
+    for nm, ww, hh, var in asset_specs:
+        asset = task_python(
+            nm, SCRIPTS / "make_wallpaper.py",
+            [str(BUILD_DIR / nm), str(ww), str(hh), str(var)],
+            out=BUILD_DIR / nm,
+        )
+        asset.group = "asset"
+        asset.description = f"make_wallpaper.py → {nm}"
+        tasks.append(asset)
+    tasks.append(Task(
+        name="wallpaper_kernel.o",
+        cmd=[tools.objcopy, "-I", "binary", "-O", "elf64-x86-64",
+             "-B", "i386:x86-64", "--set-section-alignment", ".data=64",
+             "wallpaper.png", "wallpaper_kernel.o"],
+        cwd=BUILD_DIR, out=BUILD_DIR / "wallpaper_kernel.o", deps=[],
+        description="embed wallpaper.png", group="objcopy",
+    ))
     kernel_objs_names = [
         "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o",
-        "ide.o", "ext2.o", "fs.o", "inode.o", "dir.o", "file.o", "proc.o",
-        "gdt.o", "tss.o", "process.o", "exec.o", "shell.o",
-        "buildin_cmd.o", "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
+        "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
+        "dir.o", "file.o", "proc.o",
+        "gdt.o", "tss.o", "process.o", "exec.o",
+        "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
-        "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
+        "lc_clone.o",
+        "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",
         "udi_virtio.o", "udi_vmware.o", "font.o",
-        "font_kernel.o", "shm.o", "guiserver.o",
-        "layout.o", "wm.o", "guiclients.o", "gui.o",
+        "theme.o", "font_kernel.o", "wallpaper_kernel.o", "shm.o", "guiserver.o",
+        "wm.o", "guiclients.o", "gui.o", "x11.o", "x11_server.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
     ]
@@ -722,7 +765,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             f"include/alltypes.h.in > obj/include/bits/alltypes.h; "
             f"CC={shlex.quote(cc_str)} "
             f"./configure --prefix={shlex.quote(str(MUSL_PREFIX))} "
-            f"--disable-shared --enable-static --disable-option-checking; "
+            f"--enable-shared --enable-static --disable-option-checking; "
             f"make -j\"$(nproc 2>/dev/null || echo 4)\" "
             f"2>&1 | tee {shlex.quote(str(MUSL_PREFIX / 'build.log'))}; "
             f"make install"
@@ -731,6 +774,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             name="musl-native-lib",
             cmd=[sh, "-c", musl_script],
             out=MUSL_PREFIX / "lib" / "libc.a",
+            deps=[ROOT / "build.py"],
             optional=True,
             group="musl-lib",
             description="configure+make+install native musl 1.2.6",
@@ -841,6 +885,73 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
              BUILD_DIR / "test_basename.o", BUILD_DIR / "test_dirname.o",
              BUILD_DIR / "test_fnmatch.o"])
         tasks.append(libc_tests_elf)
+
+        # 动态链接：ld.so（musl 的 libc.so 本身就是动态加载器）要落到 build/ 根下，
+        # make_ext2.py 按名字把它们装进 /lib。x86_64 下两个名字内容相同，都放一份
+        for dst_name in ("libc.so", "ld-musl-x86_64.so.1"):
+            tasks.append(Task(
+                name=f"musl-dyn-{dst_name}",
+                cmd=[sh, "-c",
+                     f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+                     f"{shlex.quote(str(BUILD_DIR / dst_name))}"],
+                out=BUILD_DIR / dst_name,
+                deps=[MUSL_LIB / "libc.so"],
+                optional=True, group="musl-dyn",
+                description=f"install {dst_name} into build/",
+            ))
+
+        dyn_lib_c = task_cc("dyn_lib.o", APPS_DIR / "dyn_lib.c",
+                            BUILD_DIR / "dyn_lib.o", tools, MUSL_DEMO_CFLAGS)
+        dyn_lib_c.optional = True
+        dyn_lib_c.group = "musl-dyn"
+        tasks.append(dyn_lib_c)
+        # 动态链接不用 -z pack-relative-relocs：ld 生成的 .relr.dyn 段无法放进
+        # user_dyn.ld 的段布局（拒绝分配），而 RELR 只是体积优化，musl 的 ld.so
+        # 与内核侧都支持普通 .rela.dyn，这里用后者
+        dyn_lib_so = Task(
+            name="libdyndemo.so",
+            cmd=[shutil.which("ld") or "/usr/bin/ld",
+                 "-m", "elf_x86_64", "-shared", "-nostdlib", "-e", "0",
+                 "-T", str(ROOT / "linker" / "user_dyn.ld"),
+                 str(BUILD_DIR / "dyn_lib.o"),
+                 "-L", str(MUSL_LIB), "-lc",
+                 "-o", str(BUILD_DIR / "libdyndemo.so")],
+            out=BUILD_DIR / "libdyndemo.so",
+            deps=[BUILD_DIR / "dyn_lib.o"],
+            optional=True, group="musl-dyn",
+            description="link libdyndemo.so (shared)",
+        )
+        tasks.append(dyn_lib_so)
+
+        dyn_demo_c = task_cc("dyn_demo.o", APPS_DIR / "dyn_demo.c",
+                             BUILD_DIR / "dyn_demo.o", tools, MUSL_DEMO_CFLAGS)
+        dyn_demo_c.optional = True
+        dyn_demo_c.group = "musl-dyn"
+        tasks.append(dyn_demo_c)
+
+        def link_musl_dynamic(name, elf, objs, needed_dir):
+            ld = shutil.which("ld") or "/usr/bin/ld"
+            # musl 自己的 specs 规定：非 -shared 的动态链接用 Scrt1.o（PIC 版 crt1），
+            # 而不是静态 PIE 用的 crt1.o/rcrt1.o
+            cmd = [ld, "-m", "elf_x86_64", "-nostdlib", "-pie",
+                   "--dynamic-linker", "/lib/ld-musl-x86_64.so.1",
+                   "-T", str(ROOT / "linker" / "user_dyn.ld"), "-e", "_start",
+                   str(MUSL_LIB / "Scrt1.o"), str(MUSL_LIB / "crti.o"),
+                   *map(str, objs), str(MUSL_LIB / "crtn.o"),
+                   "-L", str(MUSL_LIB), "-L", str(needed_dir),
+                   "-lc", "-ldyndemo",
+                   "-o", str(elf)]
+            return Task(name=name, cmd=cmd, out=elf, optional=True,
+                        group="musl-dyn",
+                        description=f"link {elf.name} (dynamic, PT_INTERP)",
+                        cwd=BUILD_DIR)
+
+        dyn_demo_elf = link_musl_dynamic(
+            "dyn_demo.elf", BUILD_DIR / "dyn_demo.elf",
+            [BUILD_DIR / "dyn_demo.o"], BUILD_DIR)
+        dyn_demo_elf.deps = [BUILD_DIR / "dyn_demo.o",
+                             BUILD_DIR / "libdyndemo.so"]
+        tasks.append(dyn_demo_elf)
     return BuildPlan(tasks=tasks, user_elves=user_elves,
                      musl_enabled=plan_musl_enabled)
 @dataclass
@@ -967,9 +1078,11 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         console.info("musl 库未生成 (configure/make 失败或被跳过), "
                      "demo/testsuite 跳过 — 不影响内核/用户程序")
     else:
-        musl_tasks = [t for t in plan.tasks if t.group in ("cc", "link", "musl") and
-                      ("musl_" in t.name or "test_" in t.name or
-                       "libc_tests" in t.name)]
+        musl_tasks = [t for t in plan.tasks if
+                      t.group == "musl-dyn" or
+                      (t.group in ("cc", "link", "musl") and
+                       ("musl_" in t.name or "test_" in t.name or
+                        "libc_tests" in t.name))]
         with console.progress(len(musl_tasks), "musl", Ansi.BR_BLU) as update:
             for i, t in enumerate(musl_tasks, 1):
                 run_task(t)
@@ -983,9 +1096,11 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
             run_task(t)
             update(i, t.description)
     s += 1
-    console.step_header(s, total_steps, "Generating font subset")
-    font_py = [t for t in plan.tasks if t.group == "python" and "font" in t.name]
-    with console.progress(len(font_py), "font", Ansi.BR_MAG) as update:
+    console.step_header(s, total_steps, "Generating font & image assets")
+    font_py = [t for t in plan.tasks
+               if (t.group == "python" and "font" in t.name) or
+               t.group == "asset"]
+    with console.progress(len(font_py), "assets", Ansi.BR_MAG) as update:
         i = 0
         for t in font_py:
             i += 1

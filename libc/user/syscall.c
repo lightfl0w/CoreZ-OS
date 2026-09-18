@@ -1,4 +1,5 @@
 #include "libc/user/syscall.h"
+#include "kernel/fs/dir.h"
 
 #include "kernel/syscall_nr.h"
 #include "libc/user/signal.h"
@@ -145,8 +146,12 @@ int32_t closedir(struct FS_DIR *dir) {
     return (int32_t)syscall1(SYS_CLOSEDIR, (uint64_t)(uintptr_t)dir);
 }
 
+static struct FS_DIRENT user_dirent;
+
 struct FS_DIRENT *readdir(struct FS_DIR *dir) {
-    return (struct FS_DIRENT *)syscall1(SYS_READDIR, (uint64_t)(uintptr_t)dir);
+    uint32_t ret = (uint32_t)syscall2(SYS_READDIR, (uint32_t)(uintptr_t)dir,
+                                      (uint32_t)(uintptr_t)&user_dirent);
+    return ret ? &user_dirent : NULL;
 }
 
 void rewinddir(struct FS_DIR *dir) {
@@ -241,8 +246,13 @@ int32_t futex(uint32_t uaddr, int op, uint32_t val, void *timeout) {
                              (uint32_t)timeout);
 }
 
-int32_t clone(uint32_t flags, void *child_stack) {
-    return (int32_t)syscall2(SYS_CLONE, flags, (uint32_t)child_stack);
+/* clone 包装：父子路径分叉由 __lc_clone_raw（apps/lc_clone.asm）完成。
+ * 子进程从新栈弹出 (fn, arg) 后跳入 fn；父进程返回 tid 或 -1。 */
+extern int32_t __lc_clone_raw(uint64_t nr, int (*fn)(void *), void *stack_top,
+                              uint32_t flags, void *arg);
+
+int32_t clone(int (*fn)(void *), void *child_stack, uint32_t flags, void *arg) {
+    return __lc_clone_raw((uint64_t)SYS_CLONE, fn, child_stack, flags, arg);
 }
 
 int32_t fstat(int32_t fd, struct FS_STAT *buf) {

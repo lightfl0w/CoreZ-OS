@@ -32,6 +32,7 @@
 #define TX_DESC_N 8
 #define RX_DESC_N 16
 #define RX_BUF_LEN 2048
+#define E1000_TX_WAIT_SPINS 100000u
 
 #define V2P(x)                                                                 \
     ((uint32_t)(x) >= 0xC0000000u                                              \
@@ -139,13 +140,20 @@ int e1000_init(NETIF *ifp) {
     return 0;
 }
 
+static int e1000_tx_wait(volatile uint8_t *status) {
+    for (uint32_t i = 0; i < E1000_TX_WAIT_SPINS; i++) {
+        if (*status & 0x01)
+            return 1;
+        asm_pause();
+    }
+    return 0;
+}
+
 int e1000_tx(NETIF *ifp, const void *frame, uint32_t len) {
     (void)ifp;
     uint32_t slot = s_tx_cur % TX_DESC_N;
-    for (uint32_t i = 0; i < 100000; i++) {
-        if (s_tx[slot].status & 0x01)
-            break;
-    }
+    if (!e1000_tx_wait(&s_tx[slot].status))
+        return -1;
     memcpy(s_tx_buf + (size_t)slot * RX_BUF_LEN, frame, len);
     s_tx[slot].length = (uint16_t)len;
     s_tx[slot].cso = 0;
@@ -154,10 +162,8 @@ int e1000_tx(NETIF *ifp, const void *frame, uint32_t len) {
     s_tx[slot].status = 0;
     s_tx_cur++;
     e1000_reg_write(REG_TDT, s_tx_cur % TX_DESC_N);
-    for (uint32_t i = 0; i < 100000; i++) {
-        if (s_tx[slot].status & 0x01)
-            break;
-    }
+    if (!e1000_tx_wait(&s_tx[slot].status))
+        return -1;
     return (int)len;
 }
 

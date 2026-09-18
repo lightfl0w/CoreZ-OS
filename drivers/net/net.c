@@ -17,6 +17,8 @@
 
 NETIF g_netif;
 
+struct SCHED_LOCK net_lock;
+
 static void net_probe(NETIF *ifp) {
     ifp->tx = rtl8139_tx;
     ifp->rx = rtl8139_rx;
@@ -74,6 +76,7 @@ void net_init(void) {
         kprintf("[NET] disabled\n");
         return;
     }
+    lock_init(&net_lock);
     arp_init();
     tcp_init();
     udp_init();
