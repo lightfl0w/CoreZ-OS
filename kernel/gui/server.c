@@ -330,6 +330,7 @@ void comp_send_key(struct WL_SURFACE *s, int scancode, int pressed, int mods) {
         x11_notify_key(s, scancode + 8, pressed, mods);
         return;
     }
+    kprintf("send_key s=[%s] sc=%02x\n", s->title, scancode);
     client_post(s->client, WL_EV_KEY, scancode, pressed, mods);
 }
 
@@ -546,7 +547,7 @@ static void draw_window_batch(struct WL_SURFACE *s) {
     c.y = fy + 4;
     c.w = 15;
     c.h = 15;
-    c.color = focused ? t->close : t->dim;
+    c.color = wm_hover_close(s) ? t->close : t->dim;
     gpu_push(&c);
 }
 
@@ -635,6 +636,7 @@ static int repaint_content_only(struct GUI_DAMAGE *d, struct WL_SURFACE **vis,
             gpu_batch_flush();
             draw_window_text(t, r);
         }
+        wm_draw_overlay(dst, r);
         return 1;
     }
     return 0;
@@ -681,6 +683,7 @@ static void repaint(void) {
             draw_window_text(s, r);
         }
         wm_draw_bar(dst, r);
+        wm_draw_overlay(dst, r);
     }
     gpu_batch_clip(0);
     lock_release(&comp_lock);
@@ -755,6 +758,7 @@ static void drain_input(void) {
                 comp_damage_rect(cur_x, cur_y, CURSOR_W, CURSOR_H);
                 comp_damage_rect(nx, ny, CURSOR_W, CURSOR_H);
                 wm_handle_motion(nx, ny);
+                wm_handle_hover(nx, ny);
                 struct WL_SURFACE *mh = wm_surface_at(nx, ny);
                 if (mh && mh->x11_owner)
                     x11_notify_motion(mh, nx - mh->x, ny - mh->y);
@@ -792,6 +796,7 @@ void comp_run(void) {
         perf_report();
         uint64_t t0 = perf_tsc();
         drain_input();
+        wm_anim_step();
         if (wm_bar_check_dirty()) {
             comp_damage_rect(0, scrny - COMP_BAR_H, scrnx, COMP_BAR_H);
         }

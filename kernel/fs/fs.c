@@ -119,19 +119,23 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     uint32_t tino = 0;
     int tft = 0;
     if (ext2_lookup_ftype(pathname, &tino, &tft, 0) == 0) {
+        kprintf("create: exists tino=%u\n", tino);
         return -1;
     }
     struct FS_INODE par;
     if (ext2_read_inode(pino, &par)) {
+        kprintf("create: read inode fail\n");
         return -1;
     }
     if (fs_check_perm(&par, 2u)) {
+        kprintf("create: perm deny\n");
         current->errno = 13;
         return -1;
     }
     struct FS_INODE newi;
     uint32_t ino = ext2_new_inode(mode, &newi);
     if (ino == 0) {
+        kprintf("create: no inode\n");
         return -1;
     }
     newi.i_uid = current->euid;
@@ -150,6 +154,7 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
                 : fmt == 0x2000u ? 2u
                                  : 1u;
     if (ext2_add_entry_dt(&par, ino, base, dt)) {
+        kprintf("create: add entry fail\n");
         ext2_free_best_effort(&newi);
         return -1;
     }

@@ -2,6 +2,7 @@
 
 #include "drivers/char/keyboard.h"
 #include "arch/x86/interrupt/interrupt.h"
+#include "drivers/char/console/io.h"
 #include "lib/str/str.h"
 #include "kernel/sched/thread.h"
 #include "kernel/gui/font.h"
@@ -11,6 +12,7 @@
 #include "kernel/gui/theme.h"
 #include "kernel/gui/wm.h"
 #include "kernel/fs/fs.h"
+#include "kernel/fs/dir.h"
 #include "kernel/mm/pool/pool.h"
 #include "lib/png/png.h"
 
@@ -548,13 +550,471 @@ static void png_viewer_thread(void *arg) {
         png_image_free(&v->img);
 }
 
+static char sc_to_char(uint8_t sc, int shift) {
+    static const char *lo1 = "1234567890-=";
+    static const char *hi1 = "!@#$%^&*()_+";
+    static const char *lo2 = "qwertyuiop[]";
+    static const char *hi2 = "QWERTYUIOP{}";
+    static const char *lo3 = "asdfghjkl;'";
+    static const char *hi3 = "ASDFGHJKL:\"";
+    static const char *lo4 = "zxcvbnm,./";
+    static const char *hi4 = "ZXCVBNM<>?";
+    int i;
+    if (sc >= 0x02 && sc <= 0x0D) {
+        i = sc - 0x02;
+        return (shift ? hi1 : lo1)[i];
+    }
+    if (sc >= 0x10 && sc <= 0x1B) {
+        i = sc - 0x10;
+        return (shift ? hi2 : lo2)[i];
+    }
+    if (sc >= 0x1E && sc <= 0x28) {
+        i = sc - 0x1E;
+        return (shift ? hi3 : lo3)[i];
+    }
+    if (sc == 0x29)
+        return shift ? '~' : '`';
+    if (sc == 0x2B)
+        return shift ? '|' : '\\';
+    if (sc >= 0x2C && sc <= 0x35) {
+        i = sc - 0x2C;
+        return (shift ? hi4 : lo4)[i];
+    }
+    if (sc == 0x39)
+        return ' ';
+    return 0;
+}
+
+static void s_copy(char *dst, const char *src, int cap) {
+    int i = 0;
+    while (src[i] && i < cap - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static void s_join(char *dst, const char *dir, const char *name, int cap) {
+    s_copy(dst, dir, cap);
+    int l = strlen(dst);
+    if (l > 0 && dst[l - 1] != '/' && l < cap - 1)
+        dst[l++] = '/';
+    dst[l] = 0;
+    s_copy(dst, strcat(dst, name), cap);
+}
+
+#define FILES_MAX 64
+#define FILES_NAME_LEN 26
+#define FILES_ROW_H 22
+
+struct FILES_STATE {
+    struct COMP_DEMO_CLIENT dc;
+    char cwd[MAX_PATH_LEN];
+    char names[FILES_MAX][FILES_NAME_LEN];
+    uint8_t is_dir[FILES_MAX];
+    uint32_t sizes[FILES_MAX];
+    int count;
+    int sel;
+    int scroll;
+};
+
+static void files_load(struct FILES_STATE *fs) {
+    fs->count = 0;
+    fs->sel = 0;
+    fs->scroll = 0;
+    struct FS_DIR *d = sys_opendir(fs->cwd);
+    if (!d)
+        return;
+    struct FS_DIRENT *e;
+    while (fs->count < FILES_MAX && (e = sys_readdir(d)) != 0) {
+        const char *nm = e->filename;
+        if (nm[0] == '.' && nm[1] == 0)
+            continue;
+        int i = fs->count;
+        s_copy(fs->names[i], nm, FILES_NAME_LEN);
+        fs->is_dir[i] = (e->f_type == FT_DIRECTORY);
+        fs->sizes[i] = 0;
+        if (!fs->is_dir[i]) {
+            char p[MAX_PATH_LEN];
+            s_join(p, fs->cwd, fs->names[i], MAX_PATH_LEN);
+            struct FS_STAT st;
+            if (sys_stat(p, &st) == 0)
+                fs->sizes[i] = st.st_size;
+        }
+        fs->count++;
+    }
+    sys_closedir(d);
+}
+
+static int files_visible(struct COMP_DEMO_CLIENT *dc) {
+    int h = dc->h - 52;
+    int n = h / FILES_ROW_H;
+    return n < 1 ? 1 : n;
+}
+
+static void files_enter(struct FILES_STATE *fs) {
+    if (fs->count == 0 || !fs->is_dir[fs->sel])
+        return;
+    char p[MAX_PATH_LEN];
+    s_join(p, fs->cwd, fs->names[fs->sel], MAX_PATH_LEN);
+    struct FS_STAT st;
+    if (sys_stat(p, &st) != 0 || st.st_filetype != FT_DIRECTORY) {
+        comp_log("files: open dir failed");
+        return;
+    }
+    s_copy(fs->cwd, p, MAX_PATH_LEN);
+    files_load(fs);
+}
+
+static void files_up(struct FILES_STATE *fs) {
+    int l = strlen(fs->cwd);
+    if (l <= 1)
+        return;
+    while (l > 1 && fs->cwd[l - 1] != '/')
+        l--;
+    if (l > 1)
+        l--;
+    fs->cwd[l] = 0;
+    files_load(fs);
+}
+
+static void files_render(struct COMP_DEMO_CLIENT *dc) {
+    struct FILES_STATE *fs = (struct FILES_STATE *)dc;
+    struct GFX_CANVAS cv;
+    canvas_of(&cv, dc);
+    gfx_fill(&cv, 0, 0, dc->w, dc->h, theme()->content);
+    int vis = files_visible(dc);
+    int head_h = 26;
+    gfx_fill(&cv, 0, 0, dc->w, head_h, theme()->bar);
+    char head[MAX_PATH_LEN + 16];
+    head[0] = 0;
+    strcat(head, "dir: ");
+    strcat(head, fs->cwd);
+    font_draw(&cv, 8, 6, head, UI_FONT_PX, theme()->title_fg_foc);
+    for (int k = 0; k < vis; k++) {
+        int i = fs->scroll + k;
+        if (i >= fs->count)
+            break;
+        int ry = head_h + 4 + k * FILES_ROW_H;
+        if (i == fs->sel)
+            gfx_fill_round(&cv, 4, ry, dc->w - 8, FILES_ROW_H - 2, 5,
+                           theme()->wp_top);
+        gfx_fill_round(&cv, 8, ry + 4, 12, 12, 3,
+                       fs->is_dir[i] ? theme()->accent : theme()->dim);
+        font_draw(&cv, 28, ry + 3, fs->names[i], UI_FONT_PX,
+                  fs->is_dir[i] ? theme()->accent : theme()->text);
+        if (!fs->is_dir[i]) {
+            char num[12];
+            u32_to_dec(fs->sizes[i], num);
+            char sz[24];
+            sz[0] = 0;
+            strcat(sz, num);
+            strcat(sz, " B");
+            int sw = font_text_width(sz, UI_FONT_PX);
+            font_draw(&cv, dc->w - sw - 14, ry + 3, sz, UI_FONT_PX,
+                      theme()->muted);
+        }
+    }
+    int fy = dc->h - 22;
+    gfx_fill(&cv, 0, fy, dc->w, 22, theme()->bar);
+    char foot[MAX_PATH_LEN + 16];
+    foot[0] = 0;
+    if (fs->count > 0) {
+        strcat(foot, fs->names[fs->sel]);
+        if (fs->is_dir[fs->sel])
+            strcat(foot, "/  Enter: open  BackSpace: up");
+        else
+            strcat(foot, "  Enter: info  BackSpace: up");
+    } else {
+        strcat(foot, "empty  BackSpace: up");
+    }
+    font_draw(&cv, 6, fy + 4, foot, UI_FONT_PX, theme()->muted);
+}
+
+static void files_on_key(struct COMP_DEMO_CLIENT *dc, int sc, int mods) {
+    struct FILES_STATE *fs = (struct FILES_STATE *)dc;
+    (void)mods;
+    int vis = files_visible(dc);
+    if (sc == 0x48 && fs->sel > 0)
+        fs->sel--;
+    else if (sc == 0x50 && fs->sel < fs->count - 1)
+        fs->sel++;
+    else if (sc == 0x4B)
+        fs->sel -= vis;
+    else if (sc == 0x4D)
+        fs->sel += vis;
+    else if (sc == 0x1C)
+        files_enter(fs);
+    else if (sc == 0x0E)
+        files_up(fs);
+    else
+        return;
+    if (fs->sel >= fs->count)
+        fs->sel = fs->count - 1;
+    if (fs->sel < 0)
+        fs->sel = 0;
+    if (fs->sel < fs->scroll)
+        fs->scroll = fs->sel;
+    if (fs->sel >= fs->scroll + vis)
+        fs->scroll = fs->sel - vis + 1;
+    dc->render(dc);
+    wl_surface_commit(dc->surf);
+}
+
+static void files_thread(void *arg) {
+    (void)arg;
+    struct FILES_STATE fs;
+    memset(&fs, 0, sizeof(fs));
+    fs.dc.conn = wl_display_connect("files");
+    if (!fs.dc.conn) {
+        thread_exit_current();
+        return;
+    }
+    fs.dc.surf = wl_compositor_create_surface(fs.dc.conn, "files");
+    if (!fs.dc.surf) {
+        wl_display_disconnect(fs.dc.conn);
+        thread_exit_current();
+        return;
+    }
+    s_copy(fs.cwd, "/", MAX_PATH_LEN);
+    files_load(&fs);
+    fs.dc.render = files_render;
+    fs.dc.on_key = files_on_key;
+    fs.dc.frame_interval = 1000000;
+    wm_manage(fs.dc.surf);
+    client_main(&fs.dc);
+}
+
+#define EDIT_ROWS 20
+#define EDIT_COLS 76
+#define EDIT_LINE_H 18
+
+struct EDIT_STATE {
+    struct COMP_DEMO_CLIENT dc;
+    char lines[EDIT_ROWS][EDIT_COLS];
+    int len[EDIT_ROWS];
+    int cur_l;
+    int cur_c;
+    int scroll;
+    int dirty;
+};
+
+static void edit_load(struct EDIT_STATE *ed) {
+    struct FS_STAT st;
+    if (sys_stat("/note.txt", &st) != 0 || st.st_size == 0 ||
+        st.st_size > 32768)
+        return;
+    int fd = open_file("/note.txt", O_RDONLY);
+    if (fd < 0)
+        return;
+    static char buf[16384];
+    uint32_t got = read_file(fd, buf, st.st_size);
+    close_file(fd);
+    int l = 0;
+    int c = 0;
+    for (uint32_t i = 0; i < got; i++) {
+        char ch = buf[i];
+        if (ch == '\n') {
+            ed->lines[l][c] = 0;
+            ed->len[l] = c;
+            l++;
+            c = 0;
+            if (l >= EDIT_ROWS)
+                break;
+            continue;
+        }
+        if (c < EDIT_COLS - 1)
+            ed->lines[l][c++] = ch;
+    }
+    ed->lines[l][c] = 0;
+    ed->len[l] = c;
+    for (int k = l + 1; k < EDIT_ROWS; k++) {
+        ed->lines[k][0] = 0;
+        ed->len[k] = 0;
+    }
+    ed->cur_l = 0;
+    ed->cur_c = 0;
+    ed->scroll = 0;
+}
+
+static void edit_save(struct EDIT_STATE *ed) {
+    sys_unlink("/note.txt");
+    create_file("/note.txt");
+    int fd = open_file("/note.txt", O_WRONLY);
+    if (fd < 0) {
+        kprintf("edit: save open failed\n");
+        return;
+    }
+    for (int k = 0; k < EDIT_ROWS; k++) {
+        if (ed->len[k] > 0)
+            write_file(fd, ed->lines[k], (uint32_t)ed->len[k]);
+        write_file(fd, "\n", 1);
+    }
+    close_file(fd);
+    ed->dirty = 0;
+    kprintf("edit: saved /note.txt\n");
+}
+
+static void edit_render(struct COMP_DEMO_CLIENT *dc) {
+    struct EDIT_STATE *ed = (struct EDIT_STATE *)dc;
+    struct GFX_CANVAS cv;
+    canvas_of(&cv, dc);
+    gfx_fill(&cv, 0, 0, dc->w, dc->h, theme()->content);
+    int vis = (dc->h - 40) / EDIT_LINE_H;
+    if (vis < 1)
+        vis = 1;
+    for (int k = 0; k < vis && ed->scroll + k < EDIT_ROWS; k++) {
+        int l = ed->scroll + k;
+        font_draw(&cv, 10, 6 + k * EDIT_LINE_H, ed->lines[l], UI_FONT_PX,
+                  theme()->text);
+        if (l == ed->cur_l) {
+            char pre[EDIT_COLS];
+            s_copy(pre, ed->lines[l], EDIT_COLS);
+            if (ed->cur_c < ed->len[l])
+                pre[ed->cur_c] = 0;
+            int cw = font_text_width(pre, UI_FONT_PX);
+            gfx_fill(&cv, 10 + cw, 6 + k * EDIT_LINE_H, 2,
+                     EDIT_LINE_H - 4, theme()->accent);
+        }
+    }
+    int fy = dc->h - 22;
+    gfx_fill(&cv, 0, fy, dc->w, 22, theme()->bar);
+    char foot[48];
+    char num[12];
+    foot[0] = 0;
+    strcat(foot, "/note.txt  Ctrl+S save  Ln ");
+    u32_to_dec((uint32_t)(ed->cur_l + 1), num);
+    strcat(foot, num);
+    strcat(foot, " Col ");
+    u32_to_dec((uint32_t)(ed->cur_c + 1), num);
+    strcat(foot, num);
+    if (ed->dirty)
+        strcat(foot, "  *");
+    font_draw(&cv, 6, fy + 4, foot, UI_FONT_PX, theme()->muted);
+}
+
+static void edit_ensure_visible(struct EDIT_STATE *ed,
+                                struct COMP_DEMO_CLIENT *dc) {
+    int vis = (dc->h - 40) / EDIT_LINE_H;
+    if (vis < 1)
+        vis = 1;
+    if (ed->cur_l < ed->scroll)
+        ed->scroll = ed->cur_l;
+    if (ed->cur_l >= ed->scroll + vis)
+        ed->scroll = ed->cur_l - vis + 1;
+}
+
+static void edit_on_key(struct COMP_DEMO_CLIENT *dc, int sc, int mods) {
+    struct EDIT_STATE *ed = (struct EDIT_STATE *)dc;
+    if ((mods & KBD_MOD_CTRL) && !(mods & KBD_MOD_ALT) && sc == 0x1F) {
+        edit_save(ed);
+        dc->render(dc);
+        wl_surface_commit(dc->surf);
+        return;
+    }
+    if (sc == 0x0E) {
+        if (ed->cur_c > 0) {
+            ed->cur_c--;
+            for (int i = ed->cur_c; i < ed->len[ed->cur_l]; i++)
+                ed->lines[ed->cur_l][i] = ed->lines[ed->cur_l][i + 1];
+            ed->len[ed->cur_l]--;
+            ed->dirty = 1;
+        } else if (ed->cur_l > 0) {
+            int prev = ed->cur_l - 1;
+            int room = EDIT_COLS - 1 - ed->len[prev];
+            int move = ed->len[ed->cur_l] < room ? ed->len[ed->cur_l] : room;
+            for (int i = 0; i < move; i++)
+                ed->lines[prev][ed->len[prev] + i] = ed->lines[ed->cur_l][i];
+            ed->cur_c = ed->len[prev];
+            ed->len[prev] += move;
+            for (int k = ed->cur_l; k < EDIT_ROWS - 1; k++) {
+                s_copy(ed->lines[k], ed->lines[k + 1], EDIT_COLS);
+                ed->len[k] = ed->len[k + 1];
+            }
+            ed->cur_l--;
+            ed->dirty = 1;
+        }
+    } else if (sc == 0x1C) {
+        if (ed->cur_l + 1 < EDIT_ROWS) {
+            for (int k = EDIT_ROWS - 1; k > ed->cur_l; k--) {
+                s_copy(ed->lines[k], ed->lines[k - 1], EDIT_COLS);
+                ed->len[k] = ed->len[k - 1];
+            }
+            int tail = ed->len[ed->cur_l] - ed->cur_c;
+            s_copy(ed->lines[ed->cur_l + 1], ed->lines[ed->cur_l] + ed->cur_c,
+                   EDIT_COLS);
+            ed->len[ed->cur_l + 1] = tail > 0 ? tail : 0;
+            ed->lines[ed->cur_l][ed->cur_c] = 0;
+            ed->len[ed->cur_l] = ed->cur_c;
+            ed->cur_l++;
+            ed->cur_c = 0;
+            ed->dirty = 1;
+        }
+    } else if (sc == 0x48) {
+        if (ed->cur_l > 0)
+            ed->cur_l--;
+        if (ed->cur_c > ed->len[ed->cur_l])
+            ed->cur_c = ed->len[ed->cur_l];
+    } else if (sc == 0x50) {
+        if (ed->cur_l + 1 < EDIT_ROWS)
+            ed->cur_l++;
+        if (ed->cur_c > ed->len[ed->cur_l])
+            ed->cur_c = ed->len[ed->cur_l];
+    } else if (sc == 0x4B) {
+        if (ed->cur_c > 0)
+            ed->cur_c--;
+    } else if (sc == 0x4D) {
+        if (ed->cur_c < ed->len[ed->cur_l])
+            ed->cur_c++;
+    } else {
+        char ch = sc_to_char(sc, mods & 1);
+        if (ch && ed->len[ed->cur_l] < EDIT_COLS - 1) {
+            for (int i = ed->len[ed->cur_l]; i > ed->cur_c; i--)
+                ed->lines[ed->cur_l][i] = ed->lines[ed->cur_l][i - 1];
+            ed->lines[ed->cur_l][ed->cur_c++] = ch;
+            ed->len[ed->cur_l]++;
+            ed->dirty = 1;
+        } else {
+            return;
+        }
+    }
+    edit_ensure_visible(ed, dc);
+    dc->render(dc);
+    wl_surface_commit(dc->surf);
+}
+
+static void edit_thread(void *arg) {
+    (void)arg;
+    struct EDIT_STATE ed;
+    memset(&ed, 0, sizeof(ed));
+    ed.dc.conn = wl_display_connect("edit");
+    if (!ed.dc.conn) {
+        thread_exit_current();
+        return;
+    }
+    ed.dc.surf = wl_compositor_create_surface(ed.dc.conn, "edit");
+    if (!ed.dc.surf) {
+        wl_display_disconnect(ed.dc.conn);
+        thread_exit_current();
+        return;
+    }
+    edit_load(&ed);
+    ed.dc.render = edit_render;
+    ed.dc.on_key = edit_on_key;
+    ed.dc.frame_interval = 1000000;
+    wm_manage(ed.dc.surf);
+    client_main(&ed.dc);
+}
+
 typedef void (*client_thread_fn)(void *);
 
 static client_thread_fn types[] = {term_thread,     clock_thread,
                                    sysmon_thread,   png_viewer_thread,
-                                   plasma_thread};
+                                   plasma_thread,   files_thread,
+                                   edit_thread};
 static const char *type_names[] = {"gc_term", "gc_clock", "gc_sysmon",
-                                   "gc_pngview", "gc_plasma"};
+                                   "gc_pngview", "gc_plasma", "gc_files",
+                                   "gc_edit"};
 #define CLIENT_TYPES ((int)(sizeof(types) / sizeof(types[0])))
 static int next_type = 0;
 

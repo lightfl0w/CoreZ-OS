@@ -98,6 +98,32 @@ static void sw_free_buffer(uint64_t handle) {
 
 static int sw_commit(uint64_t handle, struct GFX_RECT *rects, int n) {
     (void)handle;
+    if (n <= 0)
+        return 0;
+    if (n > 4) {
+        int x0 = rects[0].x;
+        int y0 = rects[0].y;
+        int x1 = rects[0].x + rects[0].w;
+        int y1 = rects[0].y + rects[0].h;
+        uint64_t area = 0;
+        for (int i = 0; i < n; i++) {
+            area += (uint64_t)rects[i].w * (uint64_t)rects[i].h;
+            if (rects[i].x < x0)
+                x0 = rects[i].x;
+            if (rects[i].y < y0)
+                y0 = rects[i].y;
+            if (rects[i].x + rects[i].w > x1)
+                x1 = rects[i].x + rects[i].w;
+            if (rects[i].y + rects[i].h > y1)
+                y1 = rects[i].y + rects[i].h;
+        }
+        uint64_t uarea = (uint64_t)(x1 - x0) * (uint64_t)(y1 - y0);
+        if (area * 2 >= uarea * 3) {
+            gfx_present(&sw_front, x0, y0, &sw_back, x0, y0, x1 - x0,
+                        y1 - y0);
+            return 0;
+        }
+    }
     for (int i = 0; i < n; i++) {
         struct GFX_RECT *r = &rects[i];
         gfx_present(&sw_front, r->x, r->y, &sw_back, r->x, r->y, r->w, r->h);

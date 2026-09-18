@@ -481,6 +481,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("ioqueue.o",    ROOT / "drivers" / "char" / "ioqueue.c"),
         ("tty.o",        ROOT / "drivers" / "char" / "tty.c"),
         ("keyboard.o",   ROOT / "drivers" / "char" / "keyboard.c"),
+        ("rtc.o",        ROOT / "drivers" / "char" / "rtc.c"),
         ("ide.o",        ROOT / "drivers" / "block" / "ide.c"),
         ("block.o",      ROOT / "drivers" / "block" / "block.c"),
         ("nvme.o",       ROOT / "drivers" / "block" / "nvme.c"),
@@ -709,7 +710,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
-        "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o",
+        "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o",
@@ -969,7 +970,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         t0 = time.perf_counter()
         if task.out and task.out.exists():
             out_mtime = task.out.stat().st_mtime
-            stale = False
+            stale = task.group in ("link", "objcopy")
             for dep_path in task.dep_paths():
                 if dep_path.exists() and dep_path.stat().st_mtime > out_mtime:
                     stale = True
@@ -1117,6 +1118,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
     console.step_header(s, total_steps, "Linking kernel image")
     kernel_link = [t for t in plan.tasks
                    if t.group in ("link", "objcopy") and "kernel" in t.name]
+
     with console.progress(len(kernel_link), "kernel link", Ansi.BR_CYN) as update:
         for i, t in enumerate(kernel_link, 1):
             run_task(t)
