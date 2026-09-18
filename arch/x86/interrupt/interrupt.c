@@ -11,6 +11,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/mm/access.h"
 #include "kernel/sched/thread.h"
+#include "kernel/sched/percpu.h"
 #include "kernel/signal.h"
 #include "kernel/userprog/process.h"
 #include "lib/str/str.h"
@@ -144,6 +145,23 @@ void isr_handler(struct X86_REGS *r) {
                 "0xC1000000..0xC1400000)\n");
     } else if (cr2 >= 0xE0000000) {
         kprintf("  (note: fault is inside VRAM region 0xE0000000+)\n");
+    }
+
+    static volatile int panicking;
+    if (panicking) {
+        asm_cli();
+        for (;;)
+            asm_hlt();
+    }
+    panicking = 1;
+
+    {
+        struct TASK *cur = get_current();
+        if (cur && cur->stack_magic != STACK_MAGIC)
+            kprintf("  task: pid=%d name=%s stack_magic=%#x CORRUPTED "
+                    "(want %#x)\n",
+                    cur->pid, cur->name, cur->stack_magic,
+                    (uint32_t)STACK_MAGIC);
     }
 
     unsigned long *rbp;

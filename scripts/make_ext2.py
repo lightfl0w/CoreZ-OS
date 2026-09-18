@@ -33,7 +33,8 @@ FILES = [
     "canary_test.elf", "clone_stress.elf", "clone_demo.elf", "path_probe.elf", "kaddr_probe.elf", "sock_probe.elf", "init_sh.elf", "gs_probe.elf", "futex_probe.elf", "eintr_probe.elf", "sel_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf"
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
+    "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
 SPECIAL_MODES = {"suidsh": 0x81ED | 0o4000}

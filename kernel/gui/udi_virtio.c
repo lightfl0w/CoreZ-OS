@@ -267,9 +267,8 @@ static int vg_alloc_vq(struct VGPU_VQ *q, uint16_t size) {
     q->last_used = 0;
     q->free_head = 0;
     q->free_count = size;
-    for (uint16_t i = 0; i < size; i++) {
+    for (uint16_t i = 0; i < size; i++)
         q->desc[i].next = (uint16_t)(i + 1);
-    }
     vg.qdesc_phys = phys;
     return 0;
 }
@@ -294,8 +293,8 @@ static int vg_cmd(const void *req, uint32_t reqlen, uint32_t cmd_type) {
         return -1;
     memcpy(vg_req_stage, req, reqlen);
     uint16_t d0 = q->free_head;
-    uint16_t d1 = (uint16_t)((d0 + 1) % q->size);
-    q->free_head = (uint16_t)((d0 + 2) % q->size);
+    uint16_t d1 = q->desc[d0].next;
+    q->free_head = q->desc[d1].next;
     q->free_count -= 2;
 
     q->desc[d0].addr = vg_v2p(vg_req_stage);
@@ -308,7 +307,7 @@ static int vg_cmd(const void *req, uint32_t reqlen, uint32_t cmd_type) {
     q->desc[d1].addr = vg_v2p(&resp);
     q->desc[d1].len = sizeof(resp);
     q->desc[d1].flags = VIRTQ_DESC_F_WRITE;
-    q->desc[d1].next = 0;
+    q->desc[d1].next = 0xFFFFu;
 
     uint16_t avail_idx = q->avail->idx;
     q->avail->ring[avail_idx % q->size] = d0;
@@ -316,12 +315,18 @@ static int vg_cmd(const void *req, uint32_t reqlen, uint32_t cmd_type) {
     q->avail->idx = (uint16_t)(avail_idx + 1);
     q->last_used = q->used->idx;
 
-    if (vg_kick_and_wait() != 0)
-        return -1;
+    int rc = vg_kick_and_wait();
     uint32_t got = q->used->ring[q->last_used % q->size].idx;
     (void)got;
     q->last_used++;
 
+    q->desc[d1].next = q->free_head;
+    __asm__ volatile("sfence" ::: "memory");
+    q->free_head = d0;
+    q->free_count += 2;
+
+    if (rc != 0)
+        return -1;
     return (resp.hdr.type == VGPU_RESP_OK_NODATA) ? 0 : -1;
 }
 
@@ -484,24 +489,51 @@ static void vg_free_buffer(uint64_t handle) {
     vg_cmd(&un, sizeof(un), un.hdr.type);
 }
 
+static int vg_commit_cmds(struct GFX_RECT *rects, int n);
 static int vg_commit(uint64_t handle, struct GFX_RECT *rects, int n) {
     (void)handle;
     if (vfb.rid == 0)
         return -1;
+    int rc = vg_commit_cmds(rects, n);
+    if (rc != 0) {
+        static int once;
+        if (!once) {
+            once = 1;
+            kprintf("virtio-gpu: commit failed\n");
+        }
+    }
+    return rc;
+}
+
+static int vg_commit_cmds(struct GFX_RECT *rects, int n) {
     int count = (n > 0) ? n : 0;
-    for (int i = 0; i < count; i++) {
-        struct GFX_RECT *r = &rects[i];
+
+    if (count > 4) {
         struct VGPU_TRANSFER_TO_HOST_2D t;
         memset(&t, 0, sizeof(t));
         t.hdr.type = VGPU_CMD_TRANSFER_TO_HOST_2D;
-        t.r.x = r->x;
-        t.r.y = r->y;
-        t.r.w = r->w;
-        t.r.h = r->h;
-        t.offset = (uint64_t)r->y * (uint64_t)vfb.w * 4u + (uint64_t)r->x * 4u;
+        t.r.w = vfb.w;
+        t.r.h = vfb.h;
+        t.offset = 0;
         t.resource_id = vfb.rid;
         if (vg_cmd(&t, sizeof(t), t.hdr.type) != 0)
             return -1;
+    } else {
+        for (int i = 0; i < count; i++) {
+            struct GFX_RECT *r = &rects[i];
+            struct VGPU_TRANSFER_TO_HOST_2D t;
+            memset(&t, 0, sizeof(t));
+            t.hdr.type = VGPU_CMD_TRANSFER_TO_HOST_2D;
+            t.r.x = r->x;
+            t.r.y = r->y;
+            t.r.w = r->w;
+            t.r.h = r->h;
+            t.offset = (uint64_t)r->y * (uint64_t)vfb.w * 4u +
+                       (uint64_t)r->x * 4u;
+            t.resource_id = vfb.rid;
+            if (vg_cmd(&t, sizeof(t), t.hdr.type) != 0)
+                return -1;
+        }
     }
     struct VGPU_RESOURCE_FLUSH f;
     memset(&f, 0, sizeof(f));

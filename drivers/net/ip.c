@@ -1,5 +1,6 @@
 #include "drivers/net/ip.h"
 
+#include "drivers/char/console/io.h"
 #include "lib/str/str.h"
 #include "drivers/net/arp.h"
 #include "drivers/net/eth.h"
@@ -38,6 +39,10 @@ void ip_input(NETIF *ifp, const uint8_t *pkt, uint32_t len) {
         return;
     if (ip_csum(pkt, ihlen) != 0)
         return;
+
+    uint32_t total = net_be16(pkt + 2);
+    if (total >= ihlen && total <= len)
+        len = total;
     uint32_t daddr = net_be32(pkt + 16);
     if (daddr != ifp->ip && daddr != 0xFFFFFFFFu)
         return;

@@ -36,6 +36,7 @@ typedef 仅允许两种：函数指针类型（小写下划线，如 `thread_fun
 | `X86_` / `IDT_` / `GDT_` / `MB2_` / `BOOT_` / `SMP_` | arch、引导与 SMP 启动 | `IDT_ENTRY` |
 | `TTY_` / `KB_` / `MOUSE_` | drivers/char | `TTY_ICANON` |
 | `RB_` / `LIST_` / `STR_` / `RAND_` | lib | `RB_NODE` |
+| `PNG_` | lib/png 图像解码 | `PNG_IMAGE` |
 | `LC_` | libc/compat 自有 mini-libc | `LC_IOVEC` |
 
 新增子系统在前缀表登记，不要凭空造前缀。

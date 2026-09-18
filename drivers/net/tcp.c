@@ -1,4 +1,5 @@
 #include "drivers/net/tcp.h"
+#include "drivers/char/console/io.h"
 
 #include "kernel/asm_func.h"
 #include "lib/str/str.h"
@@ -227,7 +228,7 @@ int tcp_recv(struct TCP_PCB *pcb, void *buf, uint32_t len) {
     uint8_t *dst = (uint8_t *)buf;
     for (uint32_t i = 0; i < avail; i++)
         dst[i] = pcb->rx[pcb->rx_head++ & RCV_MASK];
-    pcb->rcv_nxt += avail;
+
     lock_release(&net_lock);
     return (int)avail;
 }
@@ -447,10 +448,8 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         return;
     uint32_t dlen = len - hlen;
     const uint8_t *data = pkt + hlen;
-    uint16_t csum_seg = net_be16(pkt + 16);
-    net_put16((uint8_t *)pkt + 16, 0);
+
     uint16_t sum = tcp_sum(pkt, len, src, ifp->ip);
-    net_put16((uint8_t *)pkt + 16, csum_seg);
     if (sum != 0)
         return;
 

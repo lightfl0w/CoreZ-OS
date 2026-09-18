@@ -1,4 +1,5 @@
 #include "drivers/net/eth.h"
+#include "drivers/char/console/io.h"
 
 #include "lib/str/str.h"
 #include "drivers/net/arp.h"

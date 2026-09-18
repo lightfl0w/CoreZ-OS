@@ -469,6 +469,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("str.o",        ROOT / "lib" / "str" / "str.c"),
         ("rand.o",       ROOT / "lib" / "rand" / "rand.c"),
         ("rbtree.o",     ROOT / "lib" / "rbtree" / "rbtree.c"),
+        ("png.o",        ROOT / "lib" / "png" / "png.c"),
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
@@ -508,18 +509,21 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
+        ("gpu.o",        KERNEL_DIR / "gui" / "gpu.c"),
         ("display.o",    KERNEL_DIR / "gui" / "display.c"),
         ("input.o",      KERNEL_DIR / "gui" / "input.c"),
         ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
         ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
         ("udi_vmware.o", KERNEL_DIR / "gui" / "udi_vmware.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
+        ("theme.o",      KERNEL_DIR / "gui" / "theme.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
-        ("layout.o",     KERNEL_DIR / "gui" / "layout.c"),
         ("wm.o",         KERNEL_DIR / "gui" / "wm.c"),
         ("guiclients.o", KERNEL_DIR / "gui" / "clients.c"),
         ("gui.o",        KERNEL_DIR / "gui" / "gui.c"),
+        ("x11.o",        KERNEL_DIR / "gui" / "x11.c"),
+        ("x11_server.o", KERNEL_DIR / "gui" / "x11_server.c"),
     ]
 
     tasks.append(Task(
@@ -680,10 +684,30 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         cwd=BUILD_DIR, out=BUILD_DIR / "font_kernel.o", deps=[],
         description="embed font_kernel.ttf", group="objcopy",
     ))
+    asset_specs = (("wallpaper.png", 1024, 768, 0),
+                   ("pic1.png", 768, 512, 1),
+                   ("pic2.png", 640, 480, 2))
+    for nm, ww, hh, var in asset_specs:
+        asset = task_python(
+            nm, SCRIPTS / "make_wallpaper.py",
+            [str(BUILD_DIR / nm), str(ww), str(hh), str(var)],
+            out=BUILD_DIR / nm,
+        )
+        asset.group = "asset"
+        asset.description = f"make_wallpaper.py → {nm}"
+        tasks.append(asset)
+    tasks.append(Task(
+        name="wallpaper_kernel.o",
+        cmd=[tools.objcopy, "-I", "binary", "-O", "elf64-x86-64",
+             "-B", "i386:x86-64", "--set-section-alignment", ".data=64",
+             "wallpaper.png", "wallpaper_kernel.o"],
+        cwd=BUILD_DIR, out=BUILD_DIR / "wallpaper_kernel.o", deps=[],
+        description="embed wallpaper.png", group="objcopy",
+    ))
     kernel_objs_names = [
         "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
@@ -693,10 +717,10 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "linux_compat.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
         "lc_clone.o",
-        "mouse.o", "gfx.o", "display.o", "input.o", "udi.o",
+        "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",
         "udi_virtio.o", "udi_vmware.o", "font.o",
-        "font_kernel.o", "shm.o", "guiserver.o",
-        "layout.o", "wm.o", "guiclients.o", "gui.o",
+        "theme.o", "font_kernel.o", "wallpaper_kernel.o", "shm.o", "guiserver.o",
+        "wm.o", "guiclients.o", "gui.o", "x11.o", "x11_server.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
     ]
@@ -1072,9 +1096,11 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
             run_task(t)
             update(i, t.description)
     s += 1
-    console.step_header(s, total_steps, "Generating font subset")
-    font_py = [t for t in plan.tasks if t.group == "python" and "font" in t.name]
-    with console.progress(len(font_py), "font", Ansi.BR_MAG) as update:
+    console.step_header(s, total_steps, "Generating font & image assets")
+    font_py = [t for t in plan.tasks
+               if (t.group == "python" and "font" in t.name) or
+               t.group == "asset"]
+    with console.progress(len(font_py), "assets", Ansi.BR_MAG) as update:
         i = 0
         for t in font_py:
             i += 1

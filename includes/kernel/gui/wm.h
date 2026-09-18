@@ -15,6 +15,7 @@ void wm_unmanage(struct WL_SURFACE *s);
 
 int wm_collect_visible(struct WL_SURFACE **out, int max);
 struct WL_SURFACE *wm_focused_surface(void);
+struct WL_SURFACE *wm_surface_at(int x, int y);
 int wm_current_ws(void);
 void wm_draw_bar(struct GFX_CANVAS *c, struct GFX_RECT *clip);
 int wm_bar_check_dirty(void);

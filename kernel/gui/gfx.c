@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/str/str.h"
+
 static struct GFX_FB_FORMAT fb_fmt = {32, 16, 8, 8, 8, 0, 8};
 
 void gfx_set_fb_format(const struct GFX_FB_FORMAT *fmt) {
@@ -173,16 +175,21 @@ void gfx_blit(struct GFX_CANVAS *dst, int dx, int dy,
                    (size_t)(sx + w - 1) * 4u + 4u;
     if (dlast > dsz || slast > ssz)
         return;
+    int contiguous = (dx * 4 + w * 4 <= dst->pitch) &&
+                     (sx * 4 + w * 4 <= src->pitch);
     for (int row = 0; row < h; row++) {
-        gfx_color *d = (gfx_color *)(void *)((uint8_t *)dst->pixels +
-                                             (size_t)(dy + row) * dst->pitch) +
-                       dx;
-        const gfx_color *s =
-            (const gfx_color *)(const void *)((const uint8_t *)src->pixels +
-                                              (size_t)(sy + row) * src->pitch) +
-            sx;
-        for (int i = 0; i < w; i++)
-            d[i] = s[i];
+        uint8_t *d = (uint8_t *)dst->pixels +
+                     (size_t)(dy + row) * (size_t)dst->pitch + (size_t)dx * 4u;
+        const uint8_t *s = (const uint8_t *)src->pixels +
+                           (size_t)(sy + row) * (size_t)src->pitch +
+                           (size_t)sx * 4u;
+        if (contiguous) {
+            memcpy(d, s, (size_t)w * 4u);
+        } else {
+            for (int i = 0; i < w; i++)
+                ((gfx_color *)(void *)d)[i] =
+                    ((const gfx_color *)(const void *)s)[i];
+        }
     }
 }
 
@@ -454,6 +461,57 @@ void gfx_present(struct GFX_CANVAS *dst, int dx, int dy,
             if (fb_fmt.b_bits)
                 dev |= scale_channel(GFX_B(p), fb_fmt.b_bits) << fb_fmt.b_pos;
             d[i] = dev;
+        }
+    }
+}
+
+void gfx_blit_scale(struct GFX_CANVAS *dst, int dx, int dy, int dw, int dh,
+                    const struct GFX_CANVAS *src, int sx, int sy, int sw,
+                    int sh) {
+    if (!dst || !dst->pixels || !src || !src->pixels)
+        return;
+    if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0)
+        return;
+    int dstride = gfx_stride(dst);
+    int sstride = gfx_stride(src);
+    int sex = sx + sw - 1;
+    int sey = sy + sh - 1;
+    for (int y = 0; y < dh; y++) {
+        int py = dy + y;
+        if (py < 0 || py >= dst->h)
+            continue;
+        uint64_t fy = (((uint64_t)y * (uint64_t)sh) << 16) / (uint64_t)dh;
+        int sy0 = sy + (int)(fy >> 16);
+        int wy = (int)((fy >> 8) & 0xFFu);
+        if (sy0 > sey)
+            sy0 = sey;
+        int sy1 = (sy0 < sey) ? sy0 + 1 : sey;
+        const gfx_color *r0 = src->pixels + (size_t)sy0 * (size_t)sstride;
+        const gfx_color *r1 = src->pixels + (size_t)sy1 * (size_t)sstride;
+        gfx_color *drow = dst->pixels + (size_t)py * (size_t)dstride;
+        for (int x = 0; x < dw; x++) {
+            int px = dx + x;
+            if (px < 0 || px >= dst->w)
+                continue;
+            uint64_t fx = (((uint64_t)x * (uint64_t)sw) << 16) / (uint64_t)dw;
+            int sx0 = sx + (int)(fx >> 16);
+            int wx = (int)((fx >> 8) & 0xFFu);
+            if (sx0 > sex)
+                sx0 = sex;
+            int sx1 = (sx0 < sex) ? sx0 + 1 : sex;
+            gfx_color c00 = r0[sx0], c01 = r0[sx1];
+            gfx_color c10 = r1[sx0], c11 = r1[sx1];
+            int w00 = (256 - wx) * (256 - wy);
+            int w01 = wx * (256 - wy);
+            int w10 = (256 - wx) * wy;
+            int w11 = wx * wy;
+            int r = (GFX_R(c00) * w00 + GFX_R(c01) * w01 + GFX_R(c10) * w10 +
+                     GFX_R(c11) * w11) >> 16;
+            int g = (GFX_G(c00) * w00 + GFX_G(c01) * w01 + GFX_G(c10) * w10 +
+                     GFX_G(c11) * w11) >> 16;
+            int b = (GFX_B(c00) * w00 + GFX_B(c01) * w01 + GFX_B(c10) * w10 +
+                     GFX_B(c11) * w11) >> 16;
+            drow[px] = GFX_RGB(r, g, b);
         }
     }
 }

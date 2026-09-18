@@ -174,9 +174,7 @@ void udp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         return;
     uint16_t csum_seg = net_be16(pkt + 6);
     if (csum_seg) {
-        net_put16((uint8_t *)pkt + 6, 0);
         uint16_t sum = udp_sum(pkt, udp_len, src, ifp->ip);
-        net_put16((uint8_t *)pkt + 6, csum_seg);
         if (sum != 0)
             return;
     }
