@@ -115,10 +115,13 @@ int copy_user_space(struct TASK *parent, struct TASK *child) {
     }
     uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
     uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
+    preempt_disable();
     if (alloc_child_page_tables(child, pdp, child_pdp) != 0) {
+        preempt_enable();
         return -1;
     }
     share_user_space_cow(child, pdp, child_pdp);
+    preempt_enable();
     return 0;
 }
 

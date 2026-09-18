@@ -317,8 +317,21 @@ static int buildin_execute(int32_t argc, char **argv) {
         return 0;
     }
     if (str_eq(argv[0], "gui")) {
-        execv("/gui.elf", (const char *[]){"/gui.elf", NULL});
-        printf("gui: exec failed.\n");
+        int32_t pid = fork();
+        if (pid > 0) {
+            syscall1(SYS_NR_SETFGPID, (uint32_t)pid);
+            int32_t status = 0;
+            int32_t child_pid = wait(&status);
+            syscall1(SYS_NR_SETFGPID, (uint32_t)-1);
+            printf("\n[prog %d exited, status %d]\n", (int)child_pid,
+                   (int)status);
+        } else if (pid == 0) {
+            execv("/gui.elf", (const char *[]){"/gui.elf", NULL});
+            printf("gui: exec failed.\n");
+            exit(-1);
+        } else {
+            printf("gui: fork failed.\n");
+        }
         return 0;
     }
     if (str_eq(argv[0], "shutdown")) {

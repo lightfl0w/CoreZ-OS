@@ -308,6 +308,21 @@ static void assert_stack_magic(const struct TASK *t) {
     }
 }
 
+static uint32_t preempt_count;
+
+void preempt_disable(void) {
+    preempt_count++;
+}
+
+void preempt_enable(void) {
+    if (preempt_count > 0)
+        preempt_count--;
+}
+
+uint32_t preempt_disabled(void) {
+    return preempt_count;
+}
+
 void schedule(void) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
     assert_stack_magic(current);

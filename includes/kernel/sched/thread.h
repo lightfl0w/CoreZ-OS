@@ -117,5 +117,8 @@ int thread_traverse_all(thread_all_action action, void *arg);
 struct TASK *thread_alloc_slot(const char *name, uint8_t priority);
 void thread_ready(struct TASK *t);
 void thread_exit_current(void);
+void preempt_disable(void);
+void preempt_enable(void);
+uint32_t preempt_disabled(void);
 void thread_kill_pid(uint32_t pid);
 #endif /* SCHED_THREAD_H */

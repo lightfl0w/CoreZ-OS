@@ -201,7 +201,8 @@ void irq_handler(struct X86_REGS *r) {
         thread_timer_wake();
         if (current != 0) {
             check_pending_signals(r);
-            schedule();
+            if (preempt_disabled() == 0)
+                schedule();
         }
         return;
     }
