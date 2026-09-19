@@ -343,12 +343,6 @@ int open_file(const char *pathname, uint8_t flags) {
         file_table_free_slot(gfd);
         return -1;
     }
-    if (fs_is_chardev(file->fd_inode) &&
-        (fs_chardev_dev(file->fd_inode) >> 8) == 5u) {
-        inode_close(file->fd_inode);
-        file_table_free_slot(gfd);
-        return fd_install(0);
-    }
     file->ref_cnt = 1;
     int fd = fd_install(gfd);
     if (fd == -1) {

@@ -739,7 +739,7 @@ static void taskbar_click(int x, int y) {
 }
 
 void wm_handle_button(int x, int y, uint8_t buttons, uint8_t edge) {
-    if (edge & 2) {
+    if ((edge & 1) && !(buttons & 1)) {
         if (grab && snap_pending != WIN_HIT_NONE)
             apply_snap(grab);
         grab = 0;

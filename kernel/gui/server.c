@@ -947,6 +947,9 @@ static void bs_blit(struct WL_SURFACE *s, struct GFX_RECT *clip) {
     int ga = s->alpha;
     if (ga <= 0)
         return;
+    int rad = WIN_RADIUS;
+    if (rad * 2 > b->h)
+        rad = b->h / 2;
     size_t mapped = gfx_canvas_mapped_bytes(dst, &(int){0});
     size_t smapped = gfx_canvas_mapped_bytes(b, &(int){0});
     for (int py = v.y; py < v.y + v.h; py++) {
@@ -961,6 +964,11 @@ static void bs_blit(struct WL_SURFACE *s, struct GFX_RECT *clip) {
             (const gfx_color *)(const void *)((const uint8_t *)b->pixels +
                                               soff);
         if (ga >= 255) {
+            int ly = py - fy;
+            if (ly >= rad && ly < b->h - rad) {
+                memcpy(dp, sp, (size_t)v.w * sizeof(gfx_color));
+                continue;
+            }
             for (int i = 0; i < v.w; i++) {
                 gfx_color c = sp[i];
                 int sa = GFX_A(c);
@@ -1141,6 +1149,7 @@ void comp_init(void) {
 static void drain_input(void) {
     struct GUI_INPUT_EVENT ev;
     int cur_dirty = 0;
+    int motion_pending = 0;
     while (input_get(&ev)) {
         if (ev.dev == INPUT_DEV_KEYBOARD) {
             perf_key_events++;
@@ -1165,18 +1174,22 @@ static void drain_input(void) {
                     comp_damage_rect(cur_x, cur_y, CURSOR_W, CURSOR_H);
                     comp_damage_rect(nx, ny, CURSOR_W, CURSOR_H);
                 }
-                wm_handle_motion(nx, ny);
-                wm_handle_hover(nx, ny);
-                struct WL_SURFACE *mh = wm_surface_at(nx, ny);
-                if (mh && mh->x11_owner)
-                    x11_notify_motion(mh, nx - mh->x, ny - mh->y);
                 cur_x = nx;
                 cur_y = ny;
+                motion_pending = 1;
                 cur_dirty = 1;
             }
             uint8_t btn = (uint8_t)ev.code;
             uint8_t edge = btn ^ last_buttons;
             if (edge) {
+                if (motion_pending) {
+                    motion_pending = 0;
+                    wm_handle_motion(cur_x, cur_y);
+                    wm_handle_hover(cur_x, cur_y);
+                    struct WL_SURFACE *mh = wm_surface_at(cur_x, cur_y);
+                    if (mh && mh->x11_owner)
+                        x11_notify_motion(mh, cur_x - mh->x, cur_y - mh->y);
+                }
                 wm_handle_button(cur_x, cur_y, btn, edge);
                 struct WL_SURFACE *hit = wm_surface_at(cur_x, cur_y);
                 if (hit && hit->x11_owner) {
@@ -1187,6 +1200,13 @@ static void drain_input(void) {
                 last_buttons = btn;
             }
         }
+    }
+    if (motion_pending) {
+        wm_handle_motion(cur_x, cur_y);
+        wm_handle_hover(cur_x, cur_y);
+        struct WL_SURFACE *mh = wm_surface_at(cur_x, cur_y);
+        if (mh && mh->x11_owner)
+            x11_notify_motion(mh, cur_x - mh->x, cur_y - mh->y);
     }
     if (hw_cursor && cur_dirty) {
         struct GUI_DISPLAY_OPS *d = display_get();

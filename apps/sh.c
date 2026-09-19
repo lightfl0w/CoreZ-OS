@@ -91,7 +91,16 @@ int main(int argc, char **argv) {
         return sh_exec_line(joined);
     }
     char line[SH_LINE_MAX];
-    while (fgets(line, sizeof(line), stdin) != NULL) {
+    for (;;) {
+        char cwd[SH_LINE_MAX];
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+            strcpy(cwd, "/");
+        }
+        printf("[corez@corez %s]$ ", cwd);
+        fflush(stdout);
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            break;
+        }
         sh_exec_line(line);
     }
     return 0;
