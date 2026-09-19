@@ -11,7 +11,13 @@
 #define CLONE_SIGHAND 0x00000800
 #define CLONE_THREAD 0x00010000
 #define CLONE_SETTLS 0x00080000
+#define CLONE_PARENT_SETTID 0x00100000
+#define CLONE_CHILD_CLEARTID 0x00200000
+#define CLONE_CHILD_SETTID 0x01000000
+#define CLONE_SYSVSEM 0x00040000
 
 pid_t sys_clone(struct X86_REGS *r);
+pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
+                   struct X86_REGS *r);
 
 #endif

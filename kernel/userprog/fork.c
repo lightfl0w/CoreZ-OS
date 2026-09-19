@@ -163,6 +163,7 @@ pid_t sys_fork(struct X86_REGS *r) {
             file_table_ref(child->fd_table[i]);
         }
     }
+    child->pipe_wr_mask = parent->pipe_wr_mask;
     child->exit_status = 0;
     child->signal_mask = parent->signal_mask;
     child->signal_pending = 0;

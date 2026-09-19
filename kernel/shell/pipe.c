@@ -41,6 +41,25 @@ int32_t sys_pipe(int32_t pipefd[2]) {
         file_table_free_slot(global_fd);
         return -1;
     }
+    current->pipe_wr_mask |= 1u << (uint32_t)pipefd[1];
+    return 0;
+}
+
+int32_t pipe_has_writer(uint32_t global_fd) {
+    for (uint32_t t = 0; t < MAX_TASKS; t++) {
+        struct TASK *task = &task_table[t];
+        if (!task->slot_used || task->status == TASK_DIED) {
+            continue;
+        }
+        for (uint32_t fd = 3; fd < MAX_FILES_OPEN_PER_PROC; fd++) {
+            if (task->fd_table[fd] != global_fd) {
+                continue;
+            }
+            if ((task->pipe_wr_mask >> fd) & 1u) {
+                return 1;
+            }
+        }
+    }
     return 0;
 }
 

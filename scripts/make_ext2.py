@@ -34,6 +34,7 @@ FILES = [
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
+    "py_compat_probe.elf", "sh.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -79,7 +80,7 @@ def build_dirent_blocks(entries, block=BLOCK):
 
 
 DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
-             ("console", 5, 1)]
+             ("console", 5, 1), ("random", 1, 8), ("urandom", 1, 9)]
 
 EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
               ("tmp", 0x41ED | 0o777), ("lib", 0o40755)]
@@ -96,6 +97,13 @@ ETC_FILES = [
     ("group", b"root:x:0:\nuser:x:1000:\n", 0x81A4 & ~0o777 | 0o644, 0, 0),
     ("shadow", b"root::0:0:99999:7:::\nuser::0:0:99999:7:::\n",
      0x81A4 & ~0o777 | 0o600, 0, 0),
+    ("hosts",
+     b"127.0.0.1 localhost localhost.localdomain\n",
+     0x81A4 & ~0o777 | 0o644, 0, 0),
+    ("services",
+     b"ftp 21/tcp\nssh 22/tcp\ndomain 53/udp\ndomain 53/tcp\n"
+     b"http 80/tcp\nhttps 443/tcp\n",
+     0x81A4 & ~0o777 | 0o644, 0, 0),
 ]
 
 # /lib：动态链接器与共享库。libc.so 在 x86_64 上同时就是 ld-musl-x86_64.so.1，
@@ -111,6 +119,7 @@ SYMLINKS = [("catlink", "/cat.elf"),
 # 调试某个程序（默认这份是回归用的完整序列）
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"toybox ls -l /lib\n"
+                  b"musl_abi_test.elf\n"
                   b"dyn_demo.elf\n"
                   b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
                   b"dev_demo.elf\ntoybox cat /proc/meminfo\n"
@@ -314,7 +323,7 @@ def build(build_dir, out, smoke=False, autoexec=None):
         put_inode(itable, dir_inos[dirname], BLOCK,
                   [subdir_dir_blocks[dirname]], True, mode=0o40755)
     for name in BIN_LINKS:
-        tgt = b"/toybox"
+        tgt = b"/sh.elf" if name == "sh" else b"/toybox"
         off = (bin_link_inos[name] - 1) * INODE_SIZE
         struct.pack_into("<H", itable, off + 0, 0xA1FF)
         struct.pack_into("<I", itable, off + 4, len(tgt))
@@ -431,7 +440,12 @@ if __name__ == "__main__":
     arg1 = args[0] if len(args) > 0 else "build"
     arg2 = args[1] if len(args) > 1 else "test_hd.img"
     smoke = "--smoke" in sys.argv
-    build(arg1, arg2, smoke=smoke)
+    autoexec = None
+    if "--autoexec" in args:
+        i = args.index("--autoexec")
+        autoexec = Path(args[i + 1]).read_bytes()
+        del args[i:i + 2]
+    build(arg1, arg2, smoke=smoke, autoexec=autoexec)
     nvme_img = Path(arg2).with_name("nvme.img")
-    build(arg1, str(nvme_img), smoke=smoke)
+    build(arg1, str(nvme_img), smoke=smoke, autoexec=autoexec)
     print(f"OK: {nvme_img} (nvme copy for -device nvme)")

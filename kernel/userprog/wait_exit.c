@@ -3,15 +3,25 @@
 #include "kernel/syscall/linux_abi.h"
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
+#include "kernel/mm/access.h"
 #include "kernel/mm/bitmap/bitmap.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/syscall/futex.h"
 #include "kernel/userprog/process.h"
 #include "lib/list/list.h"
 
 static void release_prog_resource(struct TASK *release_thread) {
-    /* 地址空间交给引用计数管理：CLONE_VM 共享的空间只有最后一个
-     * 持有者才真正释放用户页/页表/位图 */
+    if (release_thread->clear_child_tid != 0) {
+        uint32_t addr = release_thread->clear_child_tid;
+        release_thread->clear_child_tid = 0;
+        if (access_ok((const void *)(uintptr_t)addr, 4, 1)) {
+            *(volatile int32_t *)(uintptr_t)addr = 0;
+            if (release_thread == current) {
+                sys_futex(addr, FUTEX_WAKE, 0x7FFFFFFF, 0);
+            }
+        }
+    }
     task_release_space(release_thread);
     for (uint32_t fd_idx = 3; fd_idx < MAX_FILES_OPEN_PER_PROC; fd_idx++) {
         if (release_thread->fd_table[fd_idx] != (uint32_t)-1) {
@@ -88,8 +98,6 @@ void proc_exit(struct TASK *cur, int status) {
         thread_unblock(parent);
     }
     if (cur->parent_pid < 0) {
-        /* CLONE_THREAD 分离线程没有父进程来收尸：直接标记 DIED 交给调度器
-         * 回收，否则任务槽与内核栈会以僵尸态永久泄漏 */
         thread_exit_current();
         return;
     }

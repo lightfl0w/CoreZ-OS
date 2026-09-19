@@ -73,6 +73,7 @@ static void init_fd_table(struct TASK *t) {
     t->fd_table[0] = 0;
     t->fd_table[1] = 1;
     t->fd_table[2] = 2;
+    t->pipe_wr_mask = 0;
     for (uint32_t fd_idx = 3; fd_idx < MAX_FILES_OPEN_PER_PROC; fd_idx++)
         t->fd_table[fd_idx] = (uint32_t)-1;
     t->cwd_inode_nr = 0;
@@ -88,6 +89,7 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->parent_pid = parent_pid;
     t->stack_magic = STACK_MAGIC;
     t->fd_cloexec = 0;
+    t->clear_child_tid = 0;
     t->tls_base = 0;
     t->tls_selector = 0;
     t->tls_msr = 0;
@@ -117,7 +119,6 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->sleep_intr = 0;
     t->sleep_eintr = 0;
     t->sleep_left = 0;
-    /* 槽位可能复用：必须清掉上一任任务的 vaddr 位图指针，避免误用旧位图 */
     t->userprog_v_addr.vaddr_start = 0;
     t->userprog_v_addr.vaddr_bitmap.bits = NULL;
     t->userprog_v_addr.vaddr_bitmap.btmp_bytes_len = 0;

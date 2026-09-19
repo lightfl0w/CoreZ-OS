@@ -9,6 +9,7 @@ extern "C" {
 
 int32_t sys_fstat(int32_t fd, void *buf);
 int32_t sys_dup(int32_t oldfd);
+int32_t sys_dup_from(int32_t oldfd, uint32_t min_local);
 int32_t sys_dup2(int32_t oldfd, int32_t newfd);
 int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg);
 

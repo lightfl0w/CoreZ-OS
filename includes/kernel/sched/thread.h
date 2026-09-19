@@ -12,7 +12,7 @@
 #define STACK_MAGIC 0x19860726
 
 #define RFLAGS_INIT 0x202u
-#define MAX_FILES_OPEN_PER_PROC 8
+#define MAX_FILES_OPEN_PER_PROC 32
 typedef int32_t pid_t;
 enum TASK_STATUS {
     TASK_RUNNING = 1u << 0,
@@ -67,6 +67,7 @@ struct TASK {
     struct SYS_SIGACTION sigactions[NSIG];
     uint32_t cwd_inode_nr;
     uint32_t fd_table[MAX_FILES_OPEN_PER_PROC];
+    uint32_t pipe_wr_mask;
     uint32_t tls_base;
     uint32_t tls_selector;
     uint8_t tls_msr;
@@ -86,6 +87,7 @@ struct TASK {
     uint32_t sigalt_size;
     uint32_t sigalt_flags;
     uint32_t compat;
+    uint32_t clear_child_tid;
     uint32_t stack_magic;
     uint64_t fd_cloexec;
     uint8_t slot_used;

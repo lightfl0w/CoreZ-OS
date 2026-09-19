@@ -878,6 +878,25 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             "musl_abi_test.elf", BUILD_DIR / "musl_abi_test.elf",
             [BUILD_DIR / "musl_abi_test.o"])
         tasks.append(musl_abi_test_elf)
+        py_probe_c = task_cc("musl_py_compat_probe.o",
+                             APPS_DIR / "py_compat_probe.c",
+                             BUILD_DIR / "py_compat_probe.o", tools,
+                             MUSL_DEMO_CFLAGS)
+        py_probe_c.optional = True
+        py_probe_c.group = "musl"
+        tasks.append(py_probe_c)
+        py_probe_elf = link_musl_user(
+            "musl_py_compat_probe.elf", BUILD_DIR / "py_compat_probe.elf",
+            [BUILD_DIR / "py_compat_probe.o"])
+        tasks.append(py_probe_elf)
+        sh_c = task_cc("musl_sh.o", APPS_DIR / "sh.c", BUILD_DIR / "sh.o",
+                       tools, MUSL_DEMO_CFLAGS)
+        sh_c.optional = True
+        sh_c.group = "musl"
+        tasks.append(sh_c)
+        sh_elf = link_musl_user("musl_sh.elf", BUILD_DIR / "sh.elf",
+                                [BUILD_DIR / "sh.o"])
+        tasks.append(sh_elf)
         libc_tests_elf = link_musl_user(
             "libc_testsuite.elf", BUILD_DIR / "libc_testsuite.elf",
             [BUILD_DIR / "libc_tests_main.o",

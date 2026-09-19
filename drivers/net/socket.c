@@ -50,11 +50,18 @@ static struct SOCKET *sock_alloc(void) {
     return 0;
 }
 
+int net_fd_index(int fd) {
+    if (fd < NET_FD_BASE || fd >= NET_FD_LIMIT)
+        return -1;
+    return fd - NET_FD_BASE;
+}
+
 static struct SOCKET *sock_get(int fd) {
-    if (fd < 0 || fd >= MAX_SOCKET || !s_sock[fd].active) {
+    int idx = net_fd_index(fd);
+    if (idx < 0 || !s_sock[idx].active) {
         return NULL;
     }
-    return &s_sock[fd];
+    return &s_sock[idx];
 }
 
 static int sock_readable(struct SOCKET *s) {
@@ -171,7 +178,7 @@ int net_socket(int domain, int type, int proto) {
             return -1;
         }
         lock_release(&net_lock);
-        return (int)(s - s_sock);
+        return (int)(s - s_sock) + NET_FD_BASE;
     }
     s->pcb = tcp_pcb_alloc();
     if (!s->pcb) {
@@ -181,7 +188,31 @@ int net_socket(int domain, int type, int proto) {
     }
     s->pcb->local_port = 0;
     lock_release(&net_lock);
-    return (int)(s - s_sock);
+    return (int)(s - s_sock) + NET_FD_BASE;
+}
+
+static uint16_t net_alloc_port(void) {
+    static uint16_t next_port = 49152;
+    for (int attempt = 0; attempt < 16384; attempt++) {
+        uint16_t cand = next_port++;
+        if (next_port < 49152)
+            next_port = 49152;
+        int used = 0;
+        for (int i = 0; i < MAX_SOCKET; i++) {
+            if (!s_sock[i].active)
+                continue;
+            uint16_t lp = (s_sock[i].type == SOCK_DGRAM)
+                              ? s_sock[i].upcb->local_port
+                              : s_sock[i].pcb->local_port;
+            if (lp == cand) {
+                used = 1;
+                break;
+            }
+        }
+        if (!used)
+            return cand;
+    }
+    return 0;
 }
 
 int net_bind(int fd, uint32_t ip, uint16_t port) {
@@ -190,6 +221,13 @@ int net_bind(int fd, uint32_t ip, uint16_t port) {
     if (s == NULL) {
         lock_release(&net_lock);
         return -1;
+    }
+    if (port == 0) {
+        port = net_alloc_port();
+        if (port == 0) {
+            lock_release(&net_lock);
+            return -1;
+        }
     }
     int rc = (s->type == SOCK_DGRAM) ? udp_bind(s->upcb, ip, port)
                                      : tcp_bind(s->pcb, ip, port);
@@ -341,7 +379,7 @@ int net_accept(int fd) {
     n->type = SOCK_STREAM;
     n->pcb = np;
     lock_release(&net_lock);
-    return (int)(n - s_sock);
+    return (int)(n - s_sock) + NET_FD_BASE;
 }
 
 int net_close(int fd) {
@@ -371,14 +409,35 @@ int net_close(int fd) {
 #define F_SETFL 4
 
 int net_is_socket(int fd) {
-    return fd >= 0 && fd < MAX_SOCKET && s_sock[fd].active;
+    int idx = net_fd_index(fd);
+    return idx >= 0 && s_sock[idx].active;
+}
+
+int net_poll_ready(int fd, int want_read, int want_write) {
+    int rv = 0;
+    if (net_fd_index(fd) < 0)
+        return POLLNVAL_R;
+    lock_acquire(&net_lock);
+    struct SOCKET *s = sock_get(fd);
+    if (s == NULL) {
+        lock_release(&net_lock);
+        return POLLNVAL_R;
+    }
+    if (want_read && sock_readable(s))
+        rv |= POLLIN_R;
+    if (want_write && sock_writable(s))
+        rv |= POLLOUT_R;
+    if (s->err)
+        rv |= POLLERR_R;
+    lock_release(&net_lock);
+    return rv;
 }
 
 int net_fcntl(int fd, int cmd, uint32_t arg) {
     if (!net_is_socket(fd))
         return -EBADF;
     lock_acquire(&net_lock);
-    struct SOCKET *s = &s_sock[fd];
+    struct SOCKET *s = sock_get(fd);
     int rc;
     switch (cmd) {
     case F_GETFL:
@@ -404,7 +463,7 @@ int net_getsockname(int fd, uint32_t *ip, uint16_t *port) {
     if (!net_is_socket(fd))
         return -EBADF;
     lock_acquire(&net_lock);
-    struct SOCKET *s = &s_sock[fd];
+    struct SOCKET *s = sock_get(fd);
     if (s->type == SOCK_DGRAM) {
         if (ip)
             *ip = s->upcb->local_ip;
@@ -424,7 +483,7 @@ int net_getpeername(int fd, uint32_t *ip, uint16_t *port) {
     if (!net_is_socket(fd))
         return -EBADF;
     lock_acquire(&net_lock);
-    struct SOCKET *s = &s_sock[fd];
+    struct SOCKET *s = sock_get(fd);
     int rc = 0;
     if (s->type == SOCK_DGRAM) {
         if (!s->upcb->remote_ip)
@@ -454,7 +513,7 @@ int net_getsockopt(int fd, int level, int optname, void *val, uint32_t *len) {
         return -EBADF;
     if (level != SOL_SOCKET)
         return -EINVAL;
-    struct SOCKET *s = &s_sock[fd];
+    struct SOCKET *s = sock_get(fd);
     switch (optname) {
     case SO_ERROR: {
         lock_acquire(&net_lock);
@@ -508,7 +567,7 @@ int net_shutdown(int fd, int how) {
     if (!net_is_socket(fd))
         return -EBADF;
     lock_acquire(&net_lock);
-    struct SOCKET *s = &s_sock[fd];
+    struct SOCKET *s = sock_get(fd);
     int rc;
     if (s->type != SOCK_STREAM)
         rc = -EOPNOTSUPP;
@@ -538,9 +597,12 @@ int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
     for (;;) {
         int total = 0;
         lock_acquire(&net_lock);
-        for (int fd = 0; fd < nfds; fd++) {
-            struct SOCKET *s = fd < MAX_SOCKET ? &s_sock[fd] : NULL;
-            int live = (s != NULL && s->active) ? 1 : 0;
+        for (int i = 0; i < MAX_SOCKET; i++) {
+            int fd = NET_FD_BASE + i;
+            if (fd >= nfds)
+                break;
+            struct SOCKET *s = s_sock[i].active ? &s_sock[i] : NULL;
+            int live = (s != NULL) ? 1 : 0;
             int readable = live ? sock_readable(s) : 0;
             int writable = live ? sock_writable(s) : 0;
             total += sel_test(rfds, fd, readable);
