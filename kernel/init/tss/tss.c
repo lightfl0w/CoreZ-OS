@@ -35,7 +35,8 @@ void tss_ap_init(uint32_t idx, uint32_t kstack_top) {
 void tss_update_rsp0(struct TASK *task) {
     uint64_t top = (uint64_t)task->kernel_stack_top;
     cpu_tss[cpu_id()].rsp0 = top;
-    syscall_kstack_top_data = top;
+    if (task->pml4_phys != 0)
+        syscall_kstack_top_data = top;
 }
 
 void tss_init(void) {

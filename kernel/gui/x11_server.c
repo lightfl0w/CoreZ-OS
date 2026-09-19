@@ -66,5 +66,5 @@ static void x11_server_thread(void *arg) {
 }
 
 void x11_server_start(void) {
-    kernel_thread("x11srv", 4, x11_server_thread, 0);
+    kernel_thread("x11srv", 4, x11_server_thread, 0, 0x1);
 }

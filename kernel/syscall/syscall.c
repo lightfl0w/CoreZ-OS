@@ -886,7 +886,6 @@ uint64_t syscall_handler(struct X86_REGS *r) {
 
 void syscall_init(void) {
     extern void syscall_entry(void);
-    extern uint64_t syscall_kstack_top_data;
     const uint64_t MSR_STAR = 0xC0000081;
     const uint64_t MSR_LSTAR = 0xC0000082;
     const uint64_t MSR_FMASK = 0xC0000084;
@@ -898,7 +897,6 @@ void syscall_init(void) {
     asm_wrmsr(MSR_FMASK, 0x5700);
     uint64_t efer = asm_rdmsr(MSR_EFER);
     asm_wrmsr(MSR_EFER, efer | 1);
-    syscall_kstack_top_data = 0;
 
     kprintf("[OK] syscall init, 0x80 full table + syscall/sysret entry\n");
 }

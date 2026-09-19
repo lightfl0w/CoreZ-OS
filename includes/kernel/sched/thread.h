@@ -10,6 +10,7 @@
 #define THREAD_STACK_SIZE 0x8000
 #define MAX_TASKS 64
 #define STACK_MAGIC 0x19860726
+#define FPU_SAVE_SIZE 512
 
 #define RFLAGS_INIT 0x202u
 #define MAX_FILES_OPEN_PER_PROC 32
@@ -91,20 +92,28 @@ struct TASK {
     uint32_t stack_magic;
     uint64_t fd_cloexec;
     uint8_t slot_used;
+    uint8_t cpu_aff;
+    uint32_t on_cpu;
+    uint8_t fpu_storage[FPU_SAVE_SIZE] __attribute__((aligned(64)));
 };
 extern struct TASK task_table[MAX_TASKS];
-extern struct TASK *idle_thread;
+extern struct TASK *idle_threads[NR_CPU];
+extern uint32_t cpu_work_switches[NR_CPU];
 extern struct LIST thread_all_list;
 extern uint32_t foreground_pid;
+uint32_t thread_all_lock(void);
+void thread_all_unlock(uint32_t flags);
 void thread_init(void);
 void cpu_idle_init(void);
 void cpu_idle(void);
 void kernel_thread(char *name, uint8_t priority, thread_func function,
-                   void *arg);
+                   void *arg, uint8_t aff);
 struct TASK *thread_create(char *name, uint8_t priority,
-                                  thread_func function, void *arg);
+                                  thread_func function, void *arg,
+                                  uint8_t aff);
 void schedule(void);
-void switch_to(uint64_t **cur_kstack, uint64_t **next_kstack);
+void switch_to(uint64_t **cur_kstack, uint64_t **next_kstack, void *fp_save,
+               void *fp_restore);
 void kernel_thread_entry(void);
 void thread_block(void);
 void thread_unblock(struct TASK *t);
@@ -112,6 +121,8 @@ int32_t thread_sleep_ticks(uint32_t ticks);
 void thread_timer_wake(void);
 void thread_yield(void);
 void thread_block_with_status(enum TASK_STATUS status);
+uint32_t thread_block_prepare(enum TASK_STATUS status);
+void thread_block_commit(uint32_t flags);
 struct TASK *pid2thread(int32_t pid);
 void thread_exit(struct TASK *thread_over, int need_schedule);
 typedef int (*thread_all_action)(struct TASK *, void *);

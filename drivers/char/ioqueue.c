@@ -32,9 +32,9 @@ uint32_t ioq_length(struct TTY_IOQUEUE *ioq) {
     return len;
 }
 
-static void ioq_wait(struct TASK **waiter) {
+static uint32_t ioq_wait(struct TASK **waiter) {
     *waiter = current;
-    thread_block();
+    return thread_block_prepare(TASK_BLOCKED);
 }
 
 static void wakeup(struct TASK **waiter) {
@@ -47,29 +47,35 @@ static void wakeup(struct TASK **waiter) {
 
 void ioq_putchar(struct TTY_IOQUEUE *ioq, char byte) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
+    lock_acquire(&ioq->lock);
     while (ioq_full(ioq)) {
-        lock_acquire(&ioq->lock);
-        ioq_wait(&ioq->producer);
+        uint32_t bf = ioq_wait(&ioq->producer);
         lock_release(&ioq->lock);
+        thread_block_commit(bf);
+        lock_acquire(&ioq->lock);
     }
     ioq->buf[ioq->head] = byte;
     ioq->head = next_pos(ioq->head);
     if (ioq->consumer != 0) {
         wakeup(&ioq->consumer);
     }
+    lock_release(&ioq->lock);
 }
 
 char ioq_getchar(struct TTY_IOQUEUE *ioq) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
+    lock_acquire(&ioq->lock);
     while (ioq_empty(ioq)) {
-        lock_acquire(&ioq->lock);
-        ioq_wait(&ioq->consumer);
+        uint32_t bf = ioq_wait(&ioq->consumer);
         lock_release(&ioq->lock);
+        thread_block_commit(bf);
+        lock_acquire(&ioq->lock);
     }
     char byte = ioq->buf[ioq->tail];
     ioq->tail = next_pos(ioq->tail);
     if (ioq->producer != 0) {
         wakeup(&ioq->producer);
     }
+    lock_release(&ioq->lock);
     return byte;
 }

@@ -7,8 +7,10 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/percpu.h"
+#include "kernel/sched/thread.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/apic/apic.h"
+#include "arch/x86/interrupt/idt.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/init/tss/tss.h"
 #include "kernel/init/pit/pit.h"
@@ -21,6 +23,7 @@ struct SMP_BOOT_INFO {
 };
 
 static struct GDT_DESC ap_gdt[NR_CPU][GDT_ENTRIES];
+static uint8_t ap_boot_fpu[NR_CPU][FPU_SAVE_SIZE] __attribute__((aligned(64)));
 
 struct GDT_REG {
     uint16_t limit;
@@ -29,6 +32,8 @@ struct GDT_REG {
 static struct GDT_REG ap_gdtr[NR_CPU];
 
 static uint32_t ap_ready[NR_CPU];
+
+static uint8_t ap_boot_stack[NR_CPU][PAGE_SIZE] __attribute__((aligned(16)));
 
 static uint32_t cpu_apic_id[NR_CPU];
 static uint32_t cpu_nr;
@@ -88,8 +93,29 @@ static void ap_build_gdt(uint32_t idx, uint32_t percpu_base) {
 static void ap_main(uint32_t idx) {
     set_cpu_id(idx);
     set_current((struct TASK *)0);
+    idt_load_idtr();
+    lapic_ap_enable();
+
+    struct TASK *me = idle_threads[idx];
+    if (me == NULL) {
+        __atomic_store_n(&ap_ready[idx], 1u, __ATOMIC_RELEASE);
+        asm_cli();
+        for (;;) {
+            asm_hlt();
+        }
+    }
+
+    set_current(me);
+    me->status = TASK_RUNNING;
+    me->on_cpu = idx;
+
     __atomic_store_n(&ap_ready[idx], 1u, __ATOMIC_RELEASE);
+
     asm_cli();
+    uint64_t *boot_kstack = 0;
+    switch_to(&boot_kstack, &me->self_kstack, ap_boot_fpu[idx],
+              me->fpu_storage);
+
     for (;;) {
         asm_hlt();
     }
@@ -100,18 +126,14 @@ static void wakeup_ap(uint32_t idx, uint32_t apic_id) {
         (volatile struct SMP_BOOT_INFO *)AP_BOOT_INFO_ADDR;
 
     uint32_t percpu_base = PER_CPU_BASE + idx * PAGE_SIZE;
-    uint32_t stack = (uint32_t)palloc(&kernel_pool);
-    if (stack == 0) {
-        kprintf("[SMP] cpu%u: no page for stack, skip\n", idx);
-        return;
-    }
+    uint32_t stack_top = (uint32_t)(uintptr_t)&ap_boot_stack[idx][PAGE_SIZE];
 
     ap_build_gdt(idx, percpu_base);
-    tss_ap_init(idx, stack + PAGE_SIZE);
+    tss_ap_init(idx, stack_top);
     __atomic_store_n(&ap_ready[idx], 0u, __ATOMIC_RELAXED);
 
     info->gdtr = (uint32_t)(uintptr_t)&ap_gdtr[idx];
-    info->stack_top = stack + PAGE_SIZE;
+    info->stack_top = stack_top;
     info->ap_main = (uint32_t)(uintptr_t)ap_main;
     info->index = idx;
     __asm__ volatile("mfence" ::: "memory");
@@ -151,8 +173,10 @@ void smp_init(void) {
         wakeup_ap(i, cpu_apic_id[i]);
         if (__atomic_load_n(&ap_ready[i], __ATOMIC_ACQUIRE)) {
             online++;
-            kprintf("[SMP] cpu%u online (apic id=0x%x)\n", i,
-                    (unsigned)cpu_apic_id[i]);
+            struct TASK *idle = idle_threads[i];
+            kprintf("[SMP] cpu%u online (apic id=0x%x) idle pid=%d aff=%x\n", i,
+                    (unsigned)cpu_apic_id[i], idle ? idle->pid : -1,
+                    idle ? (unsigned)idle->cpu_aff : 0u);
         } else {
             kprintf("[SMP] cpu%u no response, skip\n", i);
         }

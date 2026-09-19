@@ -131,8 +131,9 @@ static int sock_block(struct SOCKET *s, uint8_t wtype, uint32_t timeout_ms) {
 
         lock_acquire(&net_lock);
         s->waiter = current;
+        uint32_t bf = thread_block_prepare(TASK_BLOCKED);
         lock_release(&net_lock);
-        thread_block_with_status(TASK_BLOCKED);
+        thread_block_commit(bf);
         lock_acquire(&net_lock);
         s->waiter = 0;
         lock_release(&net_lock);

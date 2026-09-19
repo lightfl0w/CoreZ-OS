@@ -86,7 +86,8 @@ def main():
     QMP.unlink(missing_ok=True)
     proc = subprocess.Popen(
         ["qemu-system-x86_64", "-accel", "tcg,tb-size=256", "-m", "1G",
-         "-smp", "1", "-hda", str(ROOT / "build/test_hd.img"),
+         "-smp", sys.argv[sys.argv.index("--smp") + 1] if "--smp" in sys.argv
+         else "1", "-hda", str(ROOT / "build/test_hd.img"),
          "-debugcon", f"file:{DBG}", "-display", "none", "-no-reboot",
          "-vga", "std",
          "-qmp", f"unix:{QMP},server=on,wait=off"] +

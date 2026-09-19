@@ -104,7 +104,10 @@ void wm_init_state(void) {
 }
 
 int wm_current_ws(void) {
-    return cur_ws;
+    comp_lock_acquire();
+    int ws = cur_ws;
+    comp_lock_release();
+    return ws;
 }
 
 struct WL_SURFACE *wm_focused_surface(void) {
@@ -206,6 +209,7 @@ static void anim_start(struct WL_SURFACE *s, int target) {
 }
 
 int wm_anim_step(void) {
+    comp_lock_acquire();
     int progressed = 0;
     for (int i = anim_n - 1; i >= 0; i--) {
         struct WL_SURFACE *s = anims[i].s;
@@ -221,6 +225,7 @@ int wm_anim_step(void) {
         if (a == anims[i].target)
             anims[i] = anims[--anim_n];
     }
+    comp_lock_release();
     return progressed;
 }
 
@@ -291,7 +296,7 @@ void wm_handle_hover(int x, int y) {
     }
 }
 
-void wm_manage(struct WL_SURFACE *s) {
+static void wm_manage_locked(struct WL_SURFACE *s) {
     struct GUI_WORKSPACE *ws = &workspaces[cur_ws];
     if (ws->n >= WL_MAX_SURFACES)
         return;
@@ -320,7 +325,7 @@ void wm_manage(struct WL_SURFACE *s) {
     raise_and_focus(ws, ws->n - 1);
 }
 
-void wm_unmanage(struct WL_SURFACE *s) {
+static void wm_unmanage_locked(struct WL_SURFACE *s) {
     if (!s || (unsigned long)s < 0xC0000000ul ||
         (unsigned long)s >= 0xC2000000ul || !s->used || s->ws < 0 ||
         s->ws >= WL_MAX_WS)
@@ -855,12 +860,14 @@ int wm_collect_visible(struct WL_SURFACE **out, int max) {
 }
 
 int wm_bar_check_dirty(void) {
+    comp_lock_acquire();
     if (tick / PIT_HZ != bar_clock) {
         bar_clock = tick / PIT_HZ;
         bar_dirty = 1;
     }
     int d = bar_dirty;
     bar_dirty = 0;
+    comp_lock_release();
     return d;
 }
 
@@ -926,4 +933,16 @@ void wm_draw_bar(struct GFX_CANVAS *c, struct GFX_RECT *clip) {
     int rw = font_text_width(up, BAR_FONT_PX);
     font_draw_clip(c, px - 12 - rw, ty, up, BAR_FONT_PX, t->muted, &v);
     (void)ss;
+}
+
+void wm_manage(struct WL_SURFACE *s) {
+    comp_lock_acquire();
+    wm_manage_locked(s);
+    comp_lock_release();
+}
+
+void wm_unmanage(struct WL_SURFACE *s) {
+    comp_lock_acquire();
+    wm_unmanage_locked(s);
+    comp_lock_release();
 }

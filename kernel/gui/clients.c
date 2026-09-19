@@ -1021,7 +1021,7 @@ static int next_type = 0;
 void clients_spawn_next(void) {
     int type_idx = next_type % CLIENT_TYPES;
     next_type++;
-    kernel_thread((char *)type_names[type_idx], 6, types[type_idx], 0);
+    kernel_thread((char *)type_names[type_idx], 6, types[type_idx], 0, 0xF);
 }
 
 void clients_spawn_initial(void) {

@@ -83,6 +83,8 @@ void comp_invalidate_all(void);
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods);
 void comp_post_mouse(int dx, int dy, uint8_t buttons);
 void comp_log(const char *s);
+void comp_lock_acquire(void);
+void comp_lock_release(void);
 
 struct WL_SURFACE **comp_surfaces(int *count);
 int comp_screen_w(void);

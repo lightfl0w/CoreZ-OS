@@ -2,6 +2,7 @@
 
 #include "kernel/asm/stub.h"
 #include "kernel/asm_func.h"
+#include "kernel/init/apic/apic.h"
 #include "kernel/init/gdt/gdt.h"
 
 struct IDT_ENTRY idt[256];
@@ -21,6 +22,12 @@ static void idt_set(uint8_t vec, void (*handler)(void), uint8_t type) {
     idt[vec].offset_mid = (uint16_t)((addr >> 16) & 0xFFFF);
     idt[vec].offset_high = (uint32_t)((addr >> 32) & 0xFFFFFFFF);
     idt[vec].reserved = 0;
+}
+
+void idt_load_idtr(void) {
+    idtr0.limit = (uint16_t)(sizeof(idt) - 1);
+    idtr0.base = (uint64_t)idt;
+    __asm__ volatile("lidt %0" : : "m"(idtr0) : "memory");
 }
 
 void idt_init(void) {
@@ -79,10 +86,9 @@ void idt_init(void) {
     idt_set(47, irq15, IDT_TYPE_INT_GATE64);
 
     idt_set(0x80, syscall_0x80, IDT_TYPE_TRAP_GATE3);
+    idt_set(IPI_VECTOR_RESCHED, ipi_resched, IDT_TYPE_INT_GATE64);
 
-    idtr0.limit = (uint16_t)(sizeof(idt) - 1);
-    idtr0.base = (uint64_t)idt;
-    __asm__ volatile("lidt %0" : : "m"(idtr0) : "memory");
+    idt_load_idtr();
 
     uint64_t star_msr = ((uint64_t)0x08 << 48) | ((uint64_t)0x10 << 32) |
                         ((uint64_t)0x33 << 16) | (uint64_t)0x23;

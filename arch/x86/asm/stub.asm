@@ -113,6 +113,13 @@ IRQ 12, 44
 IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
+
+global ipi_resched
+ipi_resched:
+    push qword 0
+    push qword 0x82
+    jmp irq_common_stub
+
 extern irq_handler
 irq_common_stub:
     push gs                

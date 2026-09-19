@@ -17,3 +17,4 @@ struct IDT_ENTRY {
 extern struct IDT_ENTRY idt[256];
 
 void idt_init(void);
+void idt_load_idtr(void);

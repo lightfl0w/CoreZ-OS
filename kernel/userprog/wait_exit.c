@@ -31,27 +31,24 @@ static void release_prog_resource(struct TASK *release_thread) {
 }
 
 void kill_orphan_children(int32_t parent_pid) {
+    struct TASK *victims[MAX_TASKS];
+    uint32_t n = 0;
+    uint32_t f = thread_all_lock();
     struct LIST_ELEM *e = thread_all_list.head.next;
-    while (e != &thread_all_list.tail) {
+    while (e != &thread_all_list.tail && n < MAX_TASKS) {
         struct TASK *t = list_entry(e, struct TASK, all_list_tag);
-        struct LIST_ELEM *next = e->next;
-        if (t->parent_pid == parent_pid && t->status != TASK_DIED) {
-            if (t->status != TASK_HANGING)
-                release_prog_resource(t);
-            thread_exit(t, 0);
-        }
-        e = next;
+        if (t->parent_pid == parent_pid && t->status != TASK_DIED)
+            victims[n++] = t;
+        e = e->next;
     }
-}
+    thread_all_unlock(f);
 
-static int find_hanging_child(struct LIST_ELEM *pelem, int32_t ppid) {
-    struct TASK *t = list_entry(pelem, struct TASK, all_list_tag);
-    return (t->parent_pid == ppid && t->status == TASK_HANGING);
-}
-
-static int find_child(struct LIST_ELEM *pelem, int32_t ppid) {
-    struct TASK *t = list_entry(pelem, struct TASK, all_list_tag);
-    return (t->parent_pid == ppid);
+    for (uint32_t i = 0; i < n; i++) {
+        struct TASK *t = victims[i];
+        if (t->status != TASK_DIED && t->status != TASK_HANGING)
+            release_prog_resource(t);
+        thread_exit(t, 0);
+    }
 }
 
 pid_t sys_wait(int32_t *status) {
@@ -61,27 +58,29 @@ pid_t sys_wait(int32_t *status) {
         status = &ignored_status;
     }
     for (;;) {
+        struct TASK *hanging = NULL;
+        int have_child = 0;
+        uint32_t f = thread_all_lock();
         struct LIST_ELEM *e = thread_all_list.head.next;
         while (e != &thread_all_list.tail) {
-            struct LIST_ELEM *next = e->next;
-            if (find_hanging_child(e, (int32_t)parent->pid)) {
-                struct TASK *child =
-                    list_entry(e, struct TASK, all_list_tag);
-                *status = child->exit_status;
-                uint32_t child_pid = child->pid;
-                thread_exit(child, 0);
-                return child_pid;
+            struct TASK *t = list_entry(e, struct TASK, all_list_tag);
+            if (t->parent_pid == (int32_t)parent->pid) {
+                have_child = 1;
+                if (t->status == TASK_HANGING) {
+                    hanging = t;
+                    break;
+                }
             }
-            e = next;
+            e = e->next;
         }
-        struct LIST_ELEM *child = thread_all_list.head.next;
-        while (child != &thread_all_list.tail) {
-            if (find_child(child, (int32_t)parent->pid)) {
-                break;
-            }
-            child = child->next;
+        thread_all_unlock(f);
+        if (hanging != NULL) {
+            *status = hanging->exit_status;
+            uint32_t child_pid = hanging->pid;
+            thread_exit(hanging, 0);
+            return child_pid;
         }
-        if (child == &thread_all_list.tail) {
+        if (!have_child) {
             return -1;
         }
         thread_block_with_status(TASK_WAITING);
@@ -123,36 +122,42 @@ int sys_waitid(int idtype, int32_t id, struct LINUX_SIGINFO *info,
     struct TASK *parent = current;
     for (;;) {
         int any_child = 0;
+        struct TASK *target = NULL;
+        uint32_t f = thread_all_lock();
         struct LIST_ELEM *e = thread_all_list.head.next;
         while (e != &thread_all_list.tail) {
             struct TASK *t =
                 list_entry(e, struct TASK, all_list_tag);
-            struct LIST_ELEM *next = e->next;
             if (t->parent_pid != (int32_t)parent->pid ||
                 t->status == TASK_DIED) {
-                e = next;
+                e = e->next;
                 continue;
             }
             any_child = 1;
             if (waitid_match(t, idtype, id) && t->status == TASK_HANGING) {
-                if (info != NULL) {
-                    int sig = t->exit_status >= 128 ? t->exit_status - 128 : 0;
-                    info->si_signo = SIGCHLD;
-                    info->si_errno = 0;
-                    info->si_code =
-                        sig ? LINUX_CLD_KILLED : LINUX_CLD_EXITED;
-                    info->si_pid = (int32_t)t->pid;
-                    info->si_uid = 0;
-                    info->si_status = sig ? sig : t->exit_status;
-                    info->si_utime = t->elapsed_ticks;
-                    info->si_stime = 0;
-                }
-                if (!(options & LINUX_WNOWAIT)) {
-                    thread_exit(t, 0);
-                }
-                return 0;
+                target = t;
+                break;
             }
-            e = next;
+            e = e->next;
+        }
+        thread_all_unlock(f);
+        if (target != NULL) {
+            if (info != NULL) {
+                int sig =
+                    target->exit_status >= 128 ? target->exit_status - 128 : 0;
+                info->si_signo = SIGCHLD;
+                info->si_errno = 0;
+                info->si_code = sig ? LINUX_CLD_KILLED : LINUX_CLD_EXITED;
+                info->si_pid = (int32_t)target->pid;
+                info->si_uid = 0;
+                info->si_status = sig ? sig : target->exit_status;
+                info->si_utime = target->elapsed_ticks;
+                info->si_stime = 0;
+            }
+            if (!(options & LINUX_WNOWAIT)) {
+                thread_exit(target, 0);
+            }
+            return 0;
         }
         if (!any_child) {
             return -1;

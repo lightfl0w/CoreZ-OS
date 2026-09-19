@@ -109,6 +109,14 @@ void comp_log(const char *s) {
         log_hook(s);
 }
 
+void comp_lock_acquire(void) {
+    lock_acquire(&comp_lock);
+}
+
+void comp_lock_release(void) {
+    lock_release(&comp_lock);
+}
+
 void comp_damage_rect(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0)
         return;
@@ -302,9 +310,11 @@ int wl_display_dispatch(struct WL_CLIENT *c, struct WL_EVENT *ev) {
 struct WL_SURFACE **comp_surfaces(int *count) {
     static struct WL_SURFACE *list[WL_MAX_SURFACES];
     int n = 0;
+    lock_acquire(&comp_lock);
     for (int i = 0; i < WL_MAX_SURFACES; i++)
         if (surfaces[i].used)
             list[n++] = &surfaces[i];
+    lock_release(&comp_lock);
     *count = n;
     return list;
 }
@@ -1150,6 +1160,7 @@ static void drain_input(void) {
     struct GUI_INPUT_EVENT ev;
     int cur_dirty = 0;
     int motion_pending = 0;
+    lock_acquire(&comp_lock);
     while (input_get(&ev)) {
         if (ev.dev == INPUT_DEV_KEYBOARD) {
             perf_key_events++;
@@ -1213,15 +1224,18 @@ static void drain_input(void) {
         if (d && d->cursor_move)
             d->cursor_move(cur_x, cur_y);
     }
+    lock_release(&comp_lock);
 }
 
 static void frame_clock(void) {
+    lock_acquire(&comp_lock);
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
         struct WL_SURFACE *s = &surfaces[i];
         if (!s->used || !s->buf || s->frame_pending)
             continue;
         client_post(s->client, WL_EV_FRAME, 0, 0, 0);
     }
+    lock_release(&comp_lock);
 }
 
 void comp_run(void) {
@@ -1234,7 +1248,10 @@ void comp_run(void) {
         if (wm_bar_check_dirty()) {
             comp_damage_rect(0, scrny - COMP_BAR_H, scrnx, COMP_BAR_H);
         }
-        if (damage_full || damage_n > 0) {
+        lock_acquire(&comp_lock);
+        int pending = (damage_full || damage_n > 0);
+        lock_release(&comp_lock);
+        if (pending) {
             uint64_t t1 = perf_tsc();
             repaint();
             perf_repaints++;

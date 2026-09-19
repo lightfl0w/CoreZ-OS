@@ -5,29 +5,75 @@
 #include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/mm/pool/pool.h"
+#include "kernel/sched/sync.h"
 #include "kernel/userprog/process.h"
 #include "kernel/userprog/wait_exit.h"
 #include "lib/list/list.h"
 #include "lib/str/str.h"
 
+static struct SCHED_SPINLOCK sched_lock;
+static struct SCHED_SPINLOCK all_lock;
+
 static uint64_t ready_bitmap;
+static uint64_t ready_cpu[NR_CPU];
 static uint64_t slot_inuse;
-static uint32_t rr_cursor;
+static uint32_t rr_cursor[NR_CPU];
 static uint64_t sleep_bitmap;
 static uint32_t wake_tick[MAX_TASKS];
 static uint32_t wake_pid[MAX_TASKS];
 
 struct TASK task_table[MAX_TASKS];
-static uint32_t pid_alloc = 0;
-static uint32_t died_pending = 0;
+static volatile uint32_t pid_alloc = 0;
+static volatile uint32_t died_pending = 0;
 struct LIST thread_all_list;
-struct TASK *idle_thread;
+struct TASK *idle_threads[NR_CPU];
+uint32_t cpu_work_switches[NR_CPU];
 uint32_t foreground_pid = (uint32_t)-1;
-static volatile uint32_t idle_monitor;
 static int mwait_ok;
+static uint8_t fpu_template[FPU_SAVE_SIZE] __attribute__((aligned(64)));
+
+static void fpu_state_reset(struct TASK *t) {
+    memcpy(t->fpu_storage, fpu_template, FPU_SAVE_SIZE);
+}
+
+static inline uint32_t sched_lock_irq(void) {
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    spinlock_acquire(&sched_lock);
+    return old;
+}
+
+static inline void sched_unlock_irq(uint32_t old) {
+    spinlock_release(&sched_lock);
+    asm_restore_eflags(old);
+}
+
+static inline uint32_t all_lock_irq(void) {
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    spinlock_acquire(&all_lock);
+    return old;
+}
+
+static inline void all_unlock_irq(uint32_t old) {
+    spinlock_release(&all_lock);
+    asm_restore_eflags(old);
+}
+
+uint32_t thread_all_lock(void) {
+    return all_lock_irq();
+}
+
+void thread_all_unlock(uint32_t flags) {
+    all_unlock_irq(flags);
+}
 
 static inline uint32_t task_slot(struct TASK *t) {
     return (uint32_t)(t - task_table);
+}
+
+static inline uint32_t aff_of(const struct TASK *t) {
+    return t->cpu_aff ? (uint32_t)t->cpu_aff : ((1u << NR_CPU) - 1u);
 }
 
 static void ready_enqueue(struct TASK *t) {
@@ -35,11 +81,19 @@ static void ready_enqueue(struct TASK *t) {
     if (ready_bitmap & bit)
         return;
     ready_bitmap |= bit;
+    uint32_t aff = aff_of(t);
+    for (uint32_t c = 0; c < NR_CPU; c++) {
+        if (aff & (1u << c))
+            ready_cpu[c] |= bit;
+    }
     t->status = TASK_READY;
 }
 
 static void ready_remove(struct TASK *t) {
-    ready_bitmap &= ~(1ULL << task_slot(t));
+    uint64_t bit = 1ULL << task_slot(t);
+    ready_bitmap &= ~bit;
+    for (uint32_t c = 0; c < NR_CPU; c++)
+        ready_cpu[c] &= ~bit;
 }
 
 void cpu_idle_init(void) {
@@ -52,12 +106,13 @@ void cpu_idle_init(void) {
 
 void cpu_idle(void) {
     if (mwait_ok)
-        asm_sti_mwait((uint64_t)(uintptr_t)&idle_monitor);
+        asm_sti_mwait((uint64_t)(uintptr_t)percpu_idle_monitor(cpu_id()));
     else
         asm_stihlt();
 }
 
 static void idle(void *arg) {
+    (void)arg;
     for (;;) {
         thread_block();
         cpu_idle();
@@ -80,8 +135,8 @@ static void init_fd_table(struct TASK *t) {
 }
 
 static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
-    t->status = TASK_READY;
-    t->pid = pid_alloc++;
+    t->status = TASK_BLOCKED;
+    t->pid = cpu_xadd32(&pid_alloc, 1);
     t->elapsed_ticks = 0;
     t->kernel_stack_top = 0;
     t->pml4_phys = 0;
@@ -109,6 +164,9 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->sigalt_size = 0;
     t->sigalt_flags = 0;
     t->compat = 0;
+    t->cpu_aff = 1;
+    t->on_cpu = NR_CPU;
+    fpu_state_reset(t);
     init_signal_state(t);
 
     t->all_list_tag.prev = t->all_list_tag.next = NULL;
@@ -127,11 +185,13 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
 static void reap_died_threads(void);
 
 struct TASK *thread_create(char *name, uint8_t priority,
-                                  thread_func function, void *arg) {
+                                  thread_func function, void *arg,
+                                  uint8_t aff) {
     struct TASK *t = thread_alloc_slot(name, priority);
     if (t == NULL) {
         return NULL;
     }
+    t->cpu_aff = aff;
     struct TASK_STACK *ts =
         (struct TASK_STACK *)(t->kernel_stack_top -
                                 sizeof(struct TASK_STACK));
@@ -140,14 +200,34 @@ struct TASK *thread_create(char *name, uint8_t priority,
     ts->r14 = (uint64_t)arg;
     ts->r13 = ts->r12 = ts->rbx = ts->rbp = 0;
     ts->rip = kernel_thread_entry;
+    uint32_t f = sched_lock_irq();
     ready_enqueue(t);
+    sched_unlock_irq(f);
     return t;
 }
 
+static void thread_create_idle(uint32_t cpu) {
+    struct TASK *t = thread_create("idle", 10, idle, 0, (uint8_t)(1u << cpu));
+    if (t == NULL)
+        return;
+    uint32_t f = sched_lock_irq();
+    ready_remove(t);
+    t->status = TASK_BLOCKED;
+    idle_threads[cpu] = t;
+    sched_unlock_irq(f);
+}
+
 void thread_init(void) {
+    spinlock_init(&sched_lock);
+    spinlock_init(&all_lock);
     cpu_idle_init();
     list_init(&thread_all_list);
     slot_inuse = 1;
+
+    uint32_t mxcsr = 0x1F80;
+    __asm__ volatile("fninit\n\tldmxcsr (%0)\n\tfxsave (%1)" ::"r"(&mxcsr),
+                     "r"(fpu_template)
+                     : "memory");
 
     set_current(&task_table[0]);
     task_table[0].self_kstack = 0;
@@ -177,28 +257,41 @@ void thread_init(void) {
     task_table[0].sleep_eintr = 0;
     task_table[0].sleep_left = 0;
     task_table[0].slot_used = 1;
+    task_table[0].cpu_aff = 1;
+    task_table[0].on_cpu = 0;
+    fpu_state_reset(&task_table[0]);
     list_append(&thread_all_list, &task_table[0].all_list_tag);
 
-    idle_thread = thread_create("idle", 10, idle, 0);
+    for (uint32_t c = 0; c < NR_CPU; c++)
+        thread_create_idle(c);
 }
 
 struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
+    uint32_t f = all_lock_irq();
     uint64_t free = ~slot_inuse;
     if (free == 0) {
+        all_unlock_irq(f);
         kprintf("[thread] no free task slot (MAX_TASKS=%d)\n", MAX_TASKS);
         return NULL;
     }
     uint32_t i = (uint32_t)__builtin_ctzll(free);
     struct TASK *t = &task_table[i];
+    slot_inuse |= 1ULL << i;
+    t->slot_used = 1;
+    t->pid = (uint32_t)-1;
+    t->status = TASK_BLOCKED;
+    all_unlock_irq(f);
+
     uint64_t stack = (uint64_t)get_kernel_pages(THREAD_STACK_SIZE / PAGE_SIZE);
     if (stack == 0) {
         kprintf("[thread] no kernel pages for stack (free pages: %d)\n",
                 (int)kernel_pool_free_count());
+        uint32_t f2 = all_lock_irq();
+        t->slot_used = 0;
+        slot_inuse &= ~(1ULL << i);
+        all_unlock_irq(f2);
         return NULL;
     }
-    t->slot_used = 1;
-    slot_inuse |= 1ULL << i;
-    t->wait_tag.prev = t->wait_tag.next = NULL;
     struct TASK_STACK *ts =
         (struct TASK_STACK *)(stack + THREAD_STACK_SIZE -
                                 sizeof(struct TASK_STACK));
@@ -206,12 +299,16 @@ struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
     ts->r15 = ts->r14 = ts->r13 = ts->r12 = ts->rbx = ts->rbp = 0;
     ts->rip = 0;
     t->self_kstack = (uint64_t *)ts;
+
+    uint32_t f3 = all_lock_irq();
+    t->wait_tag.prev = t->wait_tag.next = NULL;
     init_task_struct_basic(t, -1);
     strcpy(t->name, name);
     t->priority = priority;
     t->ticks = priority;
     t->kernel_stack_top = stack + THREAD_STACK_SIZE;
     list_append(&thread_all_list, &t->all_list_tag);
+    all_unlock_irq(f3);
 
     return t;
 }
@@ -219,24 +316,34 @@ struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
 void thread_ready(struct TASK *t) {
     if (t == NULL)
         return;
-    uint32_t old = asm_save_eflags();
-    asm_cli();
-    ready_enqueue(t);
-    asm_restore_eflags(old);
+    uint32_t f = sched_lock_irq();
+    if (t->status & TASK_WAKE_MASK)
+        ready_enqueue(t);
+    sched_unlock_irq(f);
 }
 
 void kernel_thread(char *name, uint8_t priority, thread_func function,
-                   void *arg) {
-    thread_create(name, priority, function, arg);
+                   void *arg, uint8_t aff) {
+    thread_create(name, priority, function, arg, aff);
+}
+
+uint32_t thread_block_prepare(enum TASK_STATUS status) {
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    spinlock_acquire(&sched_lock);
+    ready_remove(current);
+    current->status = status;
+    spinlock_release(&sched_lock);
+    return old;
+}
+
+void thread_block_commit(uint32_t flags) {
+    schedule();
+    asm_restore_eflags(flags);
 }
 
 void thread_block_with_status(enum TASK_STATUS status) {
-    uint32_t old = asm_save_eflags();
-    asm_cli();
-    ready_remove(current);
-    current->status = status;
-    schedule();
-    asm_restore_eflags(old);
+    thread_block_commit(thread_block_prepare(status));
 }
 
 void thread_block(void) {
@@ -244,8 +351,6 @@ void thread_block(void) {
 }
 
 void thread_unblock(struct TASK *t) {
-    ASSERT(t != NULL);
-    ASSERT(t->status & TASK_WAKE_MASK);
     thread_ready(t);
 }
 
@@ -253,6 +358,7 @@ int32_t thread_sleep_ticks(uint32_t ticks) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     uint32_t slot = task_slot(current);
+    spinlock_acquire(&sched_lock);
     current->sleep_intr = 1;
     current->sleep_eintr = 0;
     current->sleep_left = 0;
@@ -261,14 +367,17 @@ int32_t thread_sleep_ticks(uint32_t ticks) {
     sleep_bitmap |= 1ULL << slot;
     ready_remove(current);
     current->status = TASK_BLOCKED;
+    spinlock_release(&sched_lock);
     schedule();
     current->sleep_intr = 0;
     int32_t ret = 0;
     if (current->sleep_eintr) {
         current->sleep_eintr = 0;
+        spinlock_acquire(&sched_lock);
         sleep_bitmap &= ~(1ULL << slot);
         int32_t left = (int32_t)(wake_tick[slot] - tick);
         current->sleep_left = left > 0 ? (uint32_t)left : 0;
+        spinlock_release(&sched_lock);
         ret = -EINTR;
     }
     asm_restore_eflags(old);
@@ -276,6 +385,7 @@ int32_t thread_sleep_ticks(uint32_t ticks) {
 }
 
 void thread_timer_wake(void) {
+    uint32_t f = sched_lock_irq();
     uint64_t m = sleep_bitmap;
     while (m) {
         uint32_t slot = (uint32_t)__builtin_ctzll(m);
@@ -287,16 +397,15 @@ void thread_timer_wake(void) {
         struct TASK *t = &task_table[slot];
         if (t->slot_used && t->pid == wake_pid[slot] &&
             (t->status & TASK_WAKE_MASK)) {
-            thread_unblock(t);
+            ready_enqueue(t);
         }
     }
+    sched_unlock_irq(f);
 }
 
 void thread_yield(void) {
     uint32_t old = asm_save_eflags();
     asm_cli();
-    ready_enqueue(current);
-    current->ticks = current->priority;
     schedule();
     asm_restore_eflags(old);
 }
@@ -309,77 +418,93 @@ static void assert_stack_magic(const struct TASK *t) {
     }
 }
 
-static uint32_t preempt_count;
-
 void preempt_disable(void) {
-    preempt_count++;
+    percpu_preempt_inc();
 }
 
 void preempt_enable(void) {
-    if (preempt_count > 0)
-        preempt_count--;
+    if (percpu_preempt_count() > 0)
+        percpu_preempt_dec();
 }
 
 uint32_t preempt_disabled(void) {
-    return preempt_count;
+    return percpu_preempt_count();
 }
 
 void schedule(void) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
     assert_stack_magic(current);
 
+    if (died_pending > 0)
+        reap_died_threads();
+
+    uint32_t c = cpu_id();
+    uint32_t f = sched_lock_irq();
+
     if (current->status == TASK_RUNNING) {
         ready_enqueue(current);
         current->ticks = current->priority;
     }
 
-    if (died_pending > 0)
-        reap_died_threads();
+    if (ready_cpu[c] == 0 && idle_threads[c] != NULL)
+        ready_enqueue(idle_threads[c]);
 
-    if (ready_bitmap == 0)
-        ready_enqueue(idle_thread);
-
-    uint64_t avail = ready_bitmap;
-    if (rr_cursor < 63)
-        avail &= ~((1ULL << (rr_cursor + 1)) - 1);
+    uint64_t avail = ready_cpu[c];
+    if (avail == 0) {
+        sched_unlock_irq(f);
+        return;
+    }
+    if (rr_cursor[c] < 63)
+        avail &= ~((1ULL << (rr_cursor[c] + 1)) - 1);
     if (avail == 0)
-        avail = ready_bitmap;
+        avail = ready_cpu[c];
     uint32_t slot = (uint32_t)__builtin_ctzll(avail);
-    ready_bitmap &= ~(1ULL << slot);
     struct TASK *next = &task_table[slot];
-    rr_cursor = slot;
+    rr_cursor[c] = slot;
+    ready_remove(next);
     assert_stack_magic(next);
     next->status = TASK_RUNNING;
+    next->on_cpu = c;
+    if (next != idle_threads[c])
+        cpu_work_switches[c]++;
 
     struct TASK *prev = current;
     set_current(next);
+    sched_unlock_irq(f);
+
     process_activate(next);
-    switch_to(&prev->self_kstack, &next->self_kstack);
+    switch_to(&prev->self_kstack, &next->self_kstack, prev->fpu_storage,
+              next->fpu_storage);
+    if (prev != next)
+        cpu_cmpxchg32(&prev->on_cpu, c, NR_CPU);
 }
 
 int thread_traverse_all(thread_all_action action, void *arg) {
-    int stopped = 0;
+    struct TASK *snap[MAX_TASKS];
+    uint32_t n = 0;
+    uint32_t f = all_lock_irq();
     struct LIST_ELEM *e = thread_all_list.head.next;
-    while (e != &thread_all_list.tail) {
-        struct TASK *t = list_entry(e, struct TASK, all_list_tag);
-        struct LIST_ELEM *next = e->next;
-        int r = action(t, arg);
-        if (r) {
-            stopped = 1;
-            break;
-        }
-        e = next;
+    while (e != &thread_all_list.tail && n < MAX_TASKS) {
+        snap[n++] = list_entry(e, struct TASK, all_list_tag);
+        e = e->next;
     }
-    return stopped;
+    all_unlock_irq(f);
+
+    for (uint32_t i = 0; i < n; i++) {
+        if (action(snap[i], arg))
+            return 1;
+    }
+    return 0;
 }
 
 void thread_exit_current(void) {
     uint32_t old = asm_save_eflags();
     asm_cli();
+    spinlock_acquire(&sched_lock);
     current->status = TASK_DIED;
-    if (ready_bitmap & (1ULL << task_slot(current)))
-        ready_remove(current);
+    ready_remove(current);
     died_pending++;
+    spinlock_release(&sched_lock);
     schedule();
     asm_restore_eflags(old);
 }
@@ -400,10 +525,11 @@ void thread_kill_pid(uint32_t pid) {
 
     uint32_t old = asm_save_eflags();
     asm_cli();
+    spinlock_acquire(&sched_lock);
     t->exit_status = -1;
     t->status = TASK_HANGING;
-    if (ready_bitmap & (1ULL << task_slot(t)))
-        ready_remove(t);
+    ready_remove(t);
+    spinlock_release(&sched_lock);
 
     kill_orphan_children((int32_t)t->pid);
     list_unlink(&t->wait_tag);
@@ -431,42 +557,56 @@ struct TASK *pid2thread(int32_t pid) {
 
 void thread_exit(struct TASK *thread_over, int need_schedule) {
     (void)need_schedule;
-    uint32_t old = asm_save_eflags();
-    asm_cli();
+    uint32_t f = sched_lock_irq();
     if (thread_over->status == TASK_DIED) {
-        asm_restore_eflags(old);
+        sched_unlock_irq(f);
         return;
     }
     thread_over->status = TASK_DIED;
-    if (ready_bitmap & (1ULL << task_slot(thread_over)))
-        ready_remove(thread_over);
+    ready_remove(thread_over);
     died_pending++;
-    asm_restore_eflags(old);
+    sched_unlock_irq(f);
 }
 
 static void reap_died_threads(void) {
+    struct TASK *victims[8];
+    uint32_t n = 0;
+    uint32_t f = all_lock_irq();
+    uint32_t s = sched_lock_irq();
     struct LIST_ELEM *e = thread_all_list.head.next;
-    while (e != &thread_all_list.tail) {
+    while (e != &thread_all_list.tail && n < 8) {
         struct TASK *t = list_entry(e, struct TASK, all_list_tag);
-        struct LIST_ELEM *next = e->next;
-        if (t->status == TASK_DIED && t != current) {
-            assert_stack_magic(t);
+        e = e->next;
+        if (t == current || t->status != TASK_DIED)
+            continue;
+        if (cpu_cmpxchg32(&t->on_cpu, NR_CPU, NR_CPU + 1) != NR_CPU)
+            continue;
+        victims[n++] = t;
+    }
+    sched_unlock_irq(s);
+    all_unlock_irq(f);
 
-            if (t->pml4_phys) {
-                task_release_space(t);
-            }
-            if (t->kernel_stack_top) {
-                uint8_t *stack_base =
-                    (uint8_t *)t->kernel_stack_top - THREAD_STACK_SIZE;
-                for (uint32_t i = 0; i < THREAD_STACK_SIZE / PAGE_SIZE; i++)
-                    free_kernel_page((uint32_t)(stack_base + i * PAGE_SIZE));
-                t->kernel_stack_top = 0;
-            }
-            list_remove(&t->all_list_tag);
-            t->slot_used = 0;
-            slot_inuse &= ~(1ULL << task_slot(t));
-            died_pending--;
+    for (uint32_t i = 0; i < n; i++) {
+        struct TASK *t = victims[i];
+        assert_stack_magic(t);
+        if (t->pml4_phys) {
+            task_release_space(t);
         }
-        e = next;
+        if (t->kernel_stack_top) {
+            uint8_t *stack_base =
+                (uint8_t *)t->kernel_stack_top - THREAD_STACK_SIZE;
+            for (uint32_t j = 0; j < THREAD_STACK_SIZE / PAGE_SIZE; j++)
+                free_kernel_page((uint32_t)(stack_base + j * PAGE_SIZE));
+            t->kernel_stack_top = 0;
+        }
+        uint32_t f2 = all_lock_irq();
+        list_remove(&t->all_list_tag);
+        t->slot_used = 0;
+        all_unlock_irq(f2);
+        uint32_t s2 = sched_lock_irq();
+        slot_inuse &= ~(1ULL << task_slot(t));
+        if (died_pending > 0)
+            died_pending--;
+        sched_unlock_irq(s2);
     }
 }
