@@ -10,8 +10,10 @@ switch_to:
         push    r14
         push    r15
         pushfq
+        fxsave  [rdx]
         mov     [rdi], rsp
         mov     rsp, [rsi]
+        fxrstor [rcx]
         popfq
         pop     r15
         pop     r14

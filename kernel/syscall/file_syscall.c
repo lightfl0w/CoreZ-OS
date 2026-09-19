@@ -6,6 +6,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
+#include "kernel/shell/pipe.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "drivers/net/socket.h"
@@ -67,6 +68,23 @@ int32_t sys_dup(int32_t oldfd) {
     return newfd;
 }
 
+int32_t sys_dup_from(int32_t oldfd, uint32_t min_local) {
+    struct FILE *pf = fd_lookup(oldfd);
+    if (pf == NULL) {
+        current->errno = 9;
+        return -1;
+    }
+    uint32_t global_fd = (uint32_t)(pf - file_table);
+    file_table_ref(global_fd);
+    int newfd = fd_install_from((int32_t)global_fd, min_local);
+    if (newfd == -1) {
+        file_table_unref(global_fd);
+        current->errno = 24;
+        return -1;
+    }
+    return newfd;
+}
+
 int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     if (newfd < 0 || newfd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return -1;
@@ -84,6 +102,10 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     if (current->fd_table[newfd] != (uint32_t)-1) {
         close_file(newfd);
     }
+    if ((current->pipe_wr_mask >> (uint32_t)oldfd) & 1u)
+        current->pipe_wr_mask |= 1u << (uint32_t)newfd;
+    else
+        current->pipe_wr_mask &= ~(1u << (uint32_t)newfd);
     current->fd_table[newfd] = global_fd;
     return newfd;
 }
@@ -97,8 +119,7 @@ int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
     }
     switch (cmd) {
     case F_DUPFD:
-        (void)arg;
-        return sys_dup(fd);
+        return sys_dup_from(fd, (uint32_t)arg);
     case F_GETFD:
         return (int32_t)((current->fd_cloexec >> fd) & 1);
     case F_SETFD:
@@ -108,9 +129,13 @@ int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
             current->fd_cloexec &= ~(1ull << fd);
         return 0;
     case F_GETFL:
-        return (int32_t)pf->fd_flag;
+        if (pf->fd_flag == PIPE_FLAG)
+            return pf->fd_nonblock ? O_NONBLOCK : 0;
+        return (int32_t)(pf->fd_flag | (pf->fd_nonblock ? O_NONBLOCK : 0));
     case F_SETFL:
-        pf->fd_flag = arg;
+        pf->fd_nonblock = (arg & O_NONBLOCK) ? 1 : 0;
+        if (pf->fd_flag != PIPE_FLAG)
+            pf->fd_flag = (pf->fd_flag & 3u) | (arg & ~3u);
         return 0;
     default:
         return -1;
@@ -192,17 +217,15 @@ int32_t sys_access(const char *path, int32_t mode) {
 }
 
 int32_t sys_rename(const char *oldpath, const char *newpath) {
-    (void)oldpath;
-    (void)newpath;
-    current->errno = 30;
-    return -1;
+    return fs_rename_path(oldpath, newpath);
 }
 
 int32_t sys_truncate(const char *path, int32_t length) {
-    (void)path;
-    (void)length;
-    current->errno = 30;
-    return -1;
+    if (length < 0) {
+        current->errno = 22;
+        return -1;
+    }
+    return fs_truncate_path(path, (uint32_t)length);
 }
 
 int32_t sys_chmod(const char *path, uint32_t mode) {

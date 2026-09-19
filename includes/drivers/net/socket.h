@@ -37,6 +37,14 @@
 #define NET_FDSET_WORDS 2
 
 #define MAX_SOCKET 64
+#define NET_FD_BASE 64
+#define NET_FD_LIMIT (NET_FD_BASE + MAX_SOCKET)
+
+#define POLLIN_R 0x01
+#define POLLOUT_R 0x04
+#define POLLERR_R 0x08
+#define POLLHUP_R 0x10
+#define POLLNVAL_R 0x20
 
 void sock_init(void);
 int net_socket(int domain, int type, int proto);
@@ -60,6 +68,8 @@ int net_setsockopt(int fd, int level, int optname, const void *val,
                    uint32_t len);
 int net_fcntl(int fd, int cmd, uint32_t arg);
 int net_is_socket(int fd);
+int net_fd_index(int fd);
+int net_poll_ready(int fd, int want_read, int want_write);
 int net_select(int nfds, uint32_t *rfds, uint32_t *wfds, uint32_t *efds,
                int timeout_ms);
 

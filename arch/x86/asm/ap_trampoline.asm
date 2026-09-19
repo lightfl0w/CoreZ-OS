@@ -33,7 +33,7 @@ start32:
     mov cr3, eax
 
     mov eax, cr4
-    or  eax, 0x20
+    or  eax, 0x620
     mov cr4, eax
 
     mov ecx, 0xC0000080

@@ -106,8 +106,8 @@
 #define SYS_LINUX_futex 202
 #define SYS_LINUX_getdents64 217
 #define SYS_LINUX_set_tid_address 218
-#define SYS_LINUX_clock_gettime 227
-#define SYS_LINUX_clock_getres 228
+#define SYS_LINUX_clock_gettime 228
+#define SYS_LINUX_clock_getres 229
 #define SYS_LINUX_clock_nanosleep 230
 #define SYS_LINUX_exit_group 231
 #define SYS_LINUX_set_thread_area 205
@@ -126,6 +126,32 @@
 #define SYS_LINUX_pipe2 293
 #define SYS_LINUX_renameat2 316
 #define SYS_LINUX_getrandom 318
+
+#define SYS_LINUX_madvise 28
+#define SYS_LINUX_fsync 74
+#define SYS_LINUX_fdatasync 75
+#define SYS_LINUX_truncate 76
+#define SYS_LINUX_getrlimit 97
+#define SYS_LINUX_setrlimit 160
+#define SYS_LINUX_prlimit64 302
+#define SYS_LINUX_pselect6 270
+#define SYS_LINUX_ppoll 271
+#define SYS_LINUX_epoll_create 213
+#define SYS_LINUX_epoll_wait 232
+#define SYS_LINUX_epoll_ctl 233
+#define SYS_LINUX_epoll_pwait 281
+#define SYS_LINUX_epoll_create1 291
+#define SYS_LINUX_eventfd 284
+#define SYS_LINUX_eventfd2 290
+#define SYS_LINUX_timerfd_create 283
+#define SYS_LINUX_timerfd_settime 286
+#define SYS_LINUX_timerfd_gettime 287
+#define SYS_LINUX_statfs 137
+#define SYS_LINUX_fstatfs 138
+#define SYS_LINUX_futex 202
+#define SYS_LINUX_gettid 186
+#define SYS_LINUX_membarrier 324
+#define SYS_LINUX_rseq 334
 #define SYS_LINUX_getrandom 318
 
 #define LINUX_O_RDONLY 0
@@ -244,6 +270,9 @@
 #define LINUX_ELOOP 40
 #define LINUX_ENOTSOCK 88
 #define LINUX_EOPNOTSUPP 95
+#define LINUX_EWOULDBLOCK 11
+#define LINUX_EXDEV 18
+#define LINUX_ETIMEDOUT 110
 #define LINUX_ENOTCONN 107
 
 #define LINUX_NAME_MAX 255
@@ -432,12 +461,69 @@ struct LINUX_STATFS {
     int64_t f_bavail;
     int64_t f_files;
     int64_t f_ffree;
-    int64_t f_fsid[2];
+    int32_t f_fsid[2];
     int64_t f_namelen;
     int64_t f_frsize;
     int64_t f_flags;
     int64_t f_spare[4];
 };
+
+#define LINUX_POLLIN 0x001
+#define LINUX_POLLPRI 0x002
+#define LINUX_POLLOUT 0x004
+#define LINUX_POLLERR 0x008
+#define LINUX_POLLHUP 0x010
+#define LINUX_POLLNVAL 0x020
+
+struct LINUX_POLLFD {
+    int32_t fd;
+    int16_t events;
+    int16_t revents;
+};
+
+struct LINUX_RLIMIT {
+    uint64_t rlim_cur;
+    uint64_t rlim_max;
+};
+
+struct LINUX_EPOLL_EVENT {
+    uint32_t events;
+    uint64_t data;
+} __attribute__((packed));
+
+struct LINUX_ITIMERSPEC {
+    struct LINUX_TIMESPEC it_interval;
+    struct LINUX_TIMESPEC it_value;
+};
+
+#define LINUX_RLIMIT_CPU 0
+#define LINUX_RLIMIT_FSIZE 1
+#define LINUX_RLIMIT_DATA 2
+#define LINUX_RLIMIT_STACK 3
+#define LINUX_RLIMIT_CORE 4
+#define LINUX_RLIMIT_RSS 5
+#define LINUX_RLIMIT_NPROC 6
+#define LINUX_RLIMIT_NOFILE 7
+#define LINUX_RLIMIT_MEMLOCK 8
+#define LINUX_RLIMIT_AS 9
+#define LINUX_RLIMIT_LOCKS 10
+#define LINUX_RLIMIT_SIGPENDING 11
+#define LINUX_RLIMIT_MSGQUEUE 12
+#define LINUX_RLIMIT_NICE 13
+#define LINUX_RLIMIT_RTPRIO 14
+#define LINUX_RLIMIT_RTTIME 15
+#define LINUX_RLIMIT_NLIMITS 16
+
+#define LINUX_EPOLL_CTL_ADD 1
+#define LINUX_EPOLL_CTL_DEL 2
+#define LINUX_EPOLL_CTL_MOD 3
+#define LINUX_EPOLL_CLOEXEC 0x80000
+
+#define LINUX_TFD_TIMER_ABSTIME 1
+#define LINUX_TFD_NONBLOCK 0x800
+#define LINUX_EFD_SEMAPHORE 1
+#define LINUX_EFD_NONBLOCK 0x800
+#define LINUX_EFD_CLOEXEC 0x80000
 
 struct LINUX_STAT {
     uint64_t st_dev;

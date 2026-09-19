@@ -56,6 +56,7 @@ extern void irq15(void);
 extern void default_handler(void);
 extern void syscall_0x80(void);
 extern void syscall_entry(void);
+extern void ipi_resched(void);
 
 struct X86_REGS {
     uint64_t r15;

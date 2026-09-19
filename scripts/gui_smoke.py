@@ -86,7 +86,8 @@ def main():
     QMP.unlink(missing_ok=True)
     proc = subprocess.Popen(
         ["qemu-system-x86_64", "-accel", "tcg,tb-size=256", "-m", "1G",
-         "-smp", "1", "-hda", str(ROOT / "build/test_hd.img"),
+         "-smp", sys.argv[sys.argv.index("--smp") + 1] if "--smp" in sys.argv
+         else "1", "-hda", str(ROOT / "build/test_hd.img"),
          "-debugcon", f"file:{DBG}", "-display", "none", "-no-reboot",
          "-vga", "std",
          "-qmp", f"unix:{QMP},server=on,wait=off"] +
@@ -281,6 +282,18 @@ def main():
             print(text[-2000:])
             return 1
         print("PASS: session exited cleanly")
+        # gui 现以 fork+exec 运行，退出后 shell 应当重生
+        deadline = time.time() + 60
+        ok = False
+        while time.time() < deadline:
+            if DBG.read_text(errors="replace").count("[corez@corez") >= 2:
+                ok = True
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(1)
+        print("PASS: shell respawned"
+              if ok else "WARN: shell prompt not seen after exit")
         time.sleep(1)
         qmp_try_quit(s)
         return 0

@@ -81,7 +81,7 @@ void net_init(void) {
     tcp_init();
     udp_init();
     sock_init();
-    kernel_thread("net", 8, net_thread, NULL);
+    kernel_thread("net", 8, net_thread, NULL, 0xF);
 }
 
 uint32_t net_now_ms(void) {

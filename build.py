@@ -481,6 +481,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("ioqueue.o",    ROOT / "drivers" / "char" / "ioqueue.c"),
         ("tty.o",        ROOT / "drivers" / "char" / "tty.c"),
         ("keyboard.o",   ROOT / "drivers" / "char" / "keyboard.c"),
+        ("rtc.o",        ROOT / "drivers" / "char" / "rtc.c"),
         ("ide.o",        ROOT / "drivers" / "block" / "ide.c"),
         ("block.o",      ROOT / "drivers" / "block" / "block.c"),
         ("nvme.o",       ROOT / "drivers" / "block" / "nvme.c"),
@@ -709,7 +710,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
-        "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o",
+        "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o",
@@ -877,6 +878,25 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             "musl_abi_test.elf", BUILD_DIR / "musl_abi_test.elf",
             [BUILD_DIR / "musl_abi_test.o"])
         tasks.append(musl_abi_test_elf)
+        py_probe_c = task_cc("musl_py_compat_probe.o",
+                             APPS_DIR / "py_compat_probe.c",
+                             BUILD_DIR / "py_compat_probe.o", tools,
+                             MUSL_DEMO_CFLAGS)
+        py_probe_c.optional = True
+        py_probe_c.group = "musl"
+        tasks.append(py_probe_c)
+        py_probe_elf = link_musl_user(
+            "musl_py_compat_probe.elf", BUILD_DIR / "py_compat_probe.elf",
+            [BUILD_DIR / "py_compat_probe.o"])
+        tasks.append(py_probe_elf)
+        sh_c = task_cc("musl_sh.o", APPS_DIR / "sh.c", BUILD_DIR / "sh.o",
+                       tools, MUSL_DEMO_CFLAGS)
+        sh_c.optional = True
+        sh_c.group = "musl"
+        tasks.append(sh_c)
+        sh_elf = link_musl_user("musl_sh.elf", BUILD_DIR / "sh.elf",
+                                [BUILD_DIR / "sh.o"])
+        tasks.append(sh_elf)
         libc_tests_elf = link_musl_user(
             "libc_testsuite.elf", BUILD_DIR / "libc_testsuite.elf",
             [BUILD_DIR / "libc_tests_main.o",
@@ -969,7 +989,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         t0 = time.perf_counter()
         if task.out and task.out.exists():
             out_mtime = task.out.stat().st_mtime
-            stale = False
+            stale = task.group in ("link", "objcopy")
             for dep_path in task.dep_paths():
                 if dep_path.exists() and dep_path.stat().st_mtime > out_mtime:
                     stale = True
@@ -1117,6 +1137,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
     console.step_header(s, total_steps, "Linking kernel image")
     kernel_link = [t for t in plan.tasks
                    if t.group in ("link", "objcopy") and "kernel" in t.name]
+
     with console.progress(len(kernel_link), "kernel link", Ansi.BR_CYN) as update:
         for i, t in enumerate(kernel_link, 1):
             run_task(t)

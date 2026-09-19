@@ -1,7 +1,9 @@
 #include "kernel/syscall/linux_compat.h"
 #include "arch/x86/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
+#include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
+#include "drivers/char/rtc.h"
 #include "drivers/char/tty.h"
 #include "drivers/net/socket.h"
 #include "kernel/asm_func.h"
@@ -40,6 +42,15 @@ uint64_t sys_sigreturn(struct X86_REGS *r);
 
 static int32_t compat_read(int32_t fd, void *buf, uint32_t count);
 static int32_t compat_write(int32_t fd, const void *buf, uint32_t count);
+static int evfd_slot(int fd);
+static int tfd_slot(int fd);
+static int ep_slot(int fd);
+static int io_is_file_fd(int fd);
+static int64_t lc_eventfd_read(int i, void *buf, uint32_t count);
+static int64_t lc_eventfd_write(int i, const void *buf, uint32_t count);
+static int64_t lc_timerfd_read(int i, void *buf, uint32_t count);
+static uint8_t *lc_nonblock_slot(int fd);
+static int lc_close_extra(int32_t fd);
 
 #define DIRF_FLAG 0xFFFEu
 
@@ -316,7 +327,7 @@ static int64_t lc_statfs(struct X86_REGS *r, uint64_t a, uint64_t b,
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    if (ext2_lookup(kpath, &(uint32_t){0}, &(int){0}))
+    if (strcmp(kpath, "/") != 0 && ext2_lookup(kpath, &(uint32_t){0}, &(int){0}))
         return -LINUX_ENOENT;
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
         return -LINUX_EFAULT;
@@ -582,12 +593,20 @@ static int64_t lc_getid_field_dispatch(struct X86_REGS *r, uint64_t a,
                                        uint64_t b, uint64_t c, uint64_t d,
                                        uint64_t e, uint64_t f);
 #define UNIX_FD_BASE 0x400
-#define MAX_UNIX_SOCK 64
+#define MAX_UNIX_SOCK 16
+#define UNIX_BUF_SIZE 2048
 
 static struct {
     uint8_t active;
     uint8_t connected;
     uint8_t type;
+    uint8_t nonblock;
+    int8_t peer;
+    int8_t self;
+    uint16_t head;
+    uint16_t tail;
+    uint16_t count;
+    uint8_t buf[UNIX_BUF_SIZE];
 } u_unix[MAX_UNIX_SOCK];
 
 static int unix_fd_slot(uint64_t fd) {
@@ -595,6 +614,74 @@ static int unix_fd_slot(uint64_t fd) {
     if (idx >= MAX_UNIX_SOCK || !u_unix[idx].active)
         return -1;
     return (int)idx;
+}
+
+static int unix_alloc_slot(void) {
+    for (int i = 0; i < MAX_UNIX_SOCK; i++) {
+        if (!u_unix[i].active)
+            return i;
+    }
+    return -1;
+}
+
+static uint32_t unix_buf_write(int idx, const uint8_t *src, uint32_t len) {
+    uint32_t done = 0;
+    while (done < len && u_unix[idx].count < UNIX_BUF_SIZE) {
+        u_unix[idx].buf[u_unix[idx].tail] = src[done];
+        u_unix[idx].tail =
+            (uint16_t)((u_unix[idx].tail + 1) % UNIX_BUF_SIZE);
+        u_unix[idx].count++;
+        done++;
+    }
+    return done;
+}
+
+static uint32_t unix_buf_read(int idx, uint8_t *dst, uint32_t len) {
+    uint32_t done = 0;
+    while (done < len && u_unix[idx].count > 0) {
+        dst[done] = u_unix[idx].buf[u_unix[idx].head];
+        u_unix[idx].head =
+            (uint16_t)((u_unix[idx].head + 1) % UNIX_BUF_SIZE);
+        u_unix[idx].count--;
+        done++;
+    }
+    return done;
+}
+
+static int unix_peer_alive(int idx) {
+    int8_t p = u_unix[idx].peer;
+    return p >= 0 && u_unix[p].active;
+}
+
+static int32_t unix_send(int idx, const void *buf, uint32_t len) {
+    if (!u_unix[idx].connected || u_unix[idx].peer < 0)
+        return -LINUX_ENOTCONN;
+    int p = u_unix[idx].peer;
+    if (!u_unix[p].active)
+        return -LINUX_EPIPE;
+    for (;;) {
+        uint32_t n = unix_buf_write(p, (const uint8_t *)buf, len);
+        if (n > 0 || len == 0)
+            return (int32_t)n;
+        if (u_unix[idx].nonblock)
+            return -LINUX_EAGAIN;
+        mtime_sleep(1);
+    }
+}
+
+static int32_t unix_recv(int idx, void *buf, uint32_t len) {
+    if (u_unix[idx].count == 0) {
+        if (len == 0)
+            return 0;
+        while (u_unix[idx].count == 0) {
+            if (!unix_peer_alive(idx))
+                return 0;
+            if (u_unix[idx].nonblock)
+                return -LINUX_EAGAIN;
+            mtime_sleep(1);
+        }
+    }
+    return (int32_t)unix_buf_read(idx, (uint8_t *)buf, len);
 }
 
 static int unix_path_ok(struct X86_REGS *r, uint64_t addr, uint32_t addrlen) {
@@ -619,15 +706,16 @@ static int64_t lc_socket(struct X86_REGS *r, uint64_t a, uint64_t b,
     int domain = (int)a;
     int type = (int)b;
     if (domain == 1) {
-        for (int i = 0; i < MAX_UNIX_SOCK; i++) {
-            if (!u_unix[i].active) {
-                u_unix[i].active = 1;
-                u_unix[i].connected = 0;
-                u_unix[i].type = (uint8_t)type;
-                return UNIX_FD_BASE + i;
-            }
-        }
-        return -LINUX_ENFILE;
+        int i = unix_alloc_slot();
+        if (i < 0)
+            return -LINUX_ENFILE;
+        memset(&u_unix[i], 0, sizeof(u_unix[i]));
+        u_unix[i].active = 1;
+        u_unix[i].connected = 0;
+        u_unix[i].type = (uint8_t)type;
+        u_unix[i].peer = -1;
+        u_unix[i].self = (int8_t)i;
+        return UNIX_FD_BASE + i;
     }
     if (domain != 2)
         return -LINUX_EAFNOSUPPORT;
@@ -732,8 +820,12 @@ static int64_t lc_shutdown(struct X86_REGS *r, uint64_t a, uint64_t b,
 static int64_t lc_sendto(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d;
-    if (unix_fd_slot(a) >= 0)
-        return -LINUX_ENOTCONN;
+    int uslot = unix_fd_slot(a);
+    if (uslot >= 0) {
+        if (!user_ptr_ok(r, b, (uint32_t)c, 0))
+            return -LINUX_EFAULT;
+        return unix_send(uslot, (const void *)(uintptr_t)b, (uint32_t)c);
+    }
     if (!user_ptr_ok(r, b, (uint32_t)c, 0))
         return -LINUX_EFAULT;
     if (e != 0) {
@@ -750,8 +842,12 @@ static int64_t lc_sendto(struct X86_REGS *r, uint64_t a, uint64_t b,
 static int64_t lc_recvfrom(struct X86_REGS *r, uint64_t a, uint64_t b,
                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     (void)d;
-    if (unix_fd_slot(a) >= 0)
-        return -LINUX_ENOTCONN;
+    int uslot = unix_fd_slot(a);
+    if (uslot >= 0) {
+        if (!user_ptr_ok(r, b, (uint32_t)c, 1))
+            return -LINUX_EFAULT;
+        return unix_recv(uslot, (void *)(uintptr_t)b, (uint32_t)c);
+    }
     if (!user_ptr_ok(r, b, (uint32_t)c, 1))
         return -LINUX_EFAULT;
     uint32_t sip = 0;
@@ -942,8 +1038,38 @@ static int64_t lc_recvmsg(struct X86_REGS *r, uint64_t a, uint64_t b,
 
 static int64_t lc_socketpair(struct X86_REGS *r, uint64_t a, uint64_t b,
                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
-    (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    return -LINUX_EOPNOTSUPP;
+    (void)c;
+    (void)e;
+    (void)f;
+    if (a != 1)
+        return -LINUX_EAFNOSUPPORT;
+    if (b != 1 && b != 2)
+        return -LINUX_EINVAL;
+    if (d == 0 || !user_ptr_ok(r, d, 8, 1))
+        return -LINUX_EFAULT;
+    int i0 = unix_alloc_slot();
+    int i1 = -1;
+    if (i0 >= 0)
+        i1 = unix_alloc_slot();
+    if (i0 < 0 || i1 < 0)
+        return -LINUX_ENFILE;
+    memset(&u_unix[i0], 0, sizeof(u_unix[i0]));
+    memset(&u_unix[i1], 0, sizeof(u_unix[i1]));
+    u_unix[i0].active = 1;
+    u_unix[i1].active = 1;
+    u_unix[i0].connected = 1;
+    u_unix[i1].connected = 1;
+    u_unix[i0].type = (uint8_t)b;
+    u_unix[i1].type = (uint8_t)b;
+    u_unix[i0].peer = (int8_t)i1;
+    u_unix[i1].peer = (int8_t)i0;
+    u_unix[i0].self = (int8_t)i0;
+    u_unix[i1].self = (int8_t)i1;
+    int32_t out[2];
+    out[0] = UNIX_FD_BASE + i0;
+    out[1] = UNIX_FD_BASE + i1;
+    memcpy((void *)(uintptr_t)d, out, sizeof(out));
+    return 0;
 }
 
 static int64_t lc_close(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
@@ -952,8 +1078,13 @@ static int64_t lc_close(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
     int uslot = unix_fd_slot(a);
     if (uslot >= 0) {
         u_unix[uslot].active = 0;
+        u_unix[uslot].count = 0;
+        u_unix[uslot].head = 0;
+        u_unix[uslot].tail = 0;
         return 0;
     }
+    if (lc_close_extra((int32_t)a) != 0)
+        return 0;
     return close_file((int32_t)a);
 }
 
@@ -1252,29 +1383,90 @@ static void lc_seterrno(struct TASK *cur, int32_t val) {
 static int32_t compat_write(int32_t fd, const void *buf, uint32_t count) {
     if (fd < 0)
         return -1;
+    int xi = evfd_slot(fd);
+    if (xi >= 0)
+        return (int32_t)lc_eventfd_write(xi, buf, count);
+    xi = unix_fd_slot((uint64_t)fd);
+    if (xi >= 0)
+        return unix_send(xi, buf, count);
+    if (tfd_slot(fd) >= 0 || ep_slot(fd) >= 0)
+        return -LINUX_EINVAL;
+    if (net_is_socket(fd)) {
+        int32_t n = (int32_t)net_send(fd, buf, count);
+        return n < 0 ? -LINUX_EAGAIN : n;
+    }
     if (compat_fd_isdir(fd))
         return -LINUX_EISDIR;
-    if (is_pipe(fd))
-        return (int32_t)pipe_write(fd, buf, count);
+    if (io_is_file_fd(fd)) {
+        if (is_pipe(fd)) {
+            struct FILE *pf2 = file_get(fd_local2global((uint32_t)fd));
+            if (pf2 == NULL || pf2->fd_inode == NULL)
+                return -LINUX_EBADF;
+            uint32_t len = ioq_length((struct TTY_IOQUEUE *)pf2->fd_inode);
+            if (len >= BUFSIZE) {
+                if (pf2->fd_nonblock)
+                    return -LINUX_EAGAIN;
+                while (len >= BUFSIZE) {
+                    mtime_sleep(1);
+                    len = ioq_length((struct TTY_IOQUEUE *)pf2->fd_inode);
+                }
+            }
+            return (int32_t)pipe_write(fd, buf, count);
+        }
+        return (int32_t)write_file(fd, buf, count);
+    }
     if (fd == 1 || fd == 2)
         return TTY.write((const char *)buf, count);
     const char *s = (const char *)buf;
-    for (uint32_t i = 0; i < count; i++) {
-        console_putc(s[i]);
+    for (uint32_t k = 0; k < count; k++) {
+        console_putc(s[k]);
     }
     return (int32_t)count;
 }
 
 static int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
+    int xi = evfd_slot(fd);
+    if (xi >= 0)
+        return (int32_t)lc_eventfd_read(xi, buf, count);
+    xi = tfd_slot(fd);
+    if (xi >= 0)
+        return (int32_t)lc_timerfd_read(xi, buf, count);
+    xi = unix_fd_slot((uint64_t)fd);
+    if (xi >= 0)
+        return unix_recv(xi, buf, count);
+    if (ep_slot(fd) >= 0)
+        return -LINUX_EINVAL;
+    if (net_is_socket(fd)) {
+        int32_t n = (int32_t)net_recv(fd, buf, count);
+        return n < 0 ? -LINUX_EAGAIN : n;
+    }
+    if (io_is_file_fd(fd)) {
+        if (compat_fd_isdir(fd))
+            return -LINUX_EISDIR;
+        if (is_pipe(fd)) {
+            struct FILE *pf3 = file_get(fd_local2global((uint32_t)fd));
+            if (pf3 == NULL || pf3->fd_inode == NULL)
+                return -LINUX_EBADF;
+            uint32_t len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
+            if (len == 0) {
+                if (pf3->fd_nonblock)
+                    return -LINUX_EAGAIN;
+                if (count == 0)
+                    return 0;
+                while (len == 0) {
+                    if (!pipe_has_writer(fd_local2global((uint32_t)fd)))
+                        return 0;
+                    mtime_sleep(1);
+                    len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
+                }
+            }
+            return (int32_t)pipe_read(fd, buf, count);
+        }
+        return (int32_t)read_file(fd, buf, count);
+    }
     if (fd == 0)
         return TTY.read((char *)buf, count);
-    if (compat_fd_isdir(fd))
-        return -LINUX_EISDIR;
-    if (is_pipe(fd))
-        return (int32_t)pipe_read(fd, buf, count);
-    if (fd >= 0 && fd < 3)
-        return -1;
-    return (int32_t)read_file(fd, buf, count);
+    return -LINUX_EBADF;
 }
 
 static int32_t compat_set_thread_area(uint32_t base) {
@@ -1340,25 +1532,24 @@ static int64_t lc_getid(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static int64_t lc_write(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
+    (void)d;
+    (void)e;
+    (void)f;
     if (!user_ptr_ok(r, b, (uint32_t)c, 0))
         return -LINUX_EFAULT;
-    int32_t n = compat_write((int32_t)a, (const void *)b, (uint32_t)c);
-    return n < 0 ? -n : n;
+    return compat_write((int32_t)a, (const void *)b, (uint32_t)c);
 }
 
 static int64_t lc_read(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                        uint64_t d, uint64_t e, uint64_t f) {
+    (void)d;
+    (void)e;
+    (void)f;
     if (!user_ptr_ok(r, b, (uint32_t)c, 1))
         return -LINUX_EFAULT;
-    int32_t n = compat_read((int32_t)a, (void *)b, (uint32_t)c);
-    return n < 0 ? -n : n;
+    return compat_read((int32_t)a, (void *)b, (uint32_t)c);
 }
 
-/**
- * pread64：从指定文件偏移读取，读完不改变文件位置。
- *
- * @param a fd，b 目标缓冲，c 长度，d 文件偏移
- */
 static int64_t lc_pread64(struct X86_REGS *r, uint64_t a, uint64_t b,
                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     int32_t fd = (int32_t)a;
@@ -1437,11 +1628,12 @@ static int64_t lc_set_tid_address(struct X86_REGS *r, uint64_t a, uint64_t b,
 
 static int64_t lc_writev(struct X86_REGS *r, uint64_t a, uint64_t b,
                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)d;
+    (void)e;
+    (void)f;
     if (!user_ptr_ok(r, b, (uint32_t)c * 8u, 0))
         return -LINUX_EFAULT;
-    int32_t n =
-        sys_compat_writev((int32_t)a, (struct LINUX_IOVEC *)b, (int32_t)c);
-    return n < 0 ? -n : n;
+    return sys_compat_writev((int32_t)a, (struct LINUX_IOVEC *)b, (int32_t)c);
 }
 
 static int64_t lc0_writev(struct X86_REGS *r, uint64_t a, uint64_t b,
@@ -1621,8 +1813,8 @@ static int64_t lc_futex(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 static int64_t lc_gettimeofday(struct X86_REGS *r, uint64_t a, uint64_t b,
                                uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
     struct LINUX_TIMEVAL tv;
-    tv.tv_sec = (int64_t)(tick / PIT_HZ);
-    tv.tv_usec = (int64_t)((tick % PIT_HZ) * (1000000 / PIT_HZ));
+    tv.tv_sec = (int64_t)rtc_unix_time();
+    tv.tv_usec = 0;
     if (a && !user_ptr_ok(r, a, sizeof(tv), 1))
         return -LINUX_EFAULT;
     if (b && !user_ptr_ok(r, b, 16, 1))
@@ -1658,8 +1850,13 @@ static int64_t lc_clock_gettime(struct X86_REGS *r, uint64_t a, uint64_t b,
                                 uint64_t c, uint64_t d, uint64_t e,
                                 uint64_t f) {
     struct LINUX_TIMESPEC ts;
-    ts.tv_sec = (int64_t)(tick / PIT_HZ);
-    ts.tv_nsec = (int64_t)((tick % PIT_HZ) * (1000000000 / PIT_HZ));
+    if ((int32_t)a == 0) {
+        ts.tv_sec = (int64_t)rtc_unix_time();
+        ts.tv_nsec = 0;
+    } else {
+        ts.tv_sec = (int64_t)(tick / PIT_HZ);
+        ts.tv_nsec = (int64_t)((tick % PIT_HZ) * (1000000000 / PIT_HZ));
+    }
     if (b && !user_ptr_ok(r, b, sizeof(ts), 1))
         return -LINUX_EFAULT;
     if (b)
@@ -1785,7 +1982,6 @@ static int64_t lc_wait4(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static int64_t lc_uname(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
-    // 输出缓冲必须落在用户可写区间：否则任意内核地址写（390 字节固定内容）
     if (!user_ptr_ok(r, a, sizeof(struct LINUX_UTSNAME), 1))
         return -LINUX_EFAULT;
     return compat_uname((void *)a);
@@ -1875,9 +2071,26 @@ static int64_t lc_fork(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static int64_t lc_clone(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
-    if (a & CLONE_VM)
-        return -LINUX_ENOSYS;
-    return sys_fork(r);
+    (void)d;
+    (void)f;
+    uint32_t flags = (uint32_t)a;
+    if ((flags & CLONE_VM) == 0)
+        return sys_clone_ex(flags, (uint32_t)b, (uint32_t)e, r);
+    if ((flags & CLONE_THREAD) != 0) {
+        int64_t tpid = (int64_t)sys_clone_ex(flags, (uint32_t)b, (uint32_t)e, r);
+        if (tpid > 0 && (flags & CLONE_PARENT_SETTID) != 0 && c != 0) {
+            if (user_ptr_ok(r, c, 4, 1))
+                *(volatile int32_t *)(uintptr_t)c = (int32_t)tpid;
+        }
+        return tpid;
+    }
+    int64_t pid = (int64_t)sys_clone_ex(flags & ~(uint32_t)CLONE_VM,
+                                        (uint32_t)b, (uint32_t)e, r);
+    if (pid > 0 && (flags & CLONE_PARENT_SETTID) != 0 && c != 0) {
+        if (user_ptr_ok(r, c, 4, 1))
+            *(volatile int32_t *)(uintptr_t)c = (int32_t)pid;
+    }
+    return pid;
 }
 
 static int64_t lc_pipe(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
@@ -1889,9 +2102,34 @@ static int64_t lc_pipe(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 static int64_t lc_pipe2(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f) {
-    if (b != 0)
+    (void)c;
+    (void)d;
+    (void)e;
+    (void)f;
+    uint32_t flags = (uint32_t)b;
+    if ((flags & ~(LINUX_O_CLOEXEC | LINUX_O_NONBLOCK)) != 0)
         return -LINUX_EINVAL;
-    return lc_pipe(r, a, 0, 0, 0, 0, 0);
+    int64_t rc = lc_pipe(r, a, 0, 0, 0, 0, 0);
+    if (rc < 0)
+        return rc;
+    if (flags == 0)
+        return 0;
+    int32_t fds[2];
+    if (!user_ptr_ok(r, a, 8, 0))
+        return -LINUX_EFAULT;
+    memcpy(fds, (const void *)(uintptr_t)a, sizeof(fds));
+    for (int k = 0; k < 2; k++) {
+        if (fds[k] < 0 || fds[k] >= (int32_t)MAX_FILES_OPEN_PER_PROC)
+            continue;
+        if ((flags & LINUX_O_CLOEXEC) != 0)
+            current->fd_cloexec |= (1ull << fds[k]);
+        if ((flags & LINUX_O_NONBLOCK) != 0) {
+            struct FILE *pf = file_get(fd_local2global((uint32_t)fds[k]));
+            if (pf != NULL)
+                pf->fd_nonblock = 1;
+        }
+    }
+    return 0;
 }
 
 static int64_t lc_dup(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
@@ -2019,6 +2257,767 @@ static int64_t lc0_open(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
     return open_file(kpath, (uint8_t)b);
 }
 
+#define EVFD_BASE 0x800
+#define EVFD_MAX 16
+#define TFD_BASE 0x880
+#define TFD_MAX 8
+#define EPFD_BASE 0xB00
+#define EPFD_MAX 8
+#define EP_MAX_ITEMS 32
+#define LC_POLL_MAX 256
+#define LC_SEL_MAX_BYTES 128u
+#define LC_SEL_MAX_FDS (LC_SEL_MAX_BYTES * 8u)
+
+struct LC_EPITEM {
+    int32_t fd;
+    uint32_t events;
+    uint64_t data;
+};
+
+static struct {
+    uint8_t active;
+    uint8_t nonblock;
+    uint8_t sema;
+    uint8_t pad;
+    uint64_t count;
+} u_evfd[EVFD_MAX];
+
+static struct {
+    uint8_t active;
+    uint8_t nonblock;
+    int32_t clkid;
+    uint64_t next_ms;
+    uint64_t interval_ms;
+    uint64_t expirations;
+} u_tfd[TFD_MAX];
+
+static struct {
+    uint8_t active;
+    uint8_t nonblock;
+    int n;
+    struct LC_EPITEM items[EP_MAX_ITEMS];
+} u_ep[EPFD_MAX];
+
+static uint64_t lc_now_ms(void) {
+    return (uint64_t)tick * (uint64_t)(1000u / PIT_HZ);
+}
+
+static int evfd_slot(int fd) {
+    int i = fd - EVFD_BASE;
+    return (i >= 0 && i < EVFD_MAX && u_evfd[i].active) ? i : -1;
+}
+
+static int tfd_slot(int fd) {
+    int i = fd - TFD_BASE;
+    return (i >= 0 && i < TFD_MAX && u_tfd[i].active) ? i : -1;
+}
+
+static int ep_slot(int fd) {
+    int i = fd - EPFD_BASE;
+    return (i >= 0 && i < EPFD_MAX && u_ep[i].active) ? i : -1;
+}
+
+static int tfd_expired(int i) {
+    if (u_tfd[i].next_ms == 0)
+        return 0;
+    return lc_now_ms() >= u_tfd[i].next_ms;
+}
+
+static int lc_close_extra(int32_t fd) {
+    int i = evfd_slot(fd);
+    if (i >= 0) {
+        u_evfd[i].active = 0;
+        return 1;
+    }
+    i = tfd_slot(fd);
+    if (i >= 0) {
+        u_tfd[i].active = 0;
+        return 1;
+    }
+    i = ep_slot(fd);
+    if (i >= 0) {
+        u_ep[i].active = 0;
+        u_ep[i].n = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static uint8_t *lc_nonblock_slot(int fd) {
+    int i = evfd_slot(fd);
+    if (i >= 0)
+        return &u_evfd[i].nonblock;
+    i = tfd_slot(fd);
+    if (i >= 0)
+        return &u_tfd[i].nonblock;
+    i = ep_slot(fd);
+    if (i >= 0)
+        return &u_ep[i].nonblock;
+    i = unix_fd_slot((uint64_t)fd);
+    if (i >= 0)
+        return &u_unix[i].nonblock;
+    return 0;
+}
+
+static int io_is_file_fd(int fd) {
+    if (fd < 0 || fd >= (int)MAX_FILES_OPEN_PER_PROC)
+        return 0;
+    uint32_t g = current->fd_table[fd];
+    if (g == (uint32_t)-1)
+        return 0;
+    if (fd < 3 && g == (uint32_t)fd)
+        return 0;
+    return 1;
+}
+
+static int io_fd_events(int fd, int want_read, int want_write) {
+    int rv = 0;
+    int i;
+    int want_err = want_read;
+
+    if (fd < 0)
+        return LINUX_POLLNVAL;
+
+    i = evfd_slot(fd);
+    if (i >= 0) {
+        if (want_read && u_evfd[i].count > 0)
+            rv |= LINUX_POLLIN;
+        if (want_write && u_evfd[i].count < 0xFFFFFFFFFFFFFFFEull)
+            rv |= LINUX_POLLOUT;
+        return rv;
+    }
+    i = tfd_slot(fd);
+    if (i >= 0) {
+        if (want_read && tfd_expired(i))
+            rv |= LINUX_POLLIN;
+        if (want_write)
+            rv |= LINUX_POLLOUT;
+        return rv;
+    }
+    i = ep_slot(fd);
+    if (i >= 0)
+        return rv;
+    i = unix_fd_slot((uint64_t)fd);
+    if (i >= 0) {
+        if (want_read && u_unix[i].count > 0)
+            rv |= LINUX_POLLIN;
+        if (u_unix[i].connected && !unix_peer_alive(i))
+            rv |= LINUX_POLLHUP;
+        if (want_write && unix_peer_alive(i))
+            rv |= LINUX_POLLOUT;
+        return rv;
+    }
+    if (fd < 3) {
+        if (fd == 0) {
+            if (want_read && TTY.avail() > 0)
+                rv |= LINUX_POLLIN;
+            if (want_write)
+                rv |= LINUX_POLLOUT;
+        } else {
+            if (want_read)
+                rv |= LINUX_POLLIN;
+            if (want_write)
+                rv |= LINUX_POLLOUT;
+        }
+        return rv;
+    }
+    if (io_is_file_fd(fd)) {
+        if (is_pipe(fd)) {
+            struct FILE *f = file_get(fd_local2global((uint32_t)fd));
+            if (f != NULL && f->fd_inode != NULL) {
+                uint32_t len = ioq_length((struct TTY_IOQUEUE *)f->fd_inode);
+                if (want_read && len > 0)
+                    rv |= LINUX_POLLIN;
+                if (want_write && len < BUFSIZE)
+                    rv |= LINUX_POLLOUT;
+                if (len == 0 && want_read &&
+                    ((current->pipe_wr_mask >> (uint32_t)fd) & 1u) == 0 &&
+                    !pipe_has_writer(fd_local2global((uint32_t)fd)))
+                    rv |= LINUX_POLLHUP;
+            }
+            return rv;
+        }
+        if (want_read)
+            rv |= LINUX_POLLIN;
+        if (want_write)
+            rv |= LINUX_POLLOUT;
+        return rv;
+    }
+    if (net_is_socket(fd)) {
+        int nr = net_poll_ready(fd, want_read, want_write);
+        if (want_err && (nr & LINUX_POLLERR))
+            rv |= LINUX_POLLERR;
+        rv |= nr & (LINUX_POLLIN | LINUX_POLLOUT | LINUX_POLLHUP | LINUX_POLLNVAL);
+        return rv;
+    }
+    return LINUX_POLLNVAL;
+}
+
+static int io_wait(struct LINUX_POLLFD *fds, uint32_t n, int64_t timeout_ms) {
+    uint64_t deadline = timeout_ms >= 0 ? lc_now_ms() + (uint64_t)timeout_ms : 0;
+    for (;;) {
+        int ready = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (fds[i].fd < 0) {
+                fds[i].revents = 0;
+                continue;
+            }
+            int want_r = (fds[i].events & (LINUX_POLLIN | LINUX_POLLPRI)) != 0;
+            int want_w = (fds[i].events & LINUX_POLLOUT) != 0;
+            int rv = io_fd_events(fds[i].fd, want_r, want_w);
+            fds[i].revents = (int16_t)rv;
+            if (rv != 0)
+                ready++;
+        }
+        if (ready > 0)
+            return ready;
+        if (timeout_ms >= 0 && lc_now_ms() >= deadline)
+            return 0;
+        mtime_sleep(1);
+    }
+}
+
+static int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds,
+                              int64_t timeout_ms) {
+    static struct LINUX_POLLFD pf[LC_POLL_MAX];
+    if (nfds < 0 || nfds > LC_POLL_MAX)
+        return -LINUX_EINVAL;
+    if (nfds == 0) {
+        if (timeout_ms > 0)
+            mtime_sleep((uint32_t)timeout_ms);
+        return 0;
+    }
+    uint32_t bytes = (uint32_t)nfds * (uint32_t)sizeof(struct LINUX_POLLFD);
+    if (!user_ptr_ok(r, ufds, bytes, 1))
+        return -LINUX_EFAULT;
+    memcpy(pf, (const void *)(uintptr_t)ufds, bytes);
+    int rc = io_wait(pf, (uint32_t)nfds, timeout_ms);
+    memcpy((void *)(uintptr_t)ufds, pf, bytes);
+    return rc;
+}
+
+static int64_t lc_timespec_to_ms(struct X86_REGS *r, uint64_t ptr,
+                                 int64_t *out) {
+    if (ptr == 0) {
+        *out = -1;
+        return 0;
+    }
+    struct LINUX_TIMESPEC ts;
+    if (!user_ptr_ok(r, ptr, sizeof(ts), 0))
+        return -LINUX_EFAULT;
+    memcpy(&ts, (const void *)(uintptr_t)ptr, sizeof(ts));
+    *out = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    if (*out < 0)
+        *out = 0;
+    return 0;
+}
+
+static int64_t lc_poll(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+                       uint64_t d, uint64_t e, uint64_t f) {
+    (void)d; (void)e; (void)f;
+    return lc_poll_common(r, a, (int32_t)b, (int32_t)c);
+}
+
+static int64_t lc_ppoll(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+                        uint64_t d, uint64_t e, uint64_t f) {
+    (void)d; (void)e; (void)f;
+    int64_t tmo = -1;
+    int64_t rc = lc_timespec_to_ms(r, c, &tmo);
+    if (rc != 0)
+        return rc;
+    return lc_poll_common(r, a, (int32_t)b, tmo);
+}
+
+static int lc_fdset_test(const uint8_t *set, int fd) {
+    if (fd < 0 || (uint32_t)fd >= LC_SEL_MAX_FDS)
+        return 0;
+    return (set[fd / 8] >> (fd % 8)) & 1;
+}
+
+static void lc_fdset_set(uint8_t *set, int fd) {
+    if (fd < 0 || (uint32_t)fd >= LC_SEL_MAX_FDS)
+        return;
+    set[fd / 8] |= (uint8_t)(1u << (fd % 8));
+}
+
+static void lc_fdset_clear_high(uint8_t *set, uint32_t bytes, int nfds) {
+    uint32_t bit = (uint32_t)nfds;
+    if (bytes == 0)
+        return;
+    if (bit % 8) {
+        set[bit / 8] &= (uint8_t)((1u << (bit % 8)) - 1u);
+        bit = (bit + 7) / 8 * 8;
+    }
+    for (uint32_t b = bit / 8; b < bytes; b++)
+        set[b] = 0;
+}
+
+static int64_t lc_select_common(struct X86_REGS *r, int32_t nfds, uint64_t rd,
+                                uint64_t wr, uint64_t ex, int64_t timeout_ms) {
+    static uint8_t sets[3][LC_SEL_MAX_BYTES];
+    static struct LINUX_POLLFD pf[LC_SEL_MAX_FDS];
+    if (nfds < 0 || nfds > (int32_t)LC_SEL_MAX_FDS)
+        return -LINUX_EINVAL;
+    uint32_t bytes = ((uint32_t)nfds + 7u) / 8u;
+    uint64_t ptrs[3];
+    ptrs[0] = rd;
+    ptrs[1] = wr;
+    ptrs[2] = ex;
+    for (int k = 0; k < 3; k++) {
+        memset(sets[k], 0, LC_SEL_MAX_BYTES);
+        if (ptrs[k] == 0)
+            continue;
+        if (bytes != 0) {
+            if (!user_ptr_ok(r, ptrs[k], bytes, 1))
+                return -LINUX_EFAULT;
+            memcpy(sets[k], (const void *)(uintptr_t)ptrs[k], bytes);
+            lc_fdset_clear_high(sets[k], bytes, nfds);
+        }
+    }
+    int n = 0;
+    for (int fd = 0; fd < nfds && n < (int)LC_SEL_MAX_FDS; fd++) {
+        int ev = 0;
+        if (lc_fdset_test(sets[0], fd))
+            ev |= LINUX_POLLIN;
+        if (lc_fdset_test(sets[1], fd))
+            ev |= LINUX_POLLOUT;
+        if (lc_fdset_test(sets[2], fd))
+            ev |= LINUX_POLLIN | LINUX_POLLPRI;
+        if (ev == 0)
+            continue;
+        pf[n].fd = fd;
+        pf[n].events = (int16_t)ev;
+        pf[n].revents = 0;
+        n++;
+    }
+    int rc = io_wait(pf, (uint32_t)n, timeout_ms);
+    if (rc < 0)
+        return rc;
+    for (int k = 0; k < 3; k++) {
+        if (ptrs[k] != 0 && bytes != 0)
+            memset(sets[k], 0, bytes);
+    }
+    int badfd = 0;
+    for (int i = 0; i < n; i++) {
+        int fd = pf[i].fd;
+        int rv = pf[i].revents;
+        if (rv & LINUX_POLLNVAL)
+            badfd = 1;
+        if (rv & LINUX_POLLIN)
+            lc_fdset_set(sets[0], fd);
+        if (rv & LINUX_POLLOUT)
+            lc_fdset_set(sets[1], fd);
+        if (rv & (LINUX_POLLERR | LINUX_POLLHUP))
+            lc_fdset_set(sets[2], fd);
+    }
+    for (int k = 0; k < 3; k++) {
+        if (ptrs[k] != 0 && bytes != 0)
+            memcpy((void *)(uintptr_t)ptrs[k], sets[k], bytes);
+    }
+    if (badfd && rc == 0)
+        return -LINUX_EBADF;
+    return rc;
+}
+
+static int64_t lc_select(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+                         uint64_t d, uint64_t e, uint64_t f) {
+    (void)f;
+    int64_t timeout_ms = -1;
+    if (e != 0) {
+        struct LINUX_TIMEVAL tv;
+        if (!user_ptr_ok(r, e, sizeof(tv), 0))
+            return -LINUX_EFAULT;
+        memcpy(&tv, (const void *)(uintptr_t)e, sizeof(tv));
+        timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        if (timeout_ms < 0)
+            timeout_ms = 0;
+    }
+    return lc_select_common(r, (int32_t)a, b, c, d, timeout_ms);
+}
+
+static int64_t lc_pselect6(struct X86_REGS *r, uint64_t a, uint64_t b,
+                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)f;
+    int64_t timeout_ms = -1;
+    int64_t rc = lc_timespec_to_ms(r, e, &timeout_ms);
+    if (rc != 0)
+        return rc;
+    return lc_select_common(r, (int32_t)a, b, c, d, timeout_ms);
+}
+
+static int64_t lc_epoll_create1(struct X86_REGS *r, uint64_t a, uint64_t b,
+                                uint64_t c, uint64_t d, uint64_t e,
+                                uint64_t f) {
+    (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    for (int i = 0; i < EPFD_MAX; i++) {
+        if (u_ep[i].active)
+            continue;
+        memset(&u_ep[i], 0, sizeof(u_ep[i]));
+        u_ep[i].active = 1;
+        return EPFD_BASE + i;
+    }
+    return -LINUX_ENFILE;
+}
+
+static int64_t lc_epoll_ctl(struct X86_REGS *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)e; (void)f;
+    int ep = ep_slot((int)a);
+    if (ep < 0)
+        return -LINUX_EBADF;
+    int op = (int)b;
+    int fd = (int)c;
+    if (op == LINUX_EPOLL_CTL_DEL) {
+        for (int i = 0; i < u_ep[ep].n; i++) {
+            if (u_ep[ep].items[i].fd != fd)
+                continue;
+            u_ep[ep].items[i] = u_ep[ep].items[u_ep[ep].n - 1];
+            u_ep[ep].n--;
+            return 0;
+        }
+        return -LINUX_ENOENT;
+    }
+    struct LINUX_EPOLL_EVENT ev;
+    if (d == 0 || !user_ptr_ok(r, d, sizeof(ev), 0))
+        return -LINUX_EFAULT;
+    memcpy(&ev, (const void *)(uintptr_t)d, sizeof(ev));
+    if (op == LINUX_EPOLL_CTL_ADD) {
+        for (int i = 0; i < u_ep[ep].n; i++) {
+            if (u_ep[ep].items[i].fd == fd)
+                return -LINUX_EEXIST;
+        }
+        if (u_ep[ep].n >= EP_MAX_ITEMS)
+            return -LINUX_ENOSPC;
+        u_ep[ep].items[u_ep[ep].n].fd = fd;
+        u_ep[ep].items[u_ep[ep].n].events = ev.events;
+        u_ep[ep].items[u_ep[ep].n].data = ev.data;
+        u_ep[ep].n++;
+        return 0;
+    }
+    if (op == LINUX_EPOLL_CTL_MOD) {
+        for (int i = 0; i < u_ep[ep].n; i++) {
+            if (u_ep[ep].items[i].fd != fd)
+                continue;
+            u_ep[ep].items[i].events = ev.events;
+            u_ep[ep].items[i].data = ev.data;
+            return 0;
+        }
+        return -LINUX_ENOENT;
+    }
+    return -LINUX_EINVAL;
+}
+
+static int64_t lc_epoll_wait_common(struct X86_REGS *r, uint64_t a, uint64_t b,
+                                    uint64_t c, int64_t timeout_ms) {
+    int ep = ep_slot((int)a);
+    if (ep < 0)
+        return -LINUX_EBADF;
+    int32_t maxevents = (int32_t)c;
+    if (maxevents <= 0)
+        return -LINUX_EINVAL;
+    if (b == 0 || !user_ptr_ok(r, b, (uint32_t)maxevents *
+                                        (uint32_t)sizeof(struct LINUX_EPOLL_EVENT), 1))
+        return -LINUX_EFAULT;
+    uint64_t deadline = timeout_ms >= 0 ? lc_now_ms() + (uint64_t)timeout_ms : 0;
+    for (;;) {
+        int out = 0;
+        int n = u_ep[ep].n;
+        for (int i = 0; i < n && out < maxevents; i++) {
+            struct LC_EPITEM *it = &u_ep[ep].items[i];
+            int want_r = (it->events & (LINUX_POLLIN | LINUX_POLLPRI)) != 0;
+            int want_w = (it->events & LINUX_POLLOUT) != 0;
+            int rv = io_fd_events(it->fd, want_r, want_w);
+            if (rv == 0)
+                continue;
+            struct LINUX_EPOLL_EVENT ev;
+            ev.events = (uint32_t)(rv & (it->events |
+                                         LINUX_POLLERR | LINUX_POLLHUP));
+            ev.data = it->data;
+            memcpy((void *)(uintptr_t)(b +
+                                       (uint64_t)out * sizeof(ev)),
+                   &ev, sizeof(ev));
+            out++;
+        }
+        if (out > 0)
+            return out;
+        if (timeout_ms >= 0 && lc_now_ms() >= deadline)
+            return 0;
+        mtime_sleep(1);
+    }
+}
+
+static int64_t lc_epoll_wait(struct X86_REGS *r, uint64_t a, uint64_t b,
+                             uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)e; (void)f;
+    return lc_epoll_wait_common(r, a, b, c, (int32_t)d);
+}
+
+static int64_t lc_epoll_pwait(struct X86_REGS *r, uint64_t a, uint64_t b,
+                              uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)e; (void)f;
+    return lc_epoll_wait_common(r, a, b, c, (int32_t)d);
+}
+
+static int64_t lc_eventfd2(struct X86_REGS *r, uint64_t a, uint64_t b,
+                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)r; (void)c; (void)d; (void)e; (void)f;
+    for (int i = 0; i < EVFD_MAX; i++) {
+        if (u_evfd[i].active)
+            continue;
+        memset(&u_evfd[i], 0, sizeof(u_evfd[i]));
+        u_evfd[i].active = 1;
+        u_evfd[i].count = a;
+        u_evfd[i].sema = (b & LINUX_EFD_SEMAPHORE) ? 1 : 0;
+        u_evfd[i].nonblock = (b & LINUX_EFD_NONBLOCK) ? 1 : 0;
+        return EVFD_BASE + i;
+    }
+    return -LINUX_ENFILE;
+}
+
+static int64_t lc_eventfd(struct X86_REGS *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)b; (void)c; (void)d; (void)e; (void)f;
+    return lc_eventfd2(r, a, 0, 0, 0, 0, 0);
+}
+
+static int64_t lc_timerfd_create(struct X86_REGS *r, uint64_t a, uint64_t b,
+                                 uint64_t c, uint64_t d, uint64_t e,
+                                 uint64_t f) {
+    (void)r; (void)c; (void)d; (void)e; (void)f;
+    for (int i = 0; i < TFD_MAX; i++) {
+        if (u_tfd[i].active)
+            continue;
+        memset(&u_tfd[i], 0, sizeof(u_tfd[i]));
+        u_tfd[i].active = 1;
+        u_tfd[i].clkid = (int32_t)a;
+        u_tfd[i].nonblock = (b & LINUX_TFD_NONBLOCK) ? 1 : 0;
+        return TFD_BASE + i;
+    }
+    return -LINUX_ENFILE;
+}
+
+static int64_t lc_timerfd_settime(struct X86_REGS *r, uint64_t a, uint64_t b,
+                                  uint64_t c, uint64_t d, uint64_t e,
+                                  uint64_t f) {
+    (void)e; (void)f;
+    int i = tfd_slot((int)a);
+    if (i < 0)
+        return -LINUX_EBADF;
+    struct LINUX_ITIMERSPEC its;
+    if (c == 0 || !user_ptr_ok(r, c, sizeof(its), 0))
+        return -LINUX_EFAULT;
+    memcpy(&its, (const void *)(uintptr_t)c, sizeof(its));
+    uint64_t interval = (uint64_t)its.it_interval.tv_sec * 1000u +
+                        (uint64_t)(its.it_interval.tv_nsec / 1000000);
+    uint64_t value = (uint64_t)its.it_value.tv_sec * 1000u +
+                     (uint64_t)(its.it_value.tv_nsec / 1000000);
+    if (d != 0) {
+        if (!user_ptr_ok(r, d, sizeof(its), 1))
+            return -LINUX_EFAULT;
+        struct LINUX_ITIMERSPEC old;
+        memset(&old, 0, sizeof(old));
+        if (u_tfd[i].next_ms != 0) {
+            uint64_t now = lc_now_ms();
+            uint64_t left = u_tfd[i].next_ms > now ? u_tfd[i].next_ms - now : 0;
+            old.it_value.tv_sec = (int64_t)(left / 1000u);
+            old.it_value.tv_nsec = (int64_t)((left % 1000u) * 1000000u);
+        }
+        old.it_interval.tv_sec = (int64_t)(u_tfd[i].interval_ms / 1000u);
+        old.it_interval.tv_nsec =
+            (int64_t)((u_tfd[i].interval_ms % 1000u) * 1000000u);
+        memcpy((void *)(uintptr_t)d, &old, sizeof(old));
+    }
+    u_tfd[i].interval_ms = interval;
+    u_tfd[i].expirations = 0;
+    if (value == 0) {
+        u_tfd[i].next_ms = 0;
+    } else if (b & LINUX_TFD_TIMER_ABSTIME) {
+        u_tfd[i].next_ms = value;
+    } else {
+        u_tfd[i].next_ms = lc_now_ms() + value;
+    }
+    return 0;
+}
+
+static int64_t lc_timerfd_gettime(struct X86_REGS *r, uint64_t a, uint64_t b,
+                                  uint64_t c, uint64_t d, uint64_t e,
+                                  uint64_t f) {
+    (void)c; (void)d; (void)e; (void)f;
+    int i = tfd_slot((int)a);
+    if (i < 0)
+        return -LINUX_EBADF;
+    if (b == 0 || !user_ptr_ok(r, b, sizeof(struct LINUX_ITIMERSPEC), 1))
+        return -LINUX_EFAULT;
+    struct LINUX_ITIMERSPEC its;
+    memset(&its, 0, sizeof(its));
+    if (u_tfd[i].next_ms != 0) {
+        uint64_t now = lc_now_ms();
+        uint64_t left = u_tfd[i].next_ms > now ? u_tfd[i].next_ms - now : 0;
+        its.it_value.tv_sec = (int64_t)(left / 1000u);
+        its.it_value.tv_nsec = (int64_t)((left % 1000u) * 1000000u);
+    }
+    its.it_interval.tv_sec = (int64_t)(u_tfd[i].interval_ms / 1000u);
+    its.it_interval.tv_nsec =
+        (int64_t)((u_tfd[i].interval_ms % 1000u) * 1000000u);
+    memcpy((void *)(uintptr_t)b, &its, sizeof(its));
+    return 0;
+}
+
+static int64_t lc_timerfd_tick(int i) {
+    if (u_tfd[i].next_ms == 0 || lc_now_ms() < u_tfd[i].next_ms)
+        return 0;
+    uint64_t now = lc_now_ms();
+    if (u_tfd[i].interval_ms == 0) {
+        u_tfd[i].next_ms = 0;
+        u_tfd[i].expirations++;
+        return 1;
+    }
+    uint64_t missed = (now - u_tfd[i].next_ms) / u_tfd[i].interval_ms + 1;
+    u_tfd[i].expirations += missed;
+    u_tfd[i].next_ms += missed * u_tfd[i].interval_ms;
+    return 1;
+}
+
+static int64_t lc_eventfd_read(int i, void *buf, uint32_t count) {
+    if (count < 8)
+        return -LINUX_EINVAL;
+    while (u_evfd[i].count == 0) {
+        if (u_evfd[i].nonblock)
+            return -LINUX_EAGAIN;
+        mtime_sleep(1);
+    }
+    uint64_t v = 1;
+    if (!u_evfd[i].sema)
+        v = u_evfd[i].count;
+    u_evfd[i].count -= v;
+    memcpy(buf, &v, 8);
+    return 8;
+}
+
+static int64_t lc_eventfd_write(int i, const void *buf, uint32_t count) {
+    if (count < 8)
+        return -LINUX_EINVAL;
+    uint64_t v;
+    memcpy(&v, buf, 8);
+    if (v == 0xFFFFFFFFFFFFFFFFull)
+        return -LINUX_EINVAL;
+    if (u_evfd[i].count > 0xFFFFFFFFFFFFFFFEull - v)
+        return -LINUX_EAGAIN;
+    u_evfd[i].count += v;
+    return 8;
+}
+
+static int64_t lc_timerfd_read(int i, void *buf, uint32_t count) {
+    if (count < 8)
+        return -LINUX_EINVAL;
+    while (!lc_timerfd_tick(i)) {
+        if (u_tfd[i].nonblock)
+            return -LINUX_EAGAIN;
+        mtime_sleep(1);
+    }
+    uint64_t v = u_tfd[i].expirations;
+    u_tfd[i].expirations = 0;
+    memcpy(buf, &v, 8);
+    return 8;
+}
+
+static void lc_fill_rlimit(uint64_t res, struct LINUX_RLIMIT *rl) {
+    switch (res) {
+    case LINUX_RLIMIT_NOFILE:
+        rl->rlim_cur = 1024;
+        rl->rlim_max = 4096;
+        break;
+    case LINUX_RLIMIT_STACK:
+        rl->rlim_cur = 8u * 1024u * 1024u;
+        rl->rlim_max = 8u * 1024u * 1024u;
+        break;
+    case LINUX_RLIMIT_DATA:
+    case LINUX_RLIMIT_AS:
+        rl->rlim_cur = 1ull << 32;
+        rl->rlim_max = 1ull << 32;
+        break;
+    case LINUX_RLIMIT_NPROC:
+        rl->rlim_cur = MAX_TASKS;
+        rl->rlim_max = MAX_TASKS;
+        break;
+    default:
+        rl->rlim_cur = 0xFFFFFFFFFFFFFFFFull;
+        rl->rlim_max = 0xFFFFFFFFFFFFFFFFull;
+        break;
+    }
+}
+
+static int64_t lc_getrlimit(struct X86_REGS *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)c; (void)d; (void)e; (void)f;
+    if (b == 0 || !user_ptr_ok(r, b, sizeof(struct LINUX_RLIMIT), 1))
+        return -LINUX_EFAULT;
+    struct LINUX_RLIMIT rl;
+    lc_fill_rlimit(a, &rl);
+    memcpy((void *)(uintptr_t)b, &rl, sizeof(rl));
+    return 0;
+}
+
+static int64_t lc_setrlimit(struct X86_REGS *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)a; (void)c; (void)d; (void)e; (void)f;
+    if (b == 0 || !user_ptr_ok(r, b, sizeof(struct LINUX_RLIMIT), 0))
+        return -LINUX_EFAULT;
+    return 0;
+}
+
+static int64_t lc_prlimit64(struct X86_REGS *r, uint64_t a, uint64_t b,
+                            uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)e; (void)f;
+    if (a != 0 && (int32_t)a != (int32_t)current->pid && (int32_t)a != -1)
+        return -LINUX_EPERM;
+    if (d != 0) {
+        if (!user_ptr_ok(r, d, sizeof(struct LINUX_RLIMIT), 1))
+            return -LINUX_EFAULT;
+        struct LINUX_RLIMIT rl;
+        lc_fill_rlimit(b, &rl);
+        memcpy((void *)(uintptr_t)d, &rl, sizeof(rl));
+    }
+    return 0;
+}
+
+static int64_t lc_madvise(struct X86_REGS *r, uint64_t a, uint64_t b,
+                          uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)c; (void)d; (void)e; (void)f;
+    if (a == 0)
+        return -LINUX_EINVAL;
+    if (!user_ptr_ok(r, a, (uint32_t)b, 1))
+        return -LINUX_ENOMEM;
+    return 0;
+}
+
+static int64_t lc_fsync(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+                        uint64_t d, uint64_t e, uint64_t f) {
+    (void)r; (void)b; (void)c; (void)d; (void)e; (void)f;
+    if (unix_fd_slot(a) >= 0)
+        return 0;
+    if (evfd_slot((int)a) >= 0 || tfd_slot((int)a) >= 0 || ep_slot((int)a) >= 0)
+        return -LINUX_EINVAL;
+    if (a < 3)
+        return 0;
+    if (!io_is_file_fd((int)a))
+        return -LINUX_EBADF;
+    if (is_pipe((int)a))
+        return -LINUX_EINVAL;
+    return 0;
+}
+
+static int64_t lc_truncate(struct X86_REGS *r, uint64_t a, uint64_t b,
+                           uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+    (void)c; (void)d; (void)e; (void)f;
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, kpath, a))
+        return -LINUX_EFAULT;
+    if ((int64_t)b < 0)
+        return -LINUX_EINVAL;
+    return sys_truncate(kpath, (int32_t)b);
+}
+
 #define LC_TABLE_SIZE 320
 
 static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
@@ -2143,13 +3142,36 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_readlinkat] = lc_readlinkat,
     [SYS_LINUX_faccessat] = lc_faccessat,
     [SYS_LINUX_getrandom] = lc_getrandom,
+    [SYS_LINUX_poll] = lc_poll,
+    [SYS_LINUX_ppoll] = lc_ppoll,
+    [SYS_LINUX_select] = lc_select,
+    [SYS_LINUX_pselect6] = lc_pselect6,
+    [SYS_LINUX_epoll_create] = lc_epoll_create1,
+    [SYS_LINUX_epoll_create1] = lc_epoll_create1,
+    [SYS_LINUX_epoll_ctl] = lc_epoll_ctl,
+    [SYS_LINUX_epoll_wait] = lc_epoll_wait,
+    [SYS_LINUX_epoll_pwait] = lc_epoll_pwait,
+    [SYS_LINUX_eventfd] = lc_eventfd,
+    [SYS_LINUX_eventfd2] = lc_eventfd2,
+    [SYS_LINUX_timerfd_create] = lc_timerfd_create,
+    [SYS_LINUX_timerfd_settime] = lc_timerfd_settime,
+    [SYS_LINUX_timerfd_gettime] = lc_timerfd_gettime,
+    [SYS_LINUX_getrlimit] = lc_getrlimit,
+    [SYS_LINUX_setrlimit] = lc_setrlimit,
+    [SYS_LINUX_prlimit64] = lc_prlimit64,
+    [SYS_LINUX_madvise] = lc_madvise,
+    [SYS_LINUX_fsync] = lc_fsync,
+    [SYS_LINUX_fdatasync] = lc_fsync,
+    [SYS_LINUX_truncate] = lc_truncate,
 };
 
 int64_t linux_compat_handler(struct X86_REGS *r) {
     struct TASK *cur = current;
     uint32_t nr = r->eax;
     int64_t ret = -LINUX_ENOSYS;
+    int32_t saved_errno = cur->errno;
 
+    cur->errno = 0;
     if (nr >= COMPAT_SYSCALL_BASE) {
         static const LcFn LC0_TABLE[] = {
             [0] = lc_getpid,  [1] = lc_write, [2] = lc_read,
@@ -2165,6 +3187,8 @@ int64_t linux_compat_handler(struct X86_REGS *r) {
         ret = LC_TABLE[nr](r, r->rdi, r->rsi, r->rdx, r->r10, r->r8, r->r9);
     }
 
-    lc_seterrno(cur, ret < 0 ? (int32_t)-ret : 0);
+    if (ret == -1 && cur->errno > 0)
+        ret = -(int64_t)cur->errno;
+    lc_seterrno(cur, ret < 0 ? (int32_t)-ret : saved_errno);
     return ret;
 }
