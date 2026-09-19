@@ -135,6 +135,20 @@ static void sw_wait_vblank(void) {
     mtime_sleep(16);
 }
 
+int udi_cursor_set(int w, int h, const void *argb, int hot_x, int hot_y) {
+    struct GUI_UDI_OPS *ops = udi_active();
+    if (ops == 0 || ops->cursor_set == 0)
+        return -1;
+    return ops->cursor_set(w, h, argb, hot_x, hot_y);
+}
+
+int udi_cursor_move(int x, int y) {
+    struct GUI_UDI_OPS *ops = udi_active();
+    if (ops == 0 || ops->cursor_move == 0)
+        return -1;
+    return ops->cursor_move(x, y);
+}
+
 struct GUI_UDI_OPS udi_sw_ops = {
     "software", sw_probe,  sw_init,      sw_alloc_buffer,
     sw_free_buffer, sw_commit, sw_wait_vblank,

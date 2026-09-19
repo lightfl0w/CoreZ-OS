@@ -54,6 +54,10 @@ struct WL_SURFACE {
     int frame_pending;
     void *x11_owner;
     uint32_t x11_xid;
+
+    struct GFX_CANVAS bs;
+    uint8_t bs_frame_valid;
+    uint8_t bs_content_dirty;
 };
 
 struct WL_CLIENT *wl_display_connect(const char *name);
@@ -74,6 +78,8 @@ void comp_damage_surface(struct WL_SURFACE *s);
 
 void comp_set_wallpaper(const uint32_t *pixels, int w, int h);
 void comp_damage_content(struct WL_SURFACE *s);
+void comp_surface_invalidate(struct WL_SURFACE *s);
+void comp_invalidate_all(void);
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods);
 void comp_post_mouse(int dx, int dy, uint8_t buttons);
 void comp_log(const char *s);

@@ -16,6 +16,7 @@
 
 static struct WL_CLIENT clients[WL_MAX_CLIENTS];
 static struct WL_SURFACE surfaces[WL_MAX_SURFACES];
+static struct GFX_CANVAS bs_slots[WL_MAX_SURFACES];
 
 static struct GFX_CANVAS *dst;
 static int scrnx, scrny;
@@ -252,6 +253,7 @@ void wl_surface_commit(struct WL_SURFACE *s) {
     perf_commits++;
     lock_acquire(&comp_lock);
     s->frame_pending = 1;
+    s->bs_content_dirty = 1;
     int geom_ok = (s->buf_w == s->w && s->buf_h == s->h);
     lock_release(&comp_lock);
     if (geom_ok)
@@ -266,6 +268,16 @@ void wl_surface_destroy(struct WL_SURFACE *s) {
     lock_acquire(&comp_lock);
     if (s->client)
         s->client->surf = 0;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (&surfaces[i] == s) {
+            if (bs_slots[i].pixels == 0 && s->bs.pixels)
+                bs_slots[i] = s->bs;
+            break;
+        }
+    }
+    memset(&s->bs, 0, sizeof(s->bs));
+    s->bs_frame_valid = 0;
+    s->bs_content_dirty = 0;
     s->used = 0;
     s->buf = 0;
     lock_release(&comp_lock);
@@ -347,6 +359,7 @@ void comp_destroy_surface_pool(struct WL_SURFACE *s, struct WL_SHM_POOL **pool) 
         s->buf = 0;
         s->buf_w = 0;
         s->buf_h = 0;
+        s->bs_content_dirty = 1;
     }
     lock_release(&comp_lock);
     shm_pool_destroy(*pool);
@@ -491,7 +504,34 @@ static void push_content(struct WL_SURFACE *s, int rad) {
     }
 }
 
-static void draw_window_batch(struct WL_SURFACE *s) {
+static void bs_prepare(struct WL_SURFACE *s);
+static void bs_blit(struct WL_SURFACE *s, struct GFX_RECT *clip);
+static int bs_ensure_frame(struct WL_SURFACE *s);
+static void bs_content_fused(struct WL_SURFACE *s, struct GFX_RECT *clip);
+static void draw_window_text(struct WL_SURFACE *s, struct GFX_RECT *clip);
+
+static void draw_window_shadow(struct WL_SURFACE *s) {
+    int fx, fy, fw, fh;
+    frame_of(s, &fx, &fy, &fw, &fh);
+    struct GFX_CANVAS *sp =
+        gpu_shadow_sprite(fw, fh, WIN_RADIUS, GPU_SHADOW_BLUR);
+    if (!sp)
+        return;
+    struct GPU_CMD c;
+    memset(&c, 0, sizeof(c));
+    c.op = GPU_OP_SHADOW;
+    c.alpha = s->alpha;
+    c.src = sp;
+    c.x = fx - GPU_SHADOW_BLUR;
+    c.y = fy - GPU_SHADOW_BLUR;
+    c.w = fw;
+    c.h = fh;
+    c.rad = GPU_SHADOW_BLUR;
+    c.corners = (uint8_t)WIN_RADIUS;
+    gpu_push(&c);
+}
+
+static void draw_window_body(struct WL_SURFACE *s) {
     int fx, fy, fw, fh;
     frame_of(s, &fx, &fy, &fw, &fh);
     int rad = WIN_RADIUS;
@@ -502,22 +542,6 @@ static void draw_window_batch(struct WL_SURFACE *s) {
     gfx_color title_col = focused ? t->title_foc : t->title_unf;
 
     struct GPU_CMD c;
-    memset(&c, 0, sizeof(c));
-
-    struct GFX_CANVAS *sp = gpu_shadow_sprite(fw, fh, rad, GPU_SHADOW_BLUR);
-    if (sp) {
-        c.op = GPU_OP_SHADOW;
-        c.alpha = alpha;
-        c.src = sp;
-        c.x = fx - GPU_SHADOW_BLUR;
-        c.y = fy - GPU_SHADOW_BLUR;
-        c.w = fw;
-        c.h = fh;
-        c.rad = GPU_SHADOW_BLUR;
-        c.corners = (uint8_t)rad;
-        gpu_push(&c);
-    }
-
     memset(&c, 0, sizeof(c));
     c.op = GPU_OP_ROUNDFILL;
     c.corners = GFX_CORNER_ALL;
@@ -549,6 +573,19 @@ static void draw_window_batch(struct WL_SURFACE *s) {
     c.h = 15;
     c.color = wm_hover_close(s) ? t->close : t->dim;
     gpu_push(&c);
+}
+
+static void draw_window_cached(struct WL_SURFACE *s, struct GFX_RECT *clip) {
+    draw_window_shadow(s);
+    gpu_batch_flush();
+    bs_prepare(s);
+    if (s->bs.pixels) {
+        bs_blit(s, clip);
+        return;
+    }
+    draw_window_body(s);
+    gpu_batch_flush();
+    draw_window_text(s, clip);
 }
 
 static void draw_window_text(struct WL_SURFACE *s, struct GFX_RECT *clip) {
@@ -585,6 +622,373 @@ static void draw_cursor(void) {
             dst->pixels[(size_t)py * (size_t)gfx_stride(dst) + (size_t)px] = c;
         }
     }
+}
+
+#define CURSOR_HW_PX 64
+
+#define GUI_HW_CURSOR 0
+
+static uint32_t hw_cursor_img[CURSOR_HW_PX * CURSOR_HW_PX];
+
+static int hw_cursor;
+
+static void hw_cursor_build(void) {
+    memset(hw_cursor_img, 0, sizeof(hw_cursor_img));
+    for (int row = 0; row < CURSOR_H && row < CURSOR_HW_PX; row++) {
+        for (int col = 0; col < CURSOR_W && col < CURSOR_HW_PX; col++) {
+            char p = cursor_bmp[row][col];
+            if (p == '.')
+                continue;
+            hw_cursor_img[row * CURSOR_HW_PX + col] =
+                (p == 'O') ? CURSOR_FILL : CURSOR_OUTLINE;
+        }
+    }
+}
+
+static int hw_cursor_init(void) {
+    if (!GUI_HW_CURSOR)
+        return -1;
+    struct GUI_DISPLAY_OPS *d = display_get();
+    if (d == 0 || d->cursor_set == 0 || d->cursor_move == 0)
+        return -1;
+    hw_cursor_build();
+    if (d->cursor_set(CURSOR_HW_PX, CURSOR_HW_PX, hw_cursor_img, 0, 0) != 0)
+        return -1;
+    d->cursor_move(cur_x, cur_y);
+    kprintf("gui: hw cursor active\n");
+    return 0;
+}
+
+static gfx_color bs_blend(gfx_color d, gfx_color src, int ga) {
+    int sa = GFX_A(src);
+    if (sa == 0)
+        return d;
+    sa = (sa * ga + 127) / 255;
+    if (sa <= 0)
+        return d;
+    if (sa >= 255)
+        return src | 0xFF000000u;
+    int dr = GFX_R(d), dg = GFX_G(d), db = GFX_B(d);
+    int sr = GFX_R(src), sg = GFX_G(src), sb = GFX_B(src);
+    return 0xFF000000u |
+           ((uint32_t)(dr + ((sr - dr) * sa + 127) / 255) << 16) |
+           ((uint32_t)(dg + ((sg - dg) * sa + 127) / 255) << 8) |
+           (uint32_t)(db + ((sb - db) * sa + 127) / 255);
+}
+
+static void bs_fill_round(struct GFX_CANVAS *cv, int x, int y, int w, int h,
+                          int rad, int corners, gfx_color rgb, int over) {
+    if (rad < 0)
+        rad = 0;
+    if (rad * 2 > w)
+        rad = w / 2;
+    if (rad * 2 > h)
+        rad = h / 2;
+    int top = (corners & (GFX_CORNER_TL | GFX_CORNER_TR)) ? rad : 0;
+    int bot = (corners & (GFX_CORNER_BL | GFX_CORNER_BR)) ? rad : 0;
+    size_t mapped = gfx_canvas_mapped_bytes(cv, &(int){0});
+    for (int ly = 0; ly < h; ly++) {
+        int py = y + ly;
+        if (py < 0 || py >= cv->h || x < 0)
+            continue;
+        size_t off = (size_t)py * (size_t)cv->pitch + (size_t)x * 4u;
+        if (off + (size_t)w * 4u > mapped)
+            continue;
+        gfx_color *row = (gfx_color *)(void *)((uint8_t *)cv->pixels + off);
+        int full = (ly >= top && ly < h - bot);
+        for (int lx = 0; lx < w; lx++) {
+            int cov = full ? 255
+                           : gfx_round_coverage(lx, ly, w, h, rad, corners);
+            if (cov <= 0)
+                continue;
+            if (over)
+                row[lx] = gfx_over(row[lx], rgb | 0xFF000000u, cov);
+            else
+                row[lx] = (rgb & 0x00FFFFFFu) | ((uint32_t)cov << 24);
+        }
+    }
+}
+
+static gfx_color bs_mix(gfx_color base, gfx_color top, int w) {
+    if (w <= 0)
+        return base & 0x00FFFFFFu;
+    if (w >= 255)
+        return top & 0x00FFFFFFu;
+    int br = GFX_R(base), bg = GFX_G(base), bb = GFX_B(base);
+    int tr = GFX_R(top), tg = GFX_G(top), tb = GFX_B(top);
+    return ((uint32_t)(br + ((tr - br) * w + 127) / 255) << 16) |
+           ((uint32_t)(bg + ((tg - bg) * w + 127) / 255) << 8) |
+           (uint32_t)(bb + ((tb - bb) * w + 127) / 255);
+}
+
+static gfx_color bs_content_px(gfx_color base_rgb, gfx_color p, int cov) {
+    if (cov <= 0)
+        return 0;
+    int eff = (GFX_A(p) * cov + 127) / 255;
+    return bs_mix(base_rgb, p, eff) | ((uint32_t)cov << 24);
+}
+
+static void bs_render_frame(struct WL_SURFACE *s) {
+    struct GFX_CANVAS *cv = &s->bs;
+    int fw = cv->w, fh = cv->h;
+    const struct GUI_THEME *t = theme();
+    int focused = (wm_focused_surface() == s);
+    gfx_color border_col = focused ? t->frame_foc : t->frame_unf;
+    gfx_color title_col = focused ? t->title_foc : t->title_unf;
+    gfx_color fg = focused ? t->title_fg_foc : t->title_fg_unf;
+    gfx_color close_col = wm_hover_close(s) ? t->close : t->dim;
+
+    bs_fill_round(cv, 0, 0, fw, fh, WIN_RADIUS, GFX_CORNER_ALL, border_col, 0);
+    bs_fill_round(cv, 0, COMP_BORDER, fw, COMP_TITLE_H - COMP_BORDER,
+                  WIN_RADIUS - COMP_BORDER,
+                  (int)(GFX_CORNER_TL | GFX_CORNER_TR), title_col, 1);
+    bs_fill_round(cv, fw - 20, 4, 15, 15, 5, GFX_CORNER_ALL, close_col, 1);
+
+    struct GFX_RECT whole = {0, 0, fw, fh};
+    int ty = (COMP_TITLE_H - font_ascent(TITLE_FONT_PX)) / 2;
+    if (ty < 0)
+        ty = 0;
+    font_draw_clip(cv, 8, ty, s->title, TITLE_FONT_PX, fg, &whole);
+    int cw = font_text_width("x", CLOSE_FONT_PX);
+    font_draw_clip(cv, fw - 20 + (15 - cw) / 2, 4, "x", CLOSE_FONT_PX, fg,
+                   &whole);
+}
+
+static void bs_render_content(struct WL_SURFACE *s) {
+    struct GFX_CANVAS *cv = &s->bs;
+    int w = s->w, h = s->h;
+    int cx = COMP_BORDER, cy = COMP_TITLE_H;
+    int rad = WIN_RADIUS - COMP_BORDER;
+    if (rad < 0)
+        rad = 0;
+    if (rad * 2 > w)
+        rad = w / 2;
+    if (rad * 2 > h)
+        rad = h / 2;
+    int corners = GFX_CORNER_BL | GFX_CORNER_BR;
+    size_t mapped = gfx_canvas_mapped_bytes(cv, &(int){0});
+    int with_buf = (s->buf && s->buf_w == w && s->buf_h == h);
+    const gfx_color *src = (const gfx_color *)(const void *)s->buf;
+    gfx_color fill = theme()->content | 0xFF000000u;
+    const struct GUI_THEME *t = theme();
+    gfx_color base_rgb =
+        (wm_focused_surface() == s ? t->frame_foc : t->frame_unf) &
+        0x00FFFFFFu;
+    for (int ly = 0; ly < h; ly++) {
+        int py = cy + ly;
+        if (py < 0 || py >= cv->h)
+            continue;
+        size_t doff = (size_t)py * (size_t)cv->pitch + (size_t)cx * 4u;
+        if (doff + (size_t)w * 4u > mapped)
+            break;
+        gfx_color *dp = (gfx_color *)(void *)((uint8_t *)cv->pixels + doff);
+        const gfx_color *sp = with_buf ? src + (size_t)ly * (size_t)w : 0;
+        int in_band = (ly >= h - rad);
+        for (int lx = 0; lx < w; lx++) {
+            int cov = 255;
+            if (in_band)
+                cov = gfx_round_coverage(lx, ly, w, h, rad, corners);
+            if (cov <= 0)
+                continue;
+            dp[lx] = bs_content_px(base_rgb, with_buf ? sp[lx] : fill, cov);
+        }
+    }
+    s->bs_content_dirty = 0;
+}
+
+#define BS_RESERVE_PAGES 1024
+
+static uint32_t bs_free_pages(void) {
+    const struct MM_BITMAP *b = &kernel_vaddr.vaddr_bitmap;
+    uint32_t total = b->btmp_bytes_len * 8;
+    uint32_t used = 0;
+    if (b->bits == 0)
+        return 0;
+    for (uint32_t i = 0; i < b->btmp_bytes_len; i++) {
+        uint8_t byte = b->bits[i];
+        while (byte) {
+            used += (uint32_t)(byte & 1u);
+            byte >>= 1;
+        }
+    }
+    return (total > used) ? total - used : 0;
+}
+
+static int bs_ensure_frame(struct WL_SURFACE *s) {
+    int idx = -1;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (&surfaces[i] == s) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0)
+        return -1;
+    struct GFX_CANVAS *slot = &bs_slots[idx];
+    int fw = s->w + 2 * COMP_BORDER;
+    int fh = s->h + COMP_TITLE_H + COMP_BORDER;
+    if (fw <= 0 || fh <= 0)
+        return -1;
+    if (s->bs.pixels == 0) {
+        if (slot->pixels && slot->w == fw && slot->h == fh) {
+            s->bs = *slot;
+        } else {
+            size_t bsz = (size_t)fw * (size_t)fh * 4u;
+            uint32_t pages = (uint32_t)((bsz + PAGE_SIZE - 1) / PAGE_SIZE);
+            size_t need = (size_t)pages * PAGE_SIZE;
+            if (bs_free_pages() < pages + BS_RESERVE_PAGES) {
+                static int once;
+                if (!once) {
+                    once = 1;
+                    kprintf("gui: bs cache skipped (pool low)\n");
+                }
+                return -1;
+            }
+            uint8_t *bp = (uint8_t *)get_kernel_pages(pages);
+            if (bp == 0)
+                return -1;
+            memset(bp, 0, need);
+            s->bs.pixels = (gfx_color *)bp;
+            s->bs.pitch = fw * 4;
+            s->bs.w = fw;
+            s->bs.h = fh;
+            s->bs.bytes = bsz;
+        }
+        s->bs_frame_valid = 0;
+        s->bs_content_dirty = 1;
+    } else if (s->bs.w != fw || s->bs.h != fh) {
+        if (slot->pixels == 0)
+            *slot = s->bs;
+        memset(&s->bs, 0, sizeof(s->bs));
+        return bs_ensure_frame(s);
+    }
+    if (s->bs_frame_valid == 0) {
+        bs_render_frame(s);
+        s->bs_frame_valid = 1;
+        s->bs_content_dirty = 1;
+    }
+    return 0;
+}
+
+static void bs_prepare(struct WL_SURFACE *s) {
+    if (bs_ensure_frame(s) != 0)
+        return;
+    if (s->bs_content_dirty)
+        bs_render_content(s);
+}
+
+static void bs_content_fused(struct WL_SURFACE *s, struct GFX_RECT *clip) {
+    struct GFX_CANVAS *cv = &s->bs;
+    if (cv->pixels == 0 || dst == 0)
+        return;
+    int w = s->w, h = s->h;
+    int rad = WIN_RADIUS - COMP_BORDER;
+    if (rad < 0)
+        rad = 0;
+    if (rad * 2 > w)
+        rad = w / 2;
+    if (rad * 2 > h)
+        rad = h / 2;
+    int corners = GFX_CORNER_BL | GFX_CORNER_BR;
+    int ga = s->alpha;
+    int with_buf = (s->buf && s->buf_w == w && s->buf_h == h);
+    const gfx_color *src = (const gfx_color *)(const void *)s->buf;
+    const struct GUI_THEME *t = theme();
+    gfx_color fill = t->content | 0xFF000000u;
+    gfx_color base_rgb =
+        (wm_focused_surface() == s ? t->frame_foc : t->frame_unf) &
+        0x00FFFFFFu;
+    size_t cmapped = gfx_canvas_mapped_bytes(cv, &(int){0});
+    size_t dmapped = gfx_canvas_mapped_bytes(dst, &(int){0});
+    for (int ly = 0; ly < h; ly++) {
+        size_t coff = (size_t)(COMP_TITLE_H + ly) * (size_t)cv->pitch +
+                      (size_t)COMP_BORDER * 4u;
+        if (coff + (size_t)w * 4u > cmapped)
+            break;
+        gfx_color *crow = (gfx_color *)(void *)((uint8_t *)cv->pixels + coff);
+        const gfx_color *sp = with_buf ? src + (size_t)ly * (size_t)w : 0;
+        int py = s->y + ly;
+        gfx_color *drow = 0;
+        if (py >= clip->y && py < clip->y + clip->h && py >= 0 && py < scrny) {
+            size_t doff = (size_t)py * (size_t)dst->pitch + (size_t)s->x * 4u;
+            if (doff + (size_t)w * 4u <= dmapped)
+                drow = (gfx_color *)(void *)((uint8_t *)dst->pixels + doff);
+        }
+        int in_band = (ly >= h - rad);
+        for (int lx = 0; lx < w; lx++) {
+            int cov = 255;
+            if (in_band)
+                cov = gfx_round_coverage(lx, ly, w, h, rad, corners);
+            if (cov <= 0)
+                continue;
+            gfx_color c = bs_content_px(base_rgb, with_buf ? sp[lx] : fill,
+                                        cov);
+            crow[lx] = c;
+            if (drow == 0)
+                continue;
+            int px = s->x + lx;
+            if (px < clip->x || px >= clip->x + clip->w || px < 0 || px >= scrnx)
+                continue;
+            drow[lx] = bs_blend(drow[lx], c, ga);
+        }
+    }
+    s->bs_content_dirty = 0;
+}
+
+static void bs_blit(struct WL_SURFACE *s, struct GFX_RECT *clip) {
+    struct GFX_CANVAS *b = &s->bs;
+    if (b->pixels == 0 || dst == 0)
+        return;
+    int fx = s->x - COMP_BORDER;
+    int fy = s->y - COMP_TITLE_H;
+    struct GFX_RECT f = {fx, fy, b->w, b->h}, v;
+    if (!gfx_rect_intersect(f, *clip, &v))
+        return;
+    int ga = s->alpha;
+    if (ga <= 0)
+        return;
+    size_t mapped = gfx_canvas_mapped_bytes(dst, &(int){0});
+    size_t smapped = gfx_canvas_mapped_bytes(b, &(int){0});
+    for (int py = v.y; py < v.y + v.h; py++) {
+        size_t doff = (size_t)py * (size_t)dst->pitch + (size_t)v.x * 4u;
+        size_t soff = (size_t)(py - fy) * (size_t)b->pitch +
+                      (size_t)(v.x - fx) * 4u;
+        if (doff + (size_t)v.w * 4u > mapped ||
+            soff + (size_t)v.w * 4u > smapped)
+            return;
+        gfx_color *dp = (gfx_color *)(void *)((uint8_t *)dst->pixels + doff);
+        const gfx_color *sp =
+            (const gfx_color *)(const void *)((const uint8_t *)b->pixels +
+                                              soff);
+        if (ga >= 255) {
+            for (int i = 0; i < v.w; i++) {
+                gfx_color c = sp[i];
+                int sa = GFX_A(c);
+                if (sa == 0)
+                    continue;
+                dp[i] = (sa >= 255) ? c : bs_blend(dp[i], c, 255);
+            }
+        } else {
+            for (int i = 0; i < v.w; i++) {
+                gfx_color c = sp[i];
+                if (GFX_A(c) == 0)
+                    continue;
+                dp[i] = bs_blend(dp[i], c, ga);
+            }
+        }
+    }
+}
+
+void comp_surface_invalidate(struct WL_SURFACE *s) {
+    if (!s || !s->used)
+        return;
+    s->bs_frame_valid = 0;
+}
+
+void comp_invalidate_all(void) {
+    for (int i = 0; i < WL_MAX_SURFACES; i++)
+        if (surfaces[i].used)
+            surfaces[i].bs_frame_valid = 0;
 }
 
 static int rect_covered_by_window(struct GFX_RECT *r, struct WL_SURFACE **vis,
@@ -624,7 +1028,10 @@ static int repaint_content_only(struct GUI_DAMAGE *d, struct WL_SURFACE **vis,
         if (s->alpha != 255)
             return 0;
         gpu_batch_clip(r);
-        push_content(s, WIN_RADIUS);
+        if (bs_ensure_frame(s) == 0)
+            bs_content_fused(s, r);
+        else
+            push_content(s, WIN_RADIUS);
         gpu_batch_flush();
         for (int k = j + 1; k < vn; k++) {
             struct WL_SURFACE *t = vis[k];
@@ -632,9 +1039,7 @@ static int repaint_content_only(struct GUI_DAMAGE *d, struct WL_SURFACE **vis,
                 continue;
             if (hidden_from_above(vis, vn, k, r))
                 continue;
-            draw_window_batch(t);
-            gpu_batch_flush();
-            draw_window_text(t, r);
+            draw_window_cached(t, r);
         }
         wm_draw_overlay(dst, r);
         return 1;
@@ -678,9 +1083,7 @@ static void repaint(void) {
             if (hidden_from_above(vis, vn, j, r))
                 continue;
             gpu_batch_clip(r);
-            draw_window_batch(s);
-            gpu_batch_flush();
-            draw_window_text(s, r);
+            draw_window_cached(s, r);
         }
         wm_draw_bar(dst, r);
         wm_draw_overlay(dst, r);
@@ -702,7 +1105,8 @@ static void comp_present(struct GFX_RECT *rects, int n) {
     struct GUI_DISPLAY_OPS *d = display_get();
     if (d == 0)
         return;
-    draw_cursor();
+    if (!hw_cursor)
+        draw_cursor();
     d->flip(rects, n);
 }
 
@@ -731,10 +1135,12 @@ void comp_init(void) {
     cur_y = scrny / 2;
     last_buttons = 0;
     session_active = 1;
+    hw_cursor = (hw_cursor_init() == 0);
 }
 
 static void drain_input(void) {
     struct GUI_INPUT_EVENT ev;
+    int cur_dirty = 0;
     while (input_get(&ev)) {
         if (ev.dev == INPUT_DEV_KEYBOARD) {
             perf_key_events++;
@@ -755,8 +1161,10 @@ static void drain_input(void) {
             if (ny >= scrny)
                 ny = scrny - 1;
             if (nx != cur_x || ny != cur_y) {
-                comp_damage_rect(cur_x, cur_y, CURSOR_W, CURSOR_H);
-                comp_damage_rect(nx, ny, CURSOR_W, CURSOR_H);
+                if (!hw_cursor) {
+                    comp_damage_rect(cur_x, cur_y, CURSOR_W, CURSOR_H);
+                    comp_damage_rect(nx, ny, CURSOR_W, CURSOR_H);
+                }
                 wm_handle_motion(nx, ny);
                 wm_handle_hover(nx, ny);
                 struct WL_SURFACE *mh = wm_surface_at(nx, ny);
@@ -764,6 +1172,7 @@ static void drain_input(void) {
                     x11_notify_motion(mh, nx - mh->x, ny - mh->y);
                 cur_x = nx;
                 cur_y = ny;
+                cur_dirty = 1;
             }
             uint8_t btn = (uint8_t)ev.code;
             uint8_t edge = btn ^ last_buttons;
@@ -778,6 +1187,11 @@ static void drain_input(void) {
                 last_buttons = btn;
             }
         }
+    }
+    if (hw_cursor && cur_dirty) {
+        struct GUI_DISPLAY_OPS *d = display_get();
+        if (d && d->cursor_move)
+            d->cursor_move(cur_x, cur_y);
     }
 }
 

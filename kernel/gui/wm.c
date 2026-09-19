@@ -172,13 +172,15 @@ static void raise_and_focus(struct GUI_WORKSPACE *ws, int idx) {
             ws->win[i] = ws->win[i + 1];
         ws->win[ws->n - 1] = t;
         idx = ws->n - 1;
-        comp_damage_rect(0, 0, comp_screen_w(), TASKBAR_TOP);
+        comp_damage_surface(t.s);
     }
     if (ws->focus != idx) {
         struct WL_SURFACE *old = wm_focused_surface();
+        comp_surface_invalidate(old);
+        ws->focus = idx;
+        comp_surface_invalidate(ws->win[idx].s);
         if (old)
             comp_damage_surface(old);
-        ws->focus = idx;
         comp_damage_surface(ws->win[idx].s);
         bar_invalidate();
     }
@@ -270,6 +272,7 @@ void wm_handle_hover(int x, int y) {
         if (hover_s && hover_s->used) {
             int fx, fy, fw, fh;
             frame_of(hover_s, &fx, &fy, &fw, &fh);
+            comp_surface_invalidate(hover_s);
             comp_damage_rect(fx, fy, fw, COMP_TITLE_H + COMP_BORDER + 1);
         }
         hover_s = ns;
@@ -277,6 +280,7 @@ void wm_handle_hover(int x, int y) {
         if (hover_s && hover_s->used) {
             int fx, fy, fw, fh;
             frame_of(hover_s, &fx, &fy, &fw, &fh);
+            comp_surface_invalidate(hover_s);
             comp_damage_rect(fx, fy, fw, COMP_TITLE_H + COMP_BORDER + 1);
         }
     }
@@ -569,6 +573,7 @@ void wm_handle_key(uint8_t scancode, int pressed, uint8_t mods) {
     case SC_T:
         comp_log(theme()->name);
         theme_toggle();
+        comp_invalidate_all();
         comp_damage_rect(0, 0, comp_screen_w(), comp_screen_h());
         bar_invalidate();
         break;

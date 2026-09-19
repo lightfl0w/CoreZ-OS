@@ -13,6 +13,8 @@ struct GUI_DISPLAY_OPS {
     int (*flip)(struct GFX_RECT *rects, int n);
     void (*wait_vblank)(void);
     int (*set_mode)(uint32_t w, uint32_t h, uint32_t bpp);
+    int (*cursor_set)(int w, int h, const void *argb, int hot_x, int hot_y);
+    int (*cursor_move)(int x, int y);
 };
 
 void display_init(void);

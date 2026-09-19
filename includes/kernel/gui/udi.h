@@ -22,10 +22,14 @@ struct GUI_UDI_OPS {
     void (*free_buffer)(uint64_t handle);
     int (*commit)(uint64_t handle, struct GFX_RECT *rects, int n);
     void (*wait_vblank)(void);
+    int (*cursor_set)(int w, int h, const void *argb, int hot_x, int hot_y);
+    int (*cursor_move)(int x, int y);
 };
 
 int udi_init(uint32_t *w, uint32_t *h, uint32_t bpp);
 struct GUI_UDI_OPS *udi_active(void);
 void udi_register(struct GUI_UDI_OPS *ops);
+int udi_cursor_set(int w, int h, const void *argb, int hot_x, int hot_y);
+int udi_cursor_move(int x, int y);
 
 #endif
