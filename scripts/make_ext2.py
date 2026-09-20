@@ -34,7 +34,7 @@ FILES = [
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
-    "py_compat_probe.elf", "sh.elf", "cpp_hello.elf",
+    "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}

@@ -661,6 +661,19 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         )
         tasks.append(cpp_task)
         user_elves.append(cpp_task)
+        tios_src = APPS_DIR / "termios_probe.c"
+        tios_elf = BUILD_DIR / "termios_probe.elf"
+        tios_task = Task(
+            name="termios_probe.elf",
+            cmd=[*tools.cc[:1], "cc", str(tios_src),
+                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
+                 "-o", str(tios_elf)],
+            out=tios_elf, deps=[tios_src],
+            optional=True, group="link",
+            description="link termios_probe.elf (zig musl static-pie)",
+        )
+        tasks.append(tios_task)
+        user_elves.append(tios_task)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [

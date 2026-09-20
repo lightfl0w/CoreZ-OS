@@ -142,30 +142,14 @@ static int compat_fd_is_tty(int32_t fd) {
 }
 
 static void compat_tcgets(uint8_t *p) {
-    uint32_t fl = 0;
-    TTY.ioctl(TTY_IOCTL_TCGETS, (uint64_t)(uintptr_t)&fl);
-    memset(p, 0, 60);
-    uint32_t *w = (uint32_t *)p;
-    w[0] = 0x500;
-    w[1] = 0x5;
-    w[2] = 0xb0;
-    w[3] = LINUX_ISIG | (fl & TTY_ICANON ? LINUX_ICANON : 0) |
-           (fl & TTY_IECHO ? LINUX_ECHO : 0);
-    p[16] = 0;
-    p[16 + 1 + LINUX_VTIME] = 0;
-    p[16 + 1 + LINUX_VMIN] = 1;
+    TTY.ioctl(TTY_IOCTL_TCGETS, (uint64_t)(uintptr_t)p);
 }
 
 static int32_t compat_tcsets(uint32_t cmd, uint64_t arg) {
     (void)cmd;
-    if (!arg || !access_ok((const void *)(uintptr_t)arg, 49, 0))
+    if (!arg || !access_ok((const void *)(uintptr_t)arg, 60, 0))
         return -LINUX_EFAULT;
-    const uint8_t *p = (const uint8_t *)(uintptr_t)arg;
-    uint32_t lflag;
-    memcpy(&lflag, p + 12, sizeof(lflag));
-    uint32_t fl = (lflag & LINUX_ICANON ? TTY_ICANON : 0) |
-                  (lflag & LINUX_ECHO ? TTY_IECHO : 0);
-    TTY.ioctl(TTY_IOCTL_TCSETS, (uint64_t)(uintptr_t)&fl);
+    TTY.ioctl(TTY_IOCTL_TCSETS, arg);
     return 0;
 }
 
@@ -186,6 +170,19 @@ static int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
                 return -LINUX_EFAULT;
             return TTY.ioctl(TTY_IOCTL_TIOCGWINSZ, arg) < 0 ? -LINUX_ENOTTY
                                                             : 0;
+        case LINUX_TIOCSWINSZ:
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 8, 0))
+                return -LINUX_EFAULT;
+            return TTY.ioctl(TTY_IOCTL_TIOCSWINSZ, arg) < 0 ? -LINUX_ENOTTY
+                                                            : 0;
+        case LINUX_TIOCGPGRP:
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 1))
+                return -LINUX_EFAULT;
+            return TTY.ioctl(TTY_IOCTL_TIOCGPGRP, arg) < 0 ? -LINUX_ENOTTY : 0;
+        case LINUX_TIOCSPGRP:
+            if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 0))
+                return -LINUX_EFAULT;
+            return TTY.ioctl(TTY_IOCTL_TIOCSPGRP, arg) < 0 ? -LINUX_ENOTTY : 0;
         case LINUX_FIONREAD:
             if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 1))
                 return -LINUX_EFAULT;

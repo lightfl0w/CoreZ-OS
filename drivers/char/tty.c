@@ -9,15 +9,29 @@
 #include "kernel/sched/thread.h"
 #include "kernel/fs/file.h"
 #include "kernel/signal.h"
+#include "kernel/syscall/linux_abi.h"
+#include "lib/str/str.h"
 
 #define TTY_WINSZ_ROW 25
 #define TTY_WINSZ_COL 80
 
-static struct {
-    uint32_t iflag;
-    uint8_t cc_vmin;
-    uint8_t cc_vtime;
-} tty_termios;
+#define KC_VERASE 2
+#define KC_VKILL 3
+#define KC_VEOF 4
+#define KC_VINTR 0
+#define KC_VQUIT 1
+#define KC_VSTART 17
+#define KC_VSTOP 19
+#define KC_VSUSP 26
+#define KF_ECHOE 0x10u
+#define KF_ECHOK 0x20u
+#define KF_CREAD 0x80u
+#define KF_CLOCAL 0x8000u
+#define KF_CS8 0x30u
+
+static struct LINUX_TERMIOS tty_tios;
+static uint16_t tty_ws[4] = {TTY_WINSZ_ROW, TTY_WINSZ_COL, 0, 0};
+static uint32_t tty_pgrp;
 
 int tty_write(const char *buf, uint32_t n) {
     for (uint32_t i = 0; i < n; i++)
@@ -25,8 +39,12 @@ int tty_write(const char *buf, uint32_t n) {
     return (int)n;
 }
 
+static int tty_echo_on(void) {
+    return (tty_tios.c_lflag & LINUX_ECHO) != 0;
+}
+
 static void tty_echo(char c) {
-    if (!(tty_termios.iflag & TTY_IECHO))
+    if (!tty_echo_on())
         return;
     if (c == '\r')
         return;
@@ -49,7 +67,7 @@ static int tty_read_line(char *buf, uint32_t n) {
         uint32_t got = 0;
         for (;;) {
             char c = ioq_getchar_sync(&keyboard_ioq);
-            if (c == '\r')
+            if (c == '\r' && (tty_tios.c_iflag & LINUX_ICRNL))
                 c = '\n';
             if (c == '\n') {
                 tty_echo(c);
@@ -89,11 +107,14 @@ static int tty_read_line(char *buf, uint32_t n) {
 }
 
 static int tty_read_raw(char *buf, uint32_t n) {
-    uint32_t wait = tty_termios.cc_vmin;
+    uint32_t vmin = tty_tios.c_cc[LINUX_VMIN];
+    if (vmin == 0)
+        vmin = 1;
     uint32_t got = 0;
     while (got < n) {
         buf[got++] = ioq_getchar_sync(&keyboard_ioq);
-        if (got >= wait)
+        tty_echo((char)buf[got - 1]);
+        if (got >= vmin)
             break;
     }
     return (int)got;
@@ -102,55 +123,69 @@ static int tty_read_raw(char *buf, uint32_t n) {
 int tty_read(char *buf, uint32_t n) {
     if (n == 0)
         return 0;
-    if (tty_termios.iflag & TTY_ICANON)
+    if (tty_tios.c_lflag & LINUX_ICANON)
         return tty_read_line(buf, n);
     return tty_read_raw(buf, n);
 }
 
-uint32_t tty_avail(void) {
-    return ioq_length(&keyboard_ioq);
+uint32_t tty_avail(void) { return ioq_length(&keyboard_ioq); }
+
+static void tty_getwinsz(uint16_t *w) {
+    w[0] = tty_ws[0];
+    w[1] = tty_ws[1];
+    w[2] = tty_ws[2];
+    w[3] = tty_ws[3];
 }
 
 int tty_ioctl(uint32_t cmd, uint64_t arg) {
-    (void)arg;
     switch (cmd) {
     case TTY_IOCTL_TCGETS:
-        if (arg) {
-            uint32_t *p = (uint32_t *)(uintptr_t)arg;
-            p[0] = tty_termios.iflag;
-        }
+        if (arg)
+            memcpy((void *)(uintptr_t)arg, &tty_tios, sizeof(tty_tios));
         return 0;
     case TTY_IOCTL_TCSETS:
-        if (arg)
-            tty_termios.iflag = *(uint32_t *)(uintptr_t)arg;
+    case TTY_IOCTL_TCSETSW:
+    case TTY_IOCTL_TCSETSF:
+        if (arg) {
+            memcpy(&tty_tios, (const void *)(uintptr_t)arg, sizeof(tty_tios));
+            line_len = line_pos = 0;
+        }
         return 0;
     case TTY_IOCTL_TIOCGWINSZ:
+        if (arg)
+            tty_getwinsz((uint16_t *)(uintptr_t)arg);
+        return 0;
+    case TTY_IOCTL_TIOCSWINSZ:
         if (arg) {
-            uint16_t *w = (uint16_t *)(uintptr_t)arg;
-            w[0] = TTY_WINSZ_ROW;
-            w[1] = TTY_WINSZ_COL;
-            w[2] = 0;
-            w[3] = 0;
+            const uint16_t *w = (const uint16_t *)(uintptr_t)arg;
+            tty_ws[0] = w[0];
+            tty_ws[1] = w[1];
+            tty_ws[2] = w[2];
+            tty_ws[3] = w[3];
         }
         return 0;
+    case TTY_IOCTL_TIOCGPGRP:
+        if (arg)
+            *(uint32_t *)(uintptr_t)arg = tty_pgrp;
+        return 0;
+    case TTY_IOCTL_TIOCSPGRP:
+        if (arg)
+            tty_pgrp = *(const uint32_t *)(uintptr_t)arg;
+        return 0;
     case TTY_IOCTL_FIONREAD:
-        if (arg) {
-            uint32_t *p = (uint32_t *)(uintptr_t)arg;
-            *p = ioq_length(&keyboard_ioq);
-        }
+        if (arg)
+            *(uint32_t *)(uintptr_t)arg = ioq_length(&keyboard_ioq);
         return 0;
     default:
         return -1;
     }
 }
 
-int tty_open(void) {
-    return fd_install(0);
-}
+int tty_open(void) { return fd_install(0); }
 
 uint32_t tty_pgid_of(uint32_t pid) {
     (void)pid;
-    return 0;
+    return tty_pgrp;
 }
 
 void tty_sigint_foreground(void) {
@@ -184,7 +219,22 @@ static int tty_drv(void) {
 DRIVER_REGISTER("tty", 12, tty_drv);
 
 void tty_init(void) {
-    tty_termios.iflag = TTY_ICANON | TTY_IECHO;
-    tty_termios.cc_vmin = 1;
-    tty_termios.cc_vtime = 0;
+    memset(&tty_tios, 0, sizeof(tty_tios));
+    tty_tios.c_iflag = LINUX_ICRNL;
+    tty_tios.c_oflag = 0; 
+    tty_tios.c_cflag = KF_CREAD | KF_CLOCAL | KF_CS8;
+    tty_tios.c_lflag =
+        LINUX_ISIG | LINUX_ICANON | LINUX_ECHO | KF_ECHOE | KF_ECHOK;
+    tty_tios.c_cc[KC_VINTR] = 0x03;
+    tty_tios.c_cc[KC_VQUIT] = 0x1c;
+    tty_tios.c_cc[KC_VERASE] = 0x7f;
+    tty_tios.c_cc[KC_VKILL] = 0x15;
+    tty_tios.c_cc[KC_VEOF] = 0x04;
+    tty_tios.c_cc[KC_VSTART] = 0x11;
+    tty_tios.c_cc[KC_VSTOP] = 0x13;
+    tty_tios.c_cc[KC_VSUSP] = 0x1a;
+    tty_tios.c_cc[LINUX_VMIN] = 1;
+    tty_tios.c_cc[LINUX_VTIME] = 0;
+    tty_tios.c_ispeed = 0xf;
+    tty_tios.c_ospeed = 0xf;
 }
