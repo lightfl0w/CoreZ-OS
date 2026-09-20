@@ -646,6 +646,21 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                "-z", "pack-relative-relocs"])
     tasks.append(gui_elf)
     user_elves.append(gui_elf)
+
+    if tools.is_zig:
+        cpp_src = APPS_DIR / "cpp_hello.cc"
+        cpp_elf = BUILD_DIR / "cpp_hello.elf"
+        cpp_task = Task(
+            name="cpp_hello.elf",
+            cmd=[*tools.cc[:1], "c++", str(cpp_src),
+                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
+                 "-Wno-nullability-completeness", "-o", str(cpp_elf)],
+            out=cpp_elf, deps=[cpp_src],
+            optional=True, group="link",
+            description="link cpp_hello.elf (zig musl C++ static-pie)",
+        )
+        tasks.append(cpp_task)
+        user_elves.append(cpp_task)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [
