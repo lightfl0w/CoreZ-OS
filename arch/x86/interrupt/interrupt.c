@@ -209,6 +209,7 @@ void irq_handler(struct X86_REGS *r) {
         irq_eoi(irq);
         tick++;
         itimer_tick();
+        scheduler_tick();
         thread_timer_wake();
         // if (cpu_ipi_ticks[1] != 0 && (tick % 500) == 0) {
         //     kprintf("[smp] ipi1=%u ipi2=%u ipi3=%u | wrk0=%u wrk1=%u wrk2=%u "

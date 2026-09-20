@@ -46,6 +46,11 @@ struct TASK {
     uint8_t priority;
     uint8_t ticks;
     uint32_t elapsed_ticks;
+    uint64_t vruntime;
+    uint64_t deadline;
+    int64_t vlag;
+    uint32_t weight;
+    uint32_t slice;
     struct LIST_ELEM all_list_tag;
     struct LIST_ELEM futex_tag;
     struct LIST_ELEM wait_tag;
@@ -112,6 +117,7 @@ struct TASK *thread_create(char *name, uint8_t priority,
                                   thread_func function, void *arg,
                                   uint8_t aff);
 void schedule(void);
+void scheduler_tick(void);
 void switch_to(uint64_t **cur_kstack, uint64_t **next_kstack, void *fp_save,
                void *fp_restore);
 void kernel_thread_entry(void);

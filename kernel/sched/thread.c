@@ -17,10 +17,24 @@ static struct SCHED_SPINLOCK all_lock;
 static uint64_t ready_bitmap;
 static uint64_t ready_cpu[NR_CPU];
 static uint64_t slot_inuse;
-static uint32_t rr_cursor[NR_CPU];
 static uint64_t sleep_bitmap;
 static uint32_t wake_tick[MAX_TASKS];
 static uint32_t wake_pid[MAX_TASKS];
+
+#define W0 1024U          
+#define MIN_SLICE 4U      
+static uint64_t min_vruntime;
+
+static uint32_t prio_to_weight(uint8_t prio) {
+    uint32_t p = prio ? prio : 1;
+    uint32_t w = W0 / (1u + p); 
+    return w < 16u ? 16u : w;
+}
+
+static uint32_t entity_slice(uint32_t weight) {
+    uint64_t s = (uint64_t)MIN_SLICE * W0 / weight;
+    return s ? (uint32_t)s : 1u;
+}
 
 struct TASK task_table[MAX_TASKS];
 static volatile uint32_t pid_alloc = 0;
@@ -81,6 +95,15 @@ static void ready_enqueue(struct TASK *t) {
     uint64_t bit = 1ULL << task_slot(t);
     if (ready_bitmap & bit)
         return;
+
+    if (t->status != TASK_RUNNING) {
+        t->on_cpu = NR_CPU;
+        if (t->vruntime > min_vruntime)
+            t->vruntime = min_vruntime;
+        else if (t->vruntime + t->slice < min_vruntime)
+            t->vruntime = min_vruntime - t->slice;
+    }
+    t->deadline = t->vruntime + t->slice;
     ready_bitmap |= bit;
     uint32_t aff = aff_of(t);
     for (uint32_t c = 0; c < NR_CPU; c++) {
@@ -237,6 +260,11 @@ void thread_init(void) {
     strcpy(task_table[0].name, "main");
     task_table[0].priority = 5;
     task_table[0].ticks = 5;
+    task_table[0].weight = prio_to_weight(5);
+    task_table[0].slice = entity_slice(task_table[0].weight);
+    task_table[0].vruntime = 0;
+    task_table[0].deadline = task_table[0].slice;
+    task_table[0].vlag = 0;
     task_table[0].elapsed_ticks = 0;
     task_table[0].kernel_stack_top = 0;
     task_table[0].pml4_phys = 0;
@@ -307,6 +335,11 @@ struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
     strcpy(t->name, name);
     t->priority = priority;
     t->ticks = priority;
+    t->weight = prio_to_weight(priority);
+    t->slice = entity_slice(t->weight);
+    t->vruntime = min_vruntime;
+    t->deadline = min_vruntime + t->slice;
+    t->vlag = 0;
     t->kernel_stack_top = stack + THREAD_STACK_SIZE;
     list_append(&thread_all_list, &t->all_list_tag);
     all_unlock_irq(f3);
@@ -432,28 +465,78 @@ uint32_t preempt_disabled(void) {
     return percpu_preempt_count();
 }
 
+static int is_idle_task(const struct TASK *t) {
+    for (uint32_t k = 0; k < NR_CPU; k++)
+        if (t == idle_threads[k])
+            return 1;
+    return 0;
+}
+
+static void update_min_vruntime(void) {
+    uint64_t m = ready_bitmap;
+    uint64_t v = (uint64_t)-1;
+    while (m) {
+        uint32_t s = (uint32_t)__builtin_ctzll(m);
+        m &= m - 1;
+        struct TASK *t = &task_table[s];
+        if (is_idle_task(t))
+            continue;
+        if (t->vruntime < v)
+            v = t->vruntime;
+    }
+    if (v != (uint64_t)-1)
+        min_vruntime = v;
+}
+
 static uint32_t pick_cpu_slot(uint32_t c) {
-    uint64_t base = ready_cpu[c];
-    uint64_t cand = base;
-    if (rr_cursor[c] < 63) {
-        uint64_t m = base & ~((1ULL << (rr_cursor[c] + 1)) - 1);
-        if (m)
-            cand = m;
+    uint64_t V = (uint64_t)-1;
+    uint64_t m = ready_cpu[c];
+    while (m) {
+        uint32_t s = (uint32_t)__builtin_ctzll(m);
+        m &= m - 1;
+        struct TASK *t = &task_table[s];
+        if (t->on_cpu != NR_CPU && t->on_cpu != c)
+            continue;
+        if (t->vruntime < V)
+            V = t->vruntime;
     }
-    for (uint32_t pass = 0; pass < 2; pass++) {
-        uint64_t m = cand;
-        while (m) {
-            uint32_t s = (uint32_t)__builtin_ctzll(m);
-            m &= m - 1;
-            struct TASK *t = &task_table[s];
-            if (t->on_cpu != NR_CPU && t->on_cpu != c)
-                continue;
-            rr_cursor[c] = s;
-            return s;
+    if (V == (uint64_t)-1)
+        return MAX_TASKS;
+
+    uint32_t best = MAX_TASKS;
+    uint64_t best_dl = (uint64_t)-1;
+    uint64_t best_vr = (uint64_t)-1;
+    uint32_t fb = MAX_TASKS;
+    uint64_t fb_vr = (uint64_t)-1;
+    m = ready_cpu[c];
+    while (m) {
+        uint32_t s = (uint32_t)__builtin_ctzll(m);
+        m &= m - 1;
+        struct TASK *t = &task_table[s];
+        if (t->on_cpu != NR_CPU && t->on_cpu != c)
+            continue;
+        if (t->vruntime < fb_vr) {
+            fb_vr = t->vruntime;
+            fb = s;
         }
-        cand = base;
+        if (t->vruntime > V)
+            continue;
+        uint64_t dl = t->deadline;
+        if (dl < best_dl || (dl == best_dl && t->vruntime < best_vr)) {
+            best_dl = dl;
+            best_vr = t->vruntime;
+            best = s;
+        }
     }
-    return MAX_TASKS;
+    return best != MAX_TASKS ? best : fb;
+}
+
+void scheduler_tick(void) {
+    struct TASK *cur = current;
+    if (cur == NULL || cur->weight == 0)
+        return;
+    cur->vruntime += W0 / cur->weight;
+    cur->elapsed_ticks++;
 }
 
 void schedule(void) {
@@ -474,11 +557,10 @@ void schedule(void) {
 
     uint32_t f = sched_lock_irq();
 
-    if (current->status == TASK_RUNNING) {
+    if (current->status == TASK_RUNNING)
         ready_enqueue(current);
-        current->ticks = current->priority;
-    }
 
+    update_min_vruntime();
     uint32_t slot = pick_cpu_slot(c);
     if (slot == MAX_TASKS && idle_threads[c] != NULL) {
         ready_enqueue(idle_threads[c]);
