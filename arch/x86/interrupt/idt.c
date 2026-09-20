@@ -90,19 +90,14 @@ void idt_init(void) {
 
     idt_load_idtr();
 
+    idt_syscall_init();
+}
+
+void idt_syscall_init(void) {
     uint64_t star_msr = ((uint64_t)0x08 << 48) | ((uint64_t)0x10 << 32) |
                         ((uint64_t)0x33 << 16) | (uint64_t)0x23;
-    __asm__ volatile("wrmsr"
-                     :
-                     : "c"(0xC0000081), "a"((uint32_t)star_msr),
-                       "d"((uint32_t)(star_msr >> 32)));
-
-    uint64_t lstar = (uint64_t)syscall_entry;
-    __asm__ volatile("wrmsr"
-                     :
-                     : "c"(0xC0000082), "a"((uint32_t)lstar),
-                       "d"((uint32_t)(lstar >> 32)));
-
+    asm_wrmsr(0xC0000081, star_msr);
+    asm_wrmsr(0xC0000082, (uint64_t)syscall_entry);
     uint64_t efer = asm_rdmsr(0xC0000080);
     asm_wrmsr(0xC0000080, efer | 1u);
 }

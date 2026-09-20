@@ -28,6 +28,7 @@ static volatile uint32_t died_pending = 0;
 struct LIST thread_all_list;
 struct TASK *idle_threads[NR_CPU];
 uint32_t cpu_work_switches[NR_CPU];
+static struct TASK *volatile cpu_away[NR_CPU];
 uint32_t foreground_pid = (uint32_t)-1;
 static int mwait_ok;
 static uint8_t fpu_template[FPU_SAVE_SIZE] __attribute__((aligned(64)));
@@ -431,14 +432,46 @@ uint32_t preempt_disabled(void) {
     return percpu_preempt_count();
 }
 
+static uint32_t pick_cpu_slot(uint32_t c) {
+    uint64_t base = ready_cpu[c];
+    uint64_t cand = base;
+    if (rr_cursor[c] < 63) {
+        uint64_t m = base & ~((1ULL << (rr_cursor[c] + 1)) - 1);
+        if (m)
+            cand = m;
+    }
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        uint64_t m = cand;
+        while (m) {
+            uint32_t s = (uint32_t)__builtin_ctzll(m);
+            m &= m - 1;
+            struct TASK *t = &task_table[s];
+            if (t->on_cpu != NR_CPU && t->on_cpu != c)
+                continue;
+            rr_cursor[c] = s;
+            return s;
+        }
+        cand = base;
+    }
+    return MAX_TASKS;
+}
+
 void schedule(void) {
     ASSERT((asm_save_eflags() & 0x200) == 0);
     assert_stack_magic(current);
 
+    uint32_t c = cpu_id();
+
+    struct TASK *away = cpu_away[c];
+    if (away != NULL) {
+        cpu_away[c] = NULL;
+        if (away != current)
+            cpu_cmpxchg32(&away->on_cpu, c, NR_CPU);
+    }
+
     if (died_pending > 0)
         reap_died_threads();
 
-    uint32_t c = cpu_id();
     uint32_t f = sched_lock_irq();
 
     if (current->status == TASK_RUNNING) {
@@ -446,21 +479,16 @@ void schedule(void) {
         current->ticks = current->priority;
     }
 
-    if (ready_cpu[c] == 0 && idle_threads[c] != NULL)
+    uint32_t slot = pick_cpu_slot(c);
+    if (slot == MAX_TASKS && idle_threads[c] != NULL) {
         ready_enqueue(idle_threads[c]);
-
-    uint64_t avail = ready_cpu[c];
-    if (avail == 0) {
+        slot = pick_cpu_slot(c);
+    }
+    if (slot == MAX_TASKS) {
         sched_unlock_irq(f);
         return;
     }
-    if (rr_cursor[c] < 63)
-        avail &= ~((1ULL << (rr_cursor[c] + 1)) - 1);
-    if (avail == 0)
-        avail = ready_cpu[c];
-    uint32_t slot = (uint32_t)__builtin_ctzll(avail);
     struct TASK *next = &task_table[slot];
-    rr_cursor[c] = slot;
     ready_remove(next);
     assert_stack_magic(next);
     next->status = TASK_RUNNING;
@@ -469,14 +497,14 @@ void schedule(void) {
         cpu_work_switches[c]++;
 
     struct TASK *prev = current;
+    if (prev != next)
+        cpu_away[c] = prev;
     set_current(next);
     sched_unlock_irq(f);
 
     process_activate(next);
     switch_to(&prev->self_kstack, &next->self_kstack, prev->fpu_storage,
               next->fpu_storage);
-    if (prev != next)
-        cpu_cmpxchg32(&prev->on_cpu, c, NR_CPU);
 }
 
 int thread_traverse_all(thread_all_action action, void *arg) {

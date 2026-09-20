@@ -94,6 +94,7 @@ static void ap_main(uint32_t idx) {
     set_cpu_id(idx);
     set_current((struct TASK *)0);
     idt_load_idtr();
+    idt_syscall_init();
     lapic_ap_enable();
 
     struct TASK *me = idle_threads[idx];
