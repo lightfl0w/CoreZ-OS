@@ -8,6 +8,7 @@
 #include "kernel/fs/ext2.h"
 #include "kernel/fs/file.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/pty.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
 struct DISK_PARTITION *cur_part;
@@ -344,6 +345,18 @@ int open_file(const char *pathname, uint8_t flags) {
         return -1;
     }
     file->ref_cnt = 1;
+    if (fs_is_chardev(file->fd_inode)) {
+        uint32_t dev = fs_chardev_dev(file->fd_inode);
+        uint32_t major = dev >> 8;
+        if (major == PTY_MASTER_MAJOR || major == PTY_SLAVE_MAJOR) {
+            if (pty_chardev_open(file, dev) < 0) {
+                inode_close(file->fd_inode);
+                file_table_free_slot(gfd);
+                current->errno = 16;
+                return -1;
+            }
+        }
+    }
     int fd = fd_install(gfd);
     if (fd == -1) {
         inode_close(file->fd_inode);
@@ -372,6 +385,9 @@ int close_file(int fd) {
 
     if (file_table_unref(global_fd_idx) > 0)
         return 0;
+
+    if (file->dev_priv)
+        pty_chardev_close(file);
 
     if (file->fd_flag == PIPE_FLAG) {
         if (file->fd_inode != NULL) {

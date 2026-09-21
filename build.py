@@ -480,6 +480,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("smp.o",        KERNEL_DIR / "init" / "smp" / "smp.c"),
         ("ioqueue.o",    ROOT / "drivers" / "char" / "ioqueue.c"),
         ("tty.o",        ROOT / "drivers" / "char" / "tty.c"),
+        ("pty.o",        ROOT / "drivers" / "char" / "pty.c"),
         ("keyboard.o",   ROOT / "drivers" / "char" / "keyboard.c"),
         ("rtc.o",        ROOT / "drivers" / "char" / "rtc.c"),
         ("ide.o",        ROOT / "drivers" / "block" / "ide.c"),
@@ -674,6 +675,19 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         )
         tasks.append(tios_task)
         user_elves.append(tios_task)
+        pty_src = APPS_DIR / "pty_demo.c"
+        pty_elf = BUILD_DIR / "pty_demo.elf"
+        pty_task = Task(
+            name="pty_demo.elf",
+            cmd=[*tools.cc[:1], "cc", str(pty_src),
+                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
+                 "-o", str(pty_elf)],
+            out=pty_elf, deps=[pty_src],
+            optional=True, group="link",
+            description="link pty_demo.elf (zig musl static-pie)",
+        )
+        tasks.append(pty_task)
+        user_elves.append(pty_task)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [
@@ -738,7 +752,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
-        "ap_tramp.o", "ioqueue.o", "tty.o", "keyboard.o", "rtc.o",
+        "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o",

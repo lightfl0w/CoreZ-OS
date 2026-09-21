@@ -16,6 +16,7 @@ struct FILE {
     uint32_t proc_aux;
     uint32_t ref_cnt;
     uint32_t fd_nonblock;
+    void *dev_priv;
 };
 
 extern struct FILE file_table[MAX_FILE_OPEN];

@@ -6,6 +6,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/pty.h"
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 struct FILE file_table[MAX_FILE_OPEN];
@@ -41,6 +42,7 @@ int file_table_alloc_slot(void) {
         file_table[i].proc_id = 0;
         file_table[i].proc_aux = 0;
         file_table[i].ref_cnt = 0;
+        file_table[i].dev_priv = 0;
         return (int)i;
     }
 }
@@ -127,9 +129,10 @@ static int chardev_tty(const struct FS_INODE *ino) {
     return (ino->i_block[0] >> 8) == 5u;
 }
 
-static uint32_t chardev_read(const struct FS_INODE *ino, void *buf,
-                             uint32_t count) {
-    uint32_t dev = ino->i_block[0];
+static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {
+    if (file->dev_priv)
+        return pty_chardev_read(file, buf, count);
+    uint32_t dev = file->fd_inode->i_block[0];
     if (dev >> 8 == 5u)
         return (uint32_t)TTY.read((char *)buf, count);
     if (dev == 0x0105u) {
@@ -143,16 +146,18 @@ static uint32_t chardev_read(const struct FS_INODE *ino, void *buf,
     return 0;
 }
 
-static uint32_t chardev_write(const struct FS_INODE *ino, const void *buf,
+static uint32_t chardev_write(struct FILE *file, const void *buf,
                               uint32_t count) {
-    if (ino->i_block[0] >> 8 == 5u)
+    if (file->dev_priv)
+        return pty_chardev_write(file, buf, count);
+    if (file->fd_inode->i_block[0] >> 8 == 5u)
         return (uint32_t)TTY.write((const char *)buf, count);
     return count;
 }
 
 uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
-        return chardev_read(file->fd_inode, buf, count);
+        return chardev_read(file, buf, count);
     int r = ext2_read_from_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
@@ -160,7 +165,7 @@ uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
 
 uint32_t file_write(struct FILE *file, const void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
-        return chardev_write(file->fd_inode, buf, count);
+        return chardev_write(file, buf, count);
     int r = ext2_write_to_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;

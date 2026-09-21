@@ -5,6 +5,7 @@
 #include "drivers/char/keyboard.h"
 #include "drivers/char/rtc.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/pty.h"
 #include "drivers/net/socket.h"
 #include "kernel/asm_func.h"
 #include "kernel/fs/dir.h"
@@ -154,6 +155,11 @@ static int32_t compat_tcsets(uint32_t cmd, uint64_t arg) {
 }
 
 static int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
+    if (fd >= 0 && fd < MAX_FILES_OPEN_PER_PROC) {
+        struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
+        if (pf != NULL && pf->dev_priv != NULL)
+            return pty_chardev_ioctl(pf, cmd, arg);
+    }
     if (fd >= 0 && compat_fd_is_tty(fd)) {
         switch (cmd) {
         case LINUX_TCGETS:
@@ -1380,6 +1386,11 @@ static void lc_seterrno(struct TASK *cur, int32_t val) {
 static int32_t compat_write(int32_t fd, const void *buf, uint32_t count) {
     if (fd < 0)
         return -1;
+    if (fd < MAX_FILES_OPEN_PER_PROC) {
+        struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
+        if (pf != NULL && pf->dev_priv != NULL)
+            return (int32_t)pty_chardev_write(pf, buf, count);
+    }
     int xi = evfd_slot(fd);
     if (xi >= 0)
         return (int32_t)lc_eventfd_write(xi, buf, count);
@@ -1422,6 +1433,11 @@ static int32_t compat_write(int32_t fd, const void *buf, uint32_t count) {
 }
 
 static int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
+    if (fd >= 0 && fd < MAX_FILES_OPEN_PER_PROC) {
+        struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
+        if (pf != NULL && pf->dev_priv != NULL)
+            return (int32_t)pty_chardev_read(pf, buf, count);
+    }
     int xi = evfd_slot(fd);
     if (xi >= 0)
         return (int32_t)lc_eventfd_read(xi, buf, count);

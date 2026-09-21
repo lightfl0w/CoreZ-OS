@@ -35,6 +35,7 @@ FILES = [
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
+    "pty_demo.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -80,7 +81,11 @@ def build_dirent_blocks(entries, block=BLOCK):
 
 
 DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
-             ("console", 5, 1), ("random", 1, 8), ("urandom", 1, 9)]
+             ("console", 5, 1), ("random", 1, 8), ("urandom", 1, 9),
+             ("ptmx", 136, 0),
+             ("pty0", 137, 0), ("pty1", 137, 1), ("pty2", 137, 2),
+             ("pty3", 137, 3), ("pty4", 137, 4), ("pty5", 137, 5),
+             ("pty6", 137, 6), ("pty7", 137, 7)]
 
 EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
               ("tmp", 0x41ED | 0o777), ("lib", 0o40755)]
