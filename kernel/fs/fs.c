@@ -302,6 +302,22 @@ int open_file(const char *pathname, uint8_t flags) {
     if (pathname == NULL || pathname[strlen(pathname) - 1] == '/') {
         return -1;
     }
+    char altpath[32];
+    if (strncmp(pathname, "/dev/pts/", 9) == 0) {
+        const char *d = pathname + 9;
+        int i = 0;
+        for (; d[i] && i < 8; i++) {
+            if (d[i] < '0' || d[i] > '9')
+                break;
+        }
+        if (d[i] == '\0' && i > 0) {
+            memcpy(altpath, "/dev/pty", 8);
+            for (int j = 0; j < i; j++)
+                altpath[8 + j] = d[j];
+            altpath[8 + i] = '\0';
+            pathname = altpath;
+        }
+    }
     if (proc_match(pathname)) {
         return proc_open(pathname, flags);
     }

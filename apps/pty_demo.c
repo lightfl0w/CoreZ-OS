@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,27 +21,37 @@ static int readn(int fd, void *buf, int n) {
     return got;
 }
 
-static void bail(const char *m) {
-    write(2, m, strlen(m));
+static void fail(const char *why) {
+    char b[64];
+    int k = snprintf(b, sizeof b, "pty_demo: FAIL %s\n", why);
+    write(2, b, (size_t)k);
     _exit(1);
 }
 
 int main(void) {
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
     if (m < 0)
-        bail("pty_demo: open /dev/ptmx failed\n");
+        fail("open ptmx");
 
     int n = -1;
     if (ioctl(m, MY_TIOCGPTN, &n) < 0 || n < 0)
-        bail("pty_demo: TIOCGPTN failed\n");
+        fail("TIOCGPTN");
     int unlock = 0;
     ioctl(m, MY_TIOCSPTLCK, &unlock);
 
     char sp[32];
-    snprintf(sp, sizeof sp, "/dev/pty%d", n);
+    snprintf(sp, sizeof sp, "/dev/pts/%d", n);
     int s = open(sp, O_RDWR);
     if (s < 0)
-        bail("pty_demo: open slave failed\n");
+        fail("open /dev/pts slave");
+
+    fcntl(s, F_SETFL, O_NONBLOCK);
+    char probe;
+    errno = 0;
+    int pr = read(s, &probe, 1);
+    if (pr != -1 || errno != EAGAIN)
+        fail("nonblock EAGAIN");
+    fcntl(s, F_SETFL, 0);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -56,19 +67,19 @@ int main(void) {
 
     close(s);
     if (write(m, "A", 1) != 1)
-        bail("pty_demo: master write failed\n");
+        fail("master write");
     char rb[4] = {0};
     int got = readn(m, rb, 2);
     int st = 0;
     wait(&st);
+    if (got != 2 || rb[0] != 'B' || rb[1] != 'A')
+        fail("roundtrip");
 
-    if (got == 2 && rb[0] == 'B' && rb[1] == 'A') {
-        write(1, "pty_demo: PASS\n", 15);
-        _exit(0);
-    }
-    char msg[64];
-    int k = snprintf(msg, sizeof msg, "pty_demo: FAIL got=%d [%c%c]\n", got,
-                     rb[0], rb[1]);
-    write(1, msg, (size_t)k);
-    _exit(1);
+    char z;
+    int er = read(m, &z, 1);
+    if (er != 0)
+        fail("EOF after hangup");
+
+    write(1, "pty_demo: PASS\n", 15);
+    _exit(0);
 }

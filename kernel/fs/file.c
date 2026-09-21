@@ -130,8 +130,10 @@ static int chardev_tty(const struct FS_INODE *ino) {
 }
 
 static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {
-    if (file->dev_priv)
-        return pty_chardev_read(file, buf, count);
+    if (file->dev_priv) {
+        int32_t r = pty_chardev_read(file, buf, count);
+        return r < 0 ? 0 : (uint32_t)r;
+    }
     uint32_t dev = file->fd_inode->i_block[0];
     if (dev >> 8 == 5u)
         return (uint32_t)TTY.read((char *)buf, count);
@@ -148,8 +150,10 @@ static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {
 
 static uint32_t chardev_write(struct FILE *file, const void *buf,
                               uint32_t count) {
-    if (file->dev_priv)
-        return pty_chardev_write(file, buf, count);
+    if (file->dev_priv) {
+        int32_t r = pty_chardev_write(file, buf, count);
+        return r < 0 ? 0 : (uint32_t)r;
+    }
     if (file->fd_inode->i_block[0] >> 8 == 5u)
         return (uint32_t)TTY.write((const char *)buf, count);
     return count;

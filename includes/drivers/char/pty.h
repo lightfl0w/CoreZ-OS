@@ -28,8 +28,8 @@ struct PTY {
 };
 
 int pty_chardev_open(struct FILE *f, uint32_t dev);
-uint32_t pty_chardev_read(struct FILE *f, void *buf, uint32_t count);
-uint32_t pty_chardev_write(struct FILE *f, const void *buf, uint32_t count);
+int32_t pty_chardev_read(struct FILE *f, void *buf, uint32_t count);
+int32_t pty_chardev_write(struct FILE *f, const void *buf, uint32_t count);
 int pty_chardev_ioctl(struct FILE *f, uint32_t cmd, uint64_t arg);
 void pty_chardev_close(struct FILE *f);
 int pty_has_priv(const struct FILE *f);

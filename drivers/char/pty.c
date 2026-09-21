@@ -2,7 +2,12 @@
 
 #include "arch/cpu.h"
 #include "kernel/fs/file.h"
+#include "kernel/init/pit/pit.h"
+#include "kernel/sched/thread.h"
 #include "lib/str/str.h"
+
+#define PTY_EAGAIN 11
+#define PTY_EIO 5
 
 static struct PTY ptys[NPTY];
 
@@ -81,41 +86,66 @@ int pty_chardev_open(struct FILE *f, uint32_t dev) {
     return -1;
 }
 
-uint32_t pty_chardev_read(struct FILE *f, void *buf, uint32_t count) {
+int32_t pty_chardev_read(struct FILE *f, void *buf, uint32_t count) {
     if (!f->dev_priv || count == 0)
         return 0;
     struct PTY_REF *r = (struct PTY_REF *)f->dev_priv;
     struct PTY *p = r->p;
     struct TTY_IOQUEUE *q = r->is_master ? &p->s2m : &p->m2s;
-    int peer_closed = r->is_master ? !p->slave_open : !p->master_open;
     uint8_t *b = (uint8_t *)buf;
     uint32_t got = 0;
-    uint32_t fl = cpu_eflags();
-    cpu_cli();
-    while (got < count) {
-        if (ioq_empty(q)) {
-            if (peer_closed || got > 0)
-                break;
+    for (;;) {
+        uint32_t fl = cpu_eflags();
+        cpu_cli();
+        uint32_t len = ioq_length(q);
+        cpu_set_eflags(fl);
+        if (len) {
+            uint32_t take = len < (count - got) ? len : (count - got);
+            uint32_t f2 = cpu_eflags();
+            cpu_cli();
+            for (uint32_t i = 0; i < take; i++)
+                b[got++] = (uint8_t)ioq_getchar(q);
+            cpu_set_eflags(f2);
+            if (got >= count)
+                return (int32_t)got;
         }
-        b[got++] = (uint8_t)ioq_getchar(q);
+        if (got > 0)
+            return (int32_t)got;
+        int peer_closed = r->is_master ? !p->slave_open : !p->master_open;
+        if (peer_closed)
+            return 0;
+        if (f->fd_nonblock) {
+            current->errno = PTY_EAGAIN;
+            return -1;
+        }
+        mtime_sleep(1);
     }
-    cpu_set_eflags(fl);
-    return got;
 }
 
-uint32_t pty_chardev_write(struct FILE *f, const void *buf, uint32_t count) {
+int32_t pty_chardev_write(struct FILE *f, const void *buf, uint32_t count) {
     if (!f->dev_priv)
-        return count;
+        return (int32_t)count;
     struct PTY_REF *r = (struct PTY_REF *)f->dev_priv;
     struct PTY *p = r->p;
     struct TTY_IOQUEUE *q = r->is_master ? &p->m2s : &p->s2m;
     const uint8_t *b = (const uint8_t *)buf;
     uint32_t fl = cpu_eflags();
     cpu_cli();
-    for (uint32_t i = 0; i < count; i++)
+    for (uint32_t i = 0; i < count; i++) {
+        while (ioq_full(q)) {
+            cpu_set_eflags(fl);
+            if (f->fd_nonblock) {
+                current->errno = PTY_EAGAIN;
+                return -1;
+            }
+            mtime_sleep(1);
+            fl = cpu_eflags();
+            cpu_cli();
+        }
         ioq_putchar(q, (char)b[i]);
+    }
     cpu_set_eflags(fl);
-    return count;
+    return (int32_t)count;
 }
 
 int pty_chardev_ioctl(struct FILE *f, uint32_t cmd, uint64_t arg) {
