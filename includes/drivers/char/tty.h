@@ -66,6 +66,7 @@ void tty_sigint_foreground(void);
 #define TTY_IOCTL_TIOCSWINSZ 0x5414u
 #define TTY_IOCTL_TIOCGPGRP 0x540fu
 #define TTY_IOCTL_TIOCSPGRP 0x5410u
+#define TTY_IOCTL_TIOCSCTTY 0x540eu
 #define TTY_IOCTL_FIONREAD 0x541bu
 
 #endif /* DRIVERS_CHAR_TTY_H */

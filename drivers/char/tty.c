@@ -158,11 +158,17 @@ int tty_ioctl(uint32_t cmd, uint64_t arg) {
     case TTY_IOCTL_TIOCSWINSZ:
         if (arg) {
             const uint16_t *w = (const uint16_t *)(uintptr_t)arg;
+            uint16_t old_row = tty_ws[0], old_col = tty_ws[1];
             tty_ws[0] = w[0];
             tty_ws[1] = w[1];
             tty_ws[2] = w[2];
             tty_ws[3] = w[3];
+            if (tty_pgrp && (tty_ws[0] != old_row || tty_ws[1] != old_col))
+                sys_kill(-(int)tty_pgrp, SIGWINCH);
         }
+        return 0;
+    case TTY_IOCTL_TIOCSCTTY:
+        tty_pgrp = current->pgid ? current->pgid : current->pid;
         return 0;
     case TTY_IOCTL_TIOCGPGRP:
         if (arg)
@@ -189,19 +195,13 @@ uint32_t tty_pgid_of(uint32_t pid) {
 }
 
 void tty_sigint_foreground(void) {
-    if (foreground_pid == (uint32_t)-1)
-        return;
-    uint32_t pgid = tty_pgid_of(foreground_pid);
-    if (pgid == 0)
+    uint32_t pgid = tty_pgrp;
+    if (pgid == 0) {
+        if (foreground_pid == (uint32_t)-1)
+            return;
         pgid = foreground_pid;
-    for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        struct TASK *t = &task_table[i];
-        if (!t->slot_used || t->status == TASK_DIED)
-            continue;
-        if (t->pid != pgid)
-            continue;
-        sys_kill((int)t->pid, 2);
     }
+    sys_kill(-(int)pgid, SIGINT);
 }
 
 const struct TTY_OPS TTY = {

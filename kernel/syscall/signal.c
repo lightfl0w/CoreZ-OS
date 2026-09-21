@@ -22,7 +22,8 @@ static const uint8_t sig_default[NSIG] = {
     [SIGTERM] = SIG_ACT_TERM, [SIGCHLD] = SIG_ACT_IGN,
     [SIGCONT] = SIG_ACT_CONT, [SIGSTOP] = SIG_ACT_STOP,
     [SIGTSTP] = SIG_ACT_STOP, [SIGTTIN] = SIG_ACT_STOP,
-    [SIGTTOU] = SIG_ACT_STOP, [SIGSYS] = SIG_ACT_TERM,
+    [SIGTTOU] = SIG_ACT_STOP, [SIGWINCH] = SIG_ACT_IGN,
+    [SIGSYS] = SIG_ACT_TERM,
 };
 void init_signal_state(struct TASK *t) {
     t->signal_pending = 0;
@@ -312,40 +313,11 @@ static int signal_wake_interruptible(struct TASK *t) {
     return 1;
 }
 
-int sys_kill(int pid, int sig) {
-    if (pid < 0) {
-        uint32_t pgid = (uint32_t)(-pid);
-        int n = 0;
-        for (uint32_t i = 0; i < MAX_TASKS; i++) {
-            struct TASK *t = &task_table[i];
-            if (!t->slot_used || t->status == TASK_DIED)
-                continue;
-            if (t->pid != pgid)
-                continue;
-            if (!signal_wake_interruptible(t)) {
-                thread_kill_pid(t->pid);
-            }
-            t->signal_pending |= (1u << (sig & 31));
-            n++;
-        }
-        return n ? 0 : -1;
-    }
-
-    if (sig < 0 || sig >= NSIG) {
-        return -1;
-    }
-    if (pid == 0) {
-        pid = (int)current->pid;
-    }
-    struct TASK *t = pid2thread(pid);
-    if (t == NULL) {
-        return -1;
-    }
-    if (sig == 0) {
+static int signal_send_task(struct TASK *t, int sig) {
+    if (sig == 0)
         return 0;
-    }
     if (sig == SIGKILL) {
-        thread_kill_pid((uint32_t)pid);
+        thread_kill_pid(t->pid);
         return 0;
     }
     if (sig == SIGCONT && t->status == TASK_STOPPED) {
@@ -354,18 +326,43 @@ int sys_kill(int pid, int sig) {
         return 0;
     }
     t->signal_pending |= (1u << sig);
-    if (signal_wake_interruptible(t)) {
+    if (signal_wake_interruptible(t))
         return 0;
-    }
     if (t->status == TASK_WAITING) {
         thread_ready(t);
     } else if (t->status & (TASK_BLOCKED | TASK_STOPPED)) {
         if (sig_default_terminates(t, sig)) {
             t->signal_pending &= ~(1u << sig);
-            thread_kill_pid((uint32_t)pid);
+            thread_kill_pid(t->pid);
         }
     }
     return 0;
+}
+
+int sys_kill(int pid, int sig) {
+    if (sig < 0 || sig >= NSIG)
+        return -1;
+    if (pid < 0) {
+        uint32_t pgid = (uint32_t)(-pid);
+        int n = 0;
+        for (uint32_t i = 0; i < MAX_TASKS; i++) {
+            struct TASK *t = &task_table[i];
+            if (!t->slot_used || t->status == TASK_DIED)
+                continue;
+            uint32_t gp = t->pgid ? t->pgid : t->pid;
+            if (gp != pgid)
+                continue;
+            signal_send_task(t, sig);
+            n++;
+        }
+        return n ? 0 : -1;
+    }
+    if (pid == 0)
+        pid = (int)current->pid;
+    struct TASK *t = pid2thread(pid);
+    if (t == NULL)
+        return -1;
+    return signal_send_task(t, sig);
 }
 
 uint64_t sys_sigreturn(struct X86_REGS *r) {

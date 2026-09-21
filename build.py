@@ -688,6 +688,19 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         )
         tasks.append(pty_task)
         user_elves.append(pty_task)
+        jc_src = APPS_DIR / "jc_demo.c"
+        jc_elf = BUILD_DIR / "jc_demo.elf"
+        jc_task = Task(
+            name="jc_demo.elf",
+            cmd=[*tools.cc[:1], "cc", str(jc_src),
+                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
+                 "-o", str(jc_elf)],
+            out=jc_elf, deps=[jc_src],
+            optional=True, group="link",
+            description="link jc_demo.elf (zig musl static-pie)",
+        )
+        tasks.append(jc_task)
+        user_elves.append(jc_task)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [

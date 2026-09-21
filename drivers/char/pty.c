@@ -4,10 +4,12 @@
 #include "kernel/fs/file.h"
 #include "kernel/init/pit/pit.h"
 #include "kernel/sched/thread.h"
+#include "kernel/signal.h"
 #include "lib/str/str.h"
 
 #define PTY_EAGAIN 11
 #define PTY_EIO 5
+#define PTY_EINTR 4
 
 static struct PTY ptys[NPTY];
 
@@ -95,6 +97,10 @@ int32_t pty_chardev_read(struct FILE *f, void *buf, uint32_t count) {
     uint8_t *b = (uint8_t *)buf;
     uint32_t got = 0;
     for (;;) {
+        if (got == 0 && (current->signal_pending & ~current->signal_mask)) {
+            current->errno = PTY_EINTR;
+            return -1;
+        }
         uint32_t fl = cpu_eflags();
         cpu_cli();
         uint32_t len = ioq_length(q);
@@ -166,8 +172,24 @@ int pty_chardev_ioctl(struct FILE *f, uint32_t cmd, uint64_t arg) {
             memcpy((void *)(uintptr_t)arg, p->ws, 8);
         return 0;
     case PTY_TIOCSWINSZ:
+        if (arg) {
+            const uint16_t *w = (const uint16_t *)(uintptr_t)arg;
+            uint16_t orow = p->ws[0], ocol = p->ws[1];
+            memcpy(p->ws, w, 8);
+            if (p->pgrp && (p->ws[0] != orow || p->ws[1] != ocol))
+                sys_kill(-(int)p->pgrp, SIGWINCH);
+        }
+        return 0;
+    case PTY_TIOCSCTTY:
+        p->pgrp = current->pgid ? current->pgid : current->pid;
+        return 0;
+    case PTY_TIOCGPGRP:
         if (arg)
-            memcpy(p->ws, (const void *)(uintptr_t)arg, 8);
+            *(uint32_t *)(uintptr_t)arg = p->pgrp;
+        return 0;
+    case PTY_TIOCSPGRP:
+        if (arg)
+            p->pgrp = *(const uint32_t *)(uintptr_t)arg;
         return 0;
     default:
         return 0;

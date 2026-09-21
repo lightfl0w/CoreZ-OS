@@ -30,6 +30,7 @@ struct X86_REGS;
 #define SIGTSTP 20
 #define SIGTTIN 21
 #define SIGTTOU 22
+#define SIGWINCH 28
 #define SIGSYS 31
 
 #define SIG_DFL ((void (*)(int))0)

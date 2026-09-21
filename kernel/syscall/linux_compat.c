@@ -189,6 +189,8 @@ static int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
             if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 0))
                 return -LINUX_EFAULT;
             return TTY.ioctl(TTY_IOCTL_TIOCSPGRP, arg) < 0 ? -LINUX_ENOTTY : 0;
+        case LINUX_TIOCSCTTY:
+            return TTY.ioctl(TTY_IOCTL_TIOCSCTTY, arg) < 0 ? -LINUX_ENOTTY : 0;
         case LINUX_FIONREAD:
             if (!arg || !access_ok((const void *)(uintptr_t)arg, 4, 1))
                 return -LINUX_EFAULT;
