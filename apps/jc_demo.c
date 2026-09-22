@@ -60,7 +60,7 @@ static int handler_return_probe(void) {
     char flush = 'F';
     write(2, &flush, 1);
     nanosleep(&(struct timespec){0, 30000000}, NULL);
-    return (g_u > 0 && sentinel == 0x5A5A) ? 1 : 0;
+    return (g_u > 0 && g_w > 0 && sentinel == 0x5A5A) ? 1 : 0;
 }
 
 int main(void) {

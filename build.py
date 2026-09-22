@@ -149,15 +149,15 @@ def _find(name: str, candidates: Sequence[str]) -> str:
         f"Could not find any of: {', '.join(candidates)} (needed for `{name}`)."
     )
 def _resolve_cc() -> Tuple[List[str], bool]:
-    zig = shutil.which("zig")
-    if zig:
-        return [zig, "cc"], True
-    for c in ("x86_64-elf-gcc", "gcc", "cc", "i686-elf-gcc"):
+    for c in ("x86_64-linux-gnu-gcc", "x86_64-pc-linux-gnu-gcc", "gcc", "cc"):
         path = shutil.which(c)
         if path:
             return [path], False
+    zig = shutil.which("zig")
+    if zig:
+        return [zig, "cc"], True
     raise FileNotFoundError(
-        "Could not find any C compiler (zig, x86_64-elf-gcc, gcc, cc)."
+        "Could not find any C compiler (gcc, cc, zig)."
     )
 def detect_tools() -> Tools:
     cc, is_zig = _resolve_cc()
@@ -648,13 +648,14 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     tasks.append(gui_elf)
     user_elves.append(gui_elf)
 
-    if tools.is_zig:
+    zig = shutil.which("zig")
+    if zig:
         cpp_src = APPS_DIR / "cpp_hello.cc"
         cpp_elf = BUILD_DIR / "cpp_hello.elf"
         cpp_task = Task(
             name="cpp_hello.elf",
-            cmd=[*tools.cc[:1], "c++", str(cpp_src),
-                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
+            cmd=[zig, "c++", str(cpp_src),
+                 "-target", "x86_64-linux-musl", "-static", "-pie", "-Os",
                  "-Wno-nullability-completeness", "-o", str(cpp_elf)],
             out=cpp_elf, deps=[cpp_src],
             optional=True, group="link",
@@ -662,45 +663,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         )
         tasks.append(cpp_task)
         user_elves.append(cpp_task)
-        tios_src = APPS_DIR / "termios_probe.c"
-        tios_elf = BUILD_DIR / "termios_probe.elf"
-        tios_task = Task(
-            name="termios_probe.elf",
-            cmd=[*tools.cc[:1], "cc", str(tios_src),
-                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
-                 "-o", str(tios_elf)],
-            out=tios_elf, deps=[tios_src],
-            optional=True, group="link",
-            description="link termios_probe.elf (zig musl static-pie)",
-        )
-        tasks.append(tios_task)
-        user_elves.append(tios_task)
-        pty_src = APPS_DIR / "pty_demo.c"
-        pty_elf = BUILD_DIR / "pty_demo.elf"
-        pty_task = Task(
-            name="pty_demo.elf",
-            cmd=[*tools.cc[:1], "cc", str(pty_src),
-                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
-                 "-o", str(pty_elf)],
-            out=pty_elf, deps=[pty_src],
-            optional=True, group="link",
-            description="link pty_demo.elf (zig musl static-pie)",
-        )
-        tasks.append(pty_task)
-        user_elves.append(pty_task)
-        jc_src = APPS_DIR / "jc_demo.c"
-        jc_elf = BUILD_DIR / "jc_demo.elf"
-        jc_task = Task(
-            name="jc_demo.elf",
-            cmd=[*tools.cc[:1], "cc", str(jc_src),
-                 "-target", "x86_64-linux-musl", "-static", "-pie", "-O2",
-                 "-o", str(jc_elf)],
-            out=jc_elf, deps=[jc_src],
-            optional=True, group="link",
-            description="link jc_demo.elf (zig musl static-pie)",
-        )
-        tasks.append(jc_task)
-        user_elves.append(jc_task)
     net_dir = ROOT / "drivers" / "net"
     net_cflags = KERNEL_CFLAGS + ["-I", str(net_dir)]
     net_c_sources = [
@@ -960,6 +922,15 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
              BUILD_DIR / "test_basename.o", BUILD_DIR / "test_dirname.o",
              BUILD_DIR / "test_fnmatch.o"])
         tasks.append(libc_tests_elf)
+        for stem in ("termios_probe", "pty_demo", "jc_demo"):
+            cobj = BUILD_DIR / (stem + ".o")
+            ct = task_cc("musl_" + stem + ".o", APPS_DIR / (stem + ".c"),
+                         cobj, tools, MUSL_DEMO_CFLAGS + ["-fno-stack-protector"])
+            ct.optional = True
+            tasks.append(ct)
+            app_elf = link_musl_user("musl_" + stem + ".elf",
+                                     BUILD_DIR / (stem + ".elf"), [cobj])
+            tasks.append(app_elf)
 
         # 动态链接：ld.so（musl 的 libc.so 本身就是动态加载器）要落到 build/ 根下，
         # make_ext2.py 按名字把它们装进 /lib。x86_64 下两个名字内容相同，都放一份
@@ -1319,7 +1290,7 @@ def main(argv: Sequence[str]) -> int:
     console.info(f"nasm    = {tools.nasm}")
     console.info(f"objcopy = {tools.objcopy}")
     console.writeln()
-    plan = make_plan(tools, with_musl_lib=args.with_musl_lib)
+    plan = make_plan(tools, with_musl_lib=True)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     try:
         stats = execute_plan(plan, tools, console, jobs=args.jobs)

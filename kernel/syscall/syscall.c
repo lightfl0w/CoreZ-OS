@@ -866,7 +866,6 @@ uint64_t syscall_handler(struct X86_REGS *r) {
     uint32_t nr = r->eax;
     uint64_t ret = (uint32_t)-1;
     if (r->int_no == 0x81 || current->compat || nr >= COMPAT_SYSCALL_BASE) {
-        check_pending_signals(r);
         if (r->int_no == 0x80 && nr < COMPAT_SYSCALL_BASE) {
             r->rdi = r->rbx;
             r->rsi = r->rcx;
@@ -874,7 +873,11 @@ uint64_t syscall_handler(struct X86_REGS *r) {
             r->r8 = r->edi;
             r->r9 = r->ebp;
         }
-        return linux_compat_handler(r);
+        ret = (uint64_t)linux_compat_handler(r);
+        r->rax = ret;
+
+        check_pending_signals(r);
+        return ret;
     }
     if (nr < sizeof(nsys_table) / sizeof(nsys_table[0]) && nsys_table[nr]) {
         ret = (uint64_t)nsys_table[nr](r);
