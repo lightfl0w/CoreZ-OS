@@ -35,7 +35,7 @@ FILES = [
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
-    "pty_demo.elf", "jc_demo.elf",
+    "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -127,7 +127,7 @@ SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"musl_abi_test.elf\n"
                   b"dyn_demo.elf\n"
                   b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
-                  b"dev_demo.elf\ntoybox cat /proc/meminfo\n"
+                  b"dev_demo.elf\npcre2_demo.elf\ntoybox cat /proc/meminfo\n"
                   b"toybox echo TOYBOX_ECHO_OK\n"
                   b"toybox id\ntoybox ls -l /etc/passwd\n"
                   b"toybox su user -c id\ntoybox cat /proc/self/status\n"

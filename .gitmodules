@@ -7,3 +7,6 @@
 [submodule "third_modules/toybox"]
 	path = third_modules/toybox
 	url = https://github.com/landley/toybox.git
+[submodule "third_modules/pcre2"]
+	path = third_modules/pcre2
+	url = https://github.com/PCRE2Project/pcre2.git

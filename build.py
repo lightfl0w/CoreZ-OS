@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import io
 import os
 import shlex
@@ -36,8 +37,26 @@ LINKER_DIR = ROOT / "linker"
 SCRIPTS    = ROOT / "scripts"
 MUSL_SRC   = ROOT / "third_modules" / "musl"
 MUSL_ARCH  = "x86_64"
+
+CLANG_TRIPLES = {
+    "x86_64-freestanding": "x86_64-unknown-none",
+    "i386-freestanding":   "i386-unknown-none",
+    "x86_64-linux-musl":   "x86_64-linux-musl",
+    "x86_64-linux-gnu":    "x86_64-unknown-linux-gnu",
+}
+CLANG_DEFAULT_TRIPLE = "x86_64-unknown-none"
+CLANG_FREESTANDING_FLAGS = ["-nostdlibinc"]
+CC_CLANG_CANDIDATES = ("clang", "clang-22", "clang-21", "clang-20", "clang-19",
+                       "clang-18", "clang-17")
+LLVM_BIN_GLOBS = (
+    "/usr/lib/llvm*/bin",
+    "/usr/local/lib/llvm*/bin",
+    "/usr/local/opt/llvm*/bin",
+    "/opt/homebrew/opt/llvm*/bin",
+)
 CFLAGS_BASE = [
     "-ffreestanding", "-fno-builtin", "-fno-sanitize=all",
+    "-fno-stack-protector",
     "-I", str(ROOT / "includes"),
 ]
 CFLAGS = CFLAGS_BASE
@@ -57,7 +76,7 @@ UP_LDFLAGS = ["-s", "-m", "elf_i386", "-T", str(ROOT / "linker" / "user.ld"), "-
 
 UP_CFLAGS_64 = [
     "-ffreestanding", "-fno-builtin", "-fno-sanitize=all", "-fPIE",
-    "-fstack-protector-strong",
+    "-fno-stack-protector",
     "-I", str(ROOT / "includes" / "libc" / "user"),
     "-I", str(ROOT / "includes" / "lib"),
     "-I", str(ROOT / "includes"),
@@ -79,8 +98,12 @@ MUSL_CFLAGS = MUSL64_BASE + [
 MUSL_PREFIX = BUILD_DIR / "musl"
 MUSL_INC   = MUSL_PREFIX / "include"
 MUSL_LIB   = MUSL_PREFIX / "lib"
+PCRE2_SRC    = ROOT / "third_modules" / "pcre2"
+PCRE2_PREFIX = BUILD_DIR / "pcre2"
+PCRE2_INC    = PCRE2_PREFIX / "include"
+PCRE2_LIB    = PCRE2_PREFIX / "lib"
 MUSL_DEMO_CFLAGS = MUSL64_BASE + ["-fstack-protector-strong", "-I", str(MUSL_INC)]
-LC_CFLAGS = MUSL64_BASE + ["-I", str(ROOT / "includes")]
+LC_CFLAGS = MUSL64_BASE + ["-fno-stack-protector", "-I", str(ROOT / "includes")]
 class Ansi:
     RESET   = "\x1b[0m"
     BOLD    = "\x1b[1m"
@@ -132,42 +155,64 @@ class Tools:
     ld:      str
     objcopy: str
     python:  str
-    is_zig:  bool = False
+    kind:    str = "clang"
+    kcc:     List[str] = field(default_factory=list)
+    kcc_kind: str = "clang"
+_LLVM_BIN_DIR_CACHE: Optional[List[str]] = None
+def _llvm_bin_dirs() -> List[str]:
+    global _LLVM_BIN_DIR_CACHE
+    if _LLVM_BIN_DIR_CACHE is None:
+        dirs: List[str] = []
+        for pat in LLVM_BIN_GLOBS:
+            dirs.extend(sorted(glob.glob(pat), reverse=True))
+        _LLVM_BIN_DIR_CACHE = dirs
+    return _LLVM_BIN_DIR_CACHE
 def _find(name: str, candidates: Sequence[str]) -> str:
+    llvm_dirs = _llvm_bin_dirs()
     for c in candidates:
         path = shutil.which(c)
-        if path is None:
-            continue
-        if os.name == "nt":
-            base, ext = os.path.splitext(path)
-            if ext.lower() != ".exe":
-                exe_path = base + ".exe"
-                if os.path.exists(exe_path):
-                    path = exe_path
-        return path
+        if path is not None:
+            if os.name == "nt":
+                base, ext = os.path.splitext(path)
+                if ext.lower() != ".exe":
+                    exe_path = base + ".exe"
+                    if os.path.exists(exe_path):
+                        path = exe_path
+            return path
+
+        for d in llvm_dirs:
+            p = Path(d) / c
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
     raise FileNotFoundError(
         f"Could not find any of: {', '.join(candidates)} (needed for `{name}`)."
     )
-def _resolve_cc() -> Tuple[List[str], bool]:
-    for c in ("x86_64-linux-gnu-gcc", "x86_64-pc-linux-gnu-gcc", "gcc", "cc"):
+def _resolve_cc() -> Tuple[List[str], str]:
+    for c in CC_CLANG_CANDIDATES:
         path = shutil.which(c)
         if path:
-            return [path], False
+            return [path], "clang"
     zig = shutil.which("zig")
     if zig:
-        return [zig, "cc"], True
+        return [zig, "cc"], "zig"
+    for c in ("gcc", "cc"):
+        path = shutil.which(c)
+        if path:
+            return [path], "gcc"
     raise FileNotFoundError(
-        "Could not find any C compiler (gcc, cc, zig)."
+        "Could not find any C compiler (clang, zig cc, gcc)."
     )
 def detect_tools() -> Tools:
-    cc, is_zig = _resolve_cc()
+    cc, kind = _resolve_cc()
     return Tools(
         nasm    = _find("nasm",    ["nasm"]),
         cc      = cc,
         ld      = _find("ld",      ["ld.lld", "lld-link", "x86_64-elf-ld", "ld"]),
-        objcopy = _find("objcopy", ["objcopy", "llvm-objcopy", "x86_64-elf-objcopy"]),
+        objcopy = _find("objcopy", ["llvm-objcopy", "objcopy", "x86_64-elf-objcopy"]),
         python  = sys.executable,
-        is_zig  = is_zig,
+        kind    = kind,
+        kcc     = cc,
+        kcc_kind = kind,
     )
 @dataclass
 class CmdResult:
@@ -357,9 +402,14 @@ def task_assemble_elf64(name: str, src: Path, out: Path, tools: Tools) -> Task:
     )
 COMPILE_COMMANDS = []
 
-def task_cc(name: str, src: Path, out: Path, tools: Tools, flags: List[str], target: str = "x86_64-freestanding") -> Task:
-    cmd = [*tools.cc]
-    if tools.is_zig and target:
+def task_cc(name: str, src: Path, out: Path, tools: Tools, flags: List[str], target: str = "x86_64-freestanding", cc: Optional[List[str]] = None, kind: Optional[str] = None) -> Task:
+    cc = tools.cc if cc is None else cc
+    kind = tools.kind if kind is None else kind
+    cmd = [*cc]
+    if kind == "clang":
+        cmd.append(f"--target={CLANG_TRIPLES.get(target, CLANG_DEFAULT_TRIPLE)}")
+        cmd += CLANG_FREESTANDING_FLAGS
+    elif kind == "zig" and target:
         cmd.append(f"--target={target}")
         if any(f.startswith("-fstack-protector") for f in flags):
             cmd += ["-nostdinc", "-lc"]
@@ -408,12 +458,8 @@ def _musl_buildenv(tools: Tools) -> Optional[dict]:
     make = shutil.which("make") or "/usr/bin/make"
     if not sh or not os.path.exists(make):
         return None
-    cc = shutil.which("gcc") or shutil.which("cc")
-    if cc is None:
-        cc = list(tools.cc)
-    else:
-        cc = [cc]
 
+    cc = list(tools.cc)
     if len(cc) > 1:
         wrapper = BUILD_DIR / "musl-cc"
         wrapper.parent.mkdir(parents=True, exist_ok=True)
@@ -536,7 +582,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         group="musl-headers",
         description="assemble musl headers into build/musl/include (cross-platform)"))
     for stem, src in kernel_c_sources:
-        tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, KERNEL_CFLAGS))
+        tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, KERNEL_CFLAGS,
+                             cc=tools.kcc, kind=tools.kcc_kind))
     user_programs = [
         ("prog_no_arg", "prog_no_arg.c", "_start", []),
         ("prog_arg",    "prog_arg.c",    "_start", []),
@@ -622,10 +669,12 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         tools,
     ))
     lc_libc = task_cc("lc_libc.o", ROOT / "libc" / "compat" / "lc_libc.c",
-                      BUILD_DIR / "lc_libc.o", tools, LC_CFLAGS)
+                      BUILD_DIR / "lc_libc.o", tools, LC_CFLAGS,
+                      cc=tools.kcc, kind=tools.kcc_kind)
     tasks.append(lc_libc)
     lc_demo_c = task_cc("lc_demo.o", APPS_DIR / "lc_demo.c",
-                        BUILD_DIR / "lc_demo.o", tools, LC_CFLAGS)
+                        BUILD_DIR / "lc_demo.o", tools, LC_CFLAGS,
+                        cc=tools.kcc, kind=tools.kcc_kind)
     tasks.append(lc_demo_c)
     lc_elf = task_link("lc_demo.elf", BUILD_DIR / "lc_demo.elf", tools,
                        [BUILD_DIR / "lc_start.o", BUILD_DIR / "lc_demo.o",
@@ -636,7 +685,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     tasks.append(lc_elf)
     user_elves.append(lc_elf)
     gui_launch_c = task_cc("gui_launch.o", APPS_DIR / "gui_launch.c",
-                           BUILD_DIR / "gui_launch.o", tools, LC_CFLAGS)
+                           BUILD_DIR / "gui_launch.o", tools, LC_CFLAGS,
+                           cc=tools.kcc, kind=tools.kcc_kind)
     tasks.append(gui_launch_c)
     gui_elf = task_link(
         "gui.elf", BUILD_DIR / "gui.elf", tools,
@@ -649,17 +699,28 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     user_elves.append(gui_elf)
 
     zig = shutil.which("zig")
-    if zig:
+    cxx = shutil.which("clang++")
+    if zig or cxx:
         cpp_src = APPS_DIR / "cpp_hello.cc"
         cpp_elf = BUILD_DIR / "cpp_hello.elf"
+        if zig:
+            cpp_cmd = [zig, "c++", str(cpp_src),
+                       "-target", "x86_64-linux-musl", "-static", "-pie", "-Os",
+                       "-Wno-nullability-completeness", "-o", str(cpp_elf)]
+            cpp_desc = "link cpp_hello.elf (zig libc++ for musl, static-pie)"
+        else:
+            cpp_cmd = [cxx, str(cpp_src),
+                       "--target=x86_64-linux-musl", "-nostdlibinc",
+                       "-I", str(MUSL_INC), "-L", str(MUSL_LIB),
+                       "-fPIE", "-static", "-pie", "-Os",
+                       "-Wno-nullability-completeness", "-o", str(cpp_elf)]
+            cpp_desc = "link cpp_hello.elf (clang++ musl, static-pie)"
         cpp_task = Task(
             name="cpp_hello.elf",
-            cmd=[zig, "c++", str(cpp_src),
-                 "-target", "x86_64-linux-musl", "-static", "-pie", "-Os",
-                 "-Wno-nullability-completeness", "-o", str(cpp_elf)],
+            cmd=cpp_cmd,
             out=cpp_elf, deps=[cpp_src],
             optional=True, group="link",
-            description="link cpp_hello.elf (zig musl C++ static-pie)",
+            description=cpp_desc,
         )
         tasks.append(cpp_task)
         user_elves.append(cpp_task)
@@ -678,7 +739,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("net.o", net_dir / "net.c"),
     ]
     for stem, src in net_c_sources:
-        tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, net_cflags))
+        tasks.append(task_cc(stem, src, BUILD_DIR / stem, tools, net_cflags,
+                             cc=tools.kcc, kind=tools.kcc_kind))
     font_src = ROOT / "lib" / "assets" / "font.ttf"
     font_kernel_ttf = BUILD_DIR / "font_kernel.ttf"
     tasks.append(task_python(
@@ -799,8 +861,15 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ))
 
         TOYBOX_DIR = ROOT / "third_modules" / "toybox"
+
         _musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
-        _toybox_pre = f"test -x {shlex.quote(str(_musl_gcc))} || exit 0; "
+        _musl_clang = MUSL_PREFIX / "bin" / "musl-clang"
+        _musl_pick = (
+            f"MC={shlex.quote(str(_musl_clang))}; "
+            f"[ -x \"$MC\" ] || MC={shlex.quote(str(_musl_gcc))}; ")
+        _toybox_pre = (f"test -x {shlex.quote(str(_musl_gcc))} || "
+                       f"test -x {shlex.quote(str(_musl_clang))} || exit 0; " +
+                       _musl_pick)
         tasks.append(Task(
             name="toybox-config",
             cmd=[sh, "-c",
@@ -817,7 +886,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             name="toybox-abitag",
             cmd=[sh, "-c",
                  _toybox_pre +
-                 f"{shlex.quote(str(_musl_gcc))} -c "
+                 f"\"$MC\" -c "
                  f"{shlex.quote(str(TOYBOX_DIR / 'abitag.c'))} -o "
                  f"{shlex.quote(str(TOYBOX_DIR / 'abitag.o'))}"],
             out=TOYBOX_DIR / "abitag.o",
@@ -833,7 +902,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             cmd=[sh, "-c",
                  _toybox_pre +
                  f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                 f"CC={shlex.quote(str(_musl_gcc))} "
+                 f"rm -f toybox generated/unstripped/toybox && "
+                 f"CC=\"$MC\" "
                  f"CFLAGS={shlex.quote('-static -Os')} "
                  f"LDFLAGS={_toybox_ld} "
                  f"make -j4 > toybox.log 2>&1 || "
@@ -868,7 +938,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             t.optional = True
             tasks.append(t)
         def link_musl_user(name, elf, objs):
-            ld = shutil.which("ld") or "/usr/bin/ld"
+            ld = tools.ld
             crt1 = MUSL_LIB / "crt1.o"
             crti = MUSL_LIB / "crti.o"
             crtn = MUSL_LIB / "crtn.o"
@@ -925,15 +995,61 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         for stem in ("termios_probe", "pty_demo", "jc_demo"):
             cobj = BUILD_DIR / (stem + ".o")
             ct = task_cc("musl_" + stem + ".o", APPS_DIR / (stem + ".c"),
-                         cobj, tools, MUSL_DEMO_CFLAGS + ["-fno-stack-protector"])
+                         cobj, tools,
+                         MUSL_DEMO_CFLAGS + ["-fno-stack-protector", "-Os"])
             ct.optional = True
             tasks.append(ct)
             app_elf = link_musl_user("musl_" + stem + ".elf",
                                      BUILD_DIR / (stem + ".elf"), [cobj])
             tasks.append(app_elf)
 
-        # 动态链接：ld.so（musl 的 libc.so 本身就是动态加载器）要落到 build/ 根下，
-        # make_ext2.py 按名字把它们装进 /lib。x86_64 下两个名字内容相同，都放一份
+        if (PCRE2_SRC / "configure").exists():
+            pcre2_script = (
+                "set -e; "
+                f"cd {shlex.quote(str(PCRE2_SRC))}; " +
+                _musl_pick +
+                "rm -f config.status; "
+                "CC=\"$MC\" ./configure "
+                f"--prefix={shlex.quote(str(PCRE2_PREFIX))} "
+                "--enable-static --disable-shared --disable-stack-protector "
+                "--disable-pcre2grep-libz --disable-pcre2grep-libbz2 "
+                "--disable-pcre2test-libedit --disable-pcre2test-libreadline "
+                "CFLAGS='-Os -fPIC' >/dev/null 2>&1; "
+                "make -j\"$(nproc 2>/dev/null || echo 4)\" >/dev/null; "
+                "make install >/dev/null"
+            )
+            tasks.append(Task(
+                name="pcre2-static-lib",
+                cmd=[sh, "-c", pcre2_script],
+                out=PCRE2_LIB / "libpcre2-8.a",
+                deps=[MUSL_LIB / "libc.a"],
+                optional=True, group="musl-lib",
+                description="build static libpcre2-8 against musl"))
+            p2_cflags = MUSL_DEMO_CFLAGS + ["-fno-stack-protector", "-Os",
+                                             "-DPCRE2_STATIC",
+                                             "-I", str(PCRE2_INC)]
+            p2_obj = BUILD_DIR / "pcre2_demo.o"
+            p2_c = task_cc("musl_pcre2_demo.o", APPS_DIR / "pcre2_demo.c",
+                           p2_obj, tools, p2_cflags)
+            p2_c.optional = True
+            tasks.append(p2_c)
+            ld = tools.ld
+            p2_elf = Task(
+                name="musl_pcre2_demo.elf",
+                cmd=[ld, "-nostdlib", "-static", "-pie", "--no-dynamic-linker",
+                     "-z", "pack-relative-relocs",
+                     "-T", str(ROOT / "linker" / "user.ld"), "-e", "_start",
+                     str(MUSL_LIB / "crt1.o"), str(MUSL_LIB / "crti.o"),
+                     str(p2_obj), str(MUSL_LIB / "crtn.o"),
+                     "-L", str(MUSL_LIB), "-L", str(PCRE2_LIB),
+                     "--start-group", "-lc", "-lpcre2-8", "--end-group",
+                     "-o", str(BUILD_DIR / "pcre2_demo.elf")],
+                out=BUILD_DIR / "pcre2_demo.elf",
+                deps=[p2_obj, PCRE2_LIB / "libpcre2-8.a"],
+                optional=True, group="musl", cwd=BUILD_DIR,
+                description="link pcre2_demo.elf (musl + libpcre2-8)")
+            tasks.append(p2_elf)
+
         for dst_name in ("libc.so", "ld-musl-x86_64.so.1"):
             tasks.append(Task(
                 name=f"musl-dyn-{dst_name}",
@@ -951,12 +1067,10 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         dyn_lib_c.optional = True
         dyn_lib_c.group = "musl-dyn"
         tasks.append(dyn_lib_c)
-        # 动态链接不用 -z pack-relative-relocs：ld 生成的 .relr.dyn 段无法放进
-        # user_dyn.ld 的段布局（拒绝分配），而 RELR 只是体积优化，musl 的 ld.so
-        # 与内核侧都支持普通 .rela.dyn，这里用后者
+
         dyn_lib_so = Task(
             name="libdyndemo.so",
-            cmd=[shutil.which("ld") or "/usr/bin/ld",
+            cmd=[tools.ld,
                  "-m", "elf_x86_64", "-shared", "-nostdlib", "-e", "0",
                  "-T", str(ROOT / "linker" / "user_dyn.ld"),
                  str(BUILD_DIR / "dyn_lib.o"),
@@ -976,9 +1090,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         tasks.append(dyn_demo_c)
 
         def link_musl_dynamic(name, elf, objs, needed_dir):
-            ld = shutil.which("ld") or "/usr/bin/ld"
-            # musl 自己的 specs 规定：非 -shared 的动态链接用 Scrt1.o（PIC 版 crt1），
-            # 而不是静态 PIE 用的 crt1.o/rcrt1.o
+            ld = tools.ld
+
             cmd = [ld, "-m", "elf_x86_64", "-nostdlib", "-pie",
                    "--dynamic-linker", "/lib/ld-musl-x86_64.so.1",
                    "-T", str(ROOT / "linker" / "user_dyn.ld"), "-e", "_start",
@@ -1190,11 +1303,12 @@ def show_failure_hint(console: Console, missing: List[str]) -> None:
         console.writeln(f"          • {m}")
     console.writeln()
     console.info("Install one of the supported toolchains:")
-    console.writeln("          • Linux   : apt install nasm zig         OR  apt install nasm lld gcc")
-    console.writeln("          • macOS   : brew install nasm zig")
-    console.writeln("          • Windows : install zig, nasm, llvm (winget/choco/scoop)")
+    console.writeln("          • Linux   : apt install nasm clang lld  OR  apt install nasm zig")
+    console.writeln("          • Arch    : pacman -S nasm clang lld")
+    console.writeln("          • macOS   : brew install nasm llvm")
+    console.writeln("          • Windows : install llvm, nasm, lld (winget/choco/scoop)")
     console.writeln()
-    console.info("Cross-compiler priority: zig cc > x86_64-elf-gcc > gcc > cc")
+    console.info("Compiler priority: clang > zig cc > gcc")
     console.writeln()
 def do_clean(console: Console) -> None:
     if BUILD_DIR.exists():
@@ -1202,6 +1316,41 @@ def do_clean(console: Console) -> None:
         console.ok(f"removed {BUILD_DIR}")
     else:
         console.info(f"{BUILD_DIR} already absent")
+TOOLCHAIN_STAMP = BUILD_DIR / ".toolchain"
+
+def _toolchain_fingerprint(tools: Tools) -> str:
+    parts = [" ".join(tools.cc), tools.kind, tools.ld, tools.objcopy, tools.nasm]
+    try:
+        res = run([*tools.cc, "--version"])
+        line = (res.stdout or res.stderr).splitlines()
+        if line:
+            parts.append(line[0].strip())
+    except OSError:
+        pass
+    return " | ".join(parts)
+
+def restamp_toolchain(tools: Tools, console: Console) -> None:
+    """工具链指纹变化即清空 build/：mtime 缓存识别不到"换了编译器"。"""
+    fingerprint = _toolchain_fingerprint(tools)
+    old = ""
+    if TOOLCHAIN_STAMP.exists():
+        try:
+            old = TOOLCHAIN_STAMP.read_text(encoding="utf-8").strip()
+        except OSError:
+            old = ""
+    if old == fingerprint:
+        return
+    stale_objs = BUILD_DIR.exists() and any(BUILD_DIR.glob("*.o"))
+    if old or stale_objs:
+        if old:
+            console.warn("toolchain changed, forcing rebuild:")
+            console.warn(f"  was: {old}")
+        else:
+            console.warn("build/ has objects but no toolchain stamp, forcing rebuild")
+        console.warn(f"  now: {fingerprint}")
+        do_clean(console)
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    TOOLCHAIN_STAMP.write_text(fingerprint + "\n", encoding="utf-8")
 def do_run(console: Console, stats: BuildStats,
            smp: int, gdb: bool, no_net: bool, boot_floppy: bool,
            kvm: bool) -> None:
@@ -1285,13 +1434,14 @@ def main(argv: Sequence[str]) -> int:
     except FileNotFoundError as exc:
         show_failure_hint(console, [str(exc)])
         return 2
-    console.info(f"cc      = {tools.cc}  {'(zig)' if tools.is_zig else ''}")
+    console.info(f"cc      = {' '.join(tools.cc)}  ({tools.kind})")
+    console.info(f"target  = {CLANG_DEFAULT_TRIPLE if tools.kind == 'clang' else 'x86_64-freestanding'}")
     console.info(f"ld      = {tools.ld}")
     console.info(f"nasm    = {tools.nasm}")
     console.info(f"objcopy = {tools.objcopy}")
     console.writeln()
+    restamp_toolchain(tools, console)
     plan = make_plan(tools, with_musl_lib=True)
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
     try:
         stats = execute_plan(plan, tools, console, jobs=args.jobs)
     except SystemExit as exc:
