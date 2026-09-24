@@ -142,9 +142,9 @@ void keyboard_handler(void) {
 
     if (ctrl && sc < 0x3b) {
         char c = 0;
-        if (sc == 0x16)
+        if (sc == KBD_SC_U)
             c = (char)KBD_CHAR_CTRL_U;
-        else if (sc == 0x26)
+        else if (sc == KBD_SC_L)
             c = (char)KBD_CHAR_CTRL_L;
         if (c) {
             if (!ioq_full(&keyboard_ioq))

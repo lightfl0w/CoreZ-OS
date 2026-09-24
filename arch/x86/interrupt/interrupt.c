@@ -48,7 +48,6 @@ static const char *exc_names[32] = {"Divide Error",
                                     "(Reserved)",
                                     "(Reserved)",
                                     "(Reserved)"};
-#define INT_NO_UNREGISTERED 0xFFFFu
 static int handle_cow_fault(uint32_t fault_addr, uint32_t error_code) {
     if (fault_addr < USER_VADDR_START || fault_addr >= 0xc0000000) {
         return 0;
@@ -192,16 +191,41 @@ static void irq_eoi(uint32_t irq) {
     }
 }
 
+static volatile uint32_t cpu_ipi_ticks[NR_CPU];
+
 void irq_handler(struct X86_REGS *r) {
+    if (r->int_no == IPI_VECTOR_RESCHED) {
+        uint32_t c = cpu_id();
+        if (c < NR_CPU)
+            cpu_ipi_ticks[c]++;
+        lapic_eoi();
+        if (current != 0 && preempt_disabled() == 0)
+            schedule();
+        return;
+    }
     uint32_t irq = r->int_no - 32;
     if (irq == 0) {
         irq_eoi(irq);
         tick++;
         itimer_tick();
+        scheduler_tick();
         thread_timer_wake();
+        // if (cpu_ipi_ticks[1] != 0 && (tick % 500) == 0) {
+        //     kprintf("[smp] ipi1=%u ipi2=%u ipi3=%u | wrk0=%u wrk1=%u wrk2=%u "
+        //             "wrk3=%u\n",
+        //             (unsigned)cpu_ipi_ticks[1], (unsigned)cpu_ipi_ticks[2],
+        //             (unsigned)cpu_ipi_ticks[3],
+        //             (unsigned)cpu_work_switches[0],
+        //             (unsigned)cpu_work_switches[1],
+        //             (unsigned)cpu_work_switches[2],
+        //             (unsigned)cpu_work_switches[3]);
+        // }
+        if (apic_active())
+            lapic_send_ipi_all_but_self(IPI_VECTOR_RESCHED);
         if (current != 0) {
             check_pending_signals(r);
-            schedule();
+            if (preempt_disabled() == 0)
+                schedule();
         }
         return;
     }

@@ -12,7 +12,6 @@
 #define E1000_BAR0 0x10
 
 #define REG_CTRL 0x0000
-#define REG_STATUS 0x0008
 #define REG_TCTL 0x0400
 #define REG_TIPG 0x0410
 #define REG_RCTL 0x0100

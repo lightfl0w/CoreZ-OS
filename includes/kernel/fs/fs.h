@@ -67,5 +67,7 @@ int32_t sys_symlink(const char *target, const char *linkpath);
 int fs_check_perm(const struct FS_INODE *ino, uint32_t bits);
 int fs_is_chardev(const struct FS_INODE *ino);
 uint32_t fs_chardev_dev(const struct FS_INODE *ino);
+int fs_rename_path(const char *oldpath, const char *newpath);
+int fs_truncate_path(const char *path, uint32_t length);
 
 #endif

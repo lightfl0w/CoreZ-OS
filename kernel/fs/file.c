@@ -6,26 +6,13 @@
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/pty.h"
+#include "lib/rand/rand.h"
 #include "lib/str/str.h"
 struct FILE file_table[MAX_FILE_OPEN];
 
-/**
- * 槽位占用位图：bit i 置位表示槽位 i 已分配，0/1/2 为保留槽位。
- *
- * @remarks
- * 取代原先"线性扫描 fd_inode == NULL"的分配方式：后者既 O(MAX_FILE_OPEN)，
- * 又与 proc 文件（fd_inode 合法地为 NULL）冲突。现在分配是一次 CAS + ctz 的
- * O(1) 操作，且不再依赖 fd_inode 的取值。并发修改仅置位/清位单个 bit
- */
 static volatile uint32_t file_slot_used;
 
-/**
- * 初始化 file 表。
- *
- * @remarks
- * 在 filesys_init 阶段调用一次；之后槽位状态只由 file_slot_used 与
- * file_table_alloc_slot / file_table_free_slot 维护
- */
 void file_table_init(void) {
     file_slot_used = 0x7u;
     for (uint32_t i = 0; i < 3; i++) {
@@ -50,10 +37,12 @@ int file_table_alloc_slot(void) {
         }
         file_table[i].fd_pos = 0;
         file_table[i].fd_flag = 0;
+        file_table[i].fd_nonblock = 0;
         file_table[i].fd_inode = FILE_SLOT_RESERVED;
         file_table[i].proc_id = 0;
         file_table[i].proc_aux = 0;
         file_table[i].ref_cnt = 0;
+        file_table[i].dev_priv = 0;
         return (int)i;
     }
 }
@@ -106,11 +95,15 @@ uint32_t file_table_unref(uint32_t gfd) {
 }
 
 int fd_install(int32_t global_fd_idx) {
-    uint32_t local_fd = 3;
+    return fd_install_from(global_fd_idx, 3);
+}
+
+int fd_install_from(int32_t global_fd_idx, uint32_t min_local) {
+    uint32_t local_fd = min_local < 3 ? 3 : min_local;
     while (local_fd < MAX_FILES_OPEN_PER_PROC) {
         if (current->fd_table[local_fd] == (uint32_t)-1) {
             current->fd_table[local_fd] = (uint32_t)global_fd_idx;
-            return local_fd;
+            return (int)local_fd;
         }
         local_fd++;
     }
@@ -132,29 +125,39 @@ uint32_t fd_local2global(uint32_t local_fd) {
     return current->fd_table[local_fd];
 }
 
-static int chardev_tty(const struct FS_INODE *ino) {
-    return (ino->i_block[0] >> 8) == 5u;
-}
-
-static uint32_t chardev_read(const struct FS_INODE *ino, void *buf,
-                             uint32_t count) {
-    if (ino->i_block[0] >> 8 == 5u)
+static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {
+    if (file->dev_priv) {
+        int32_t r = pty_chardev_read(file, buf, count);
+        return r < 0 ? 0 : (uint32_t)r;
+    }
+    uint32_t dev = file->fd_inode->i_block[0];
+    if (dev >> 8 == 5u)
         return (uint32_t)TTY.read((char *)buf, count);
-    if (ino->i_block[0] == 0x0105u)
+    if (dev == 0x0105u) {
         memset(buf, 0, count);
-    return ino->i_block[0] == 0x0105u ? count : 0;
+        return count;
+    }
+    if (dev == 0x0108u || dev == 0x0109u || dev == 0x0101u) {
+        rand_bytes(buf, count);
+        return count;
+    }
+    return 0;
 }
 
-static uint32_t chardev_write(const struct FS_INODE *ino, const void *buf,
+static uint32_t chardev_write(struct FILE *file, const void *buf,
                               uint32_t count) {
-    if (ino->i_block[0] >> 8 == 5u)
+    if (file->dev_priv) {
+        int32_t r = pty_chardev_write(file, buf, count);
+        return r < 0 ? 0 : (uint32_t)r;
+    }
+    if (file->fd_inode->i_block[0] >> 8 == 5u)
         return (uint32_t)TTY.write((const char *)buf, count);
     return count;
 }
 
 uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
-        return chardev_read(file->fd_inode, buf, count);
+        return chardev_read(file, buf, count);
     int r = ext2_read_from_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
@@ -162,7 +165,7 @@ uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
 
 uint32_t file_write(struct FILE *file, const void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
-        return chardev_write(file->fd_inode, buf, count);
+        return chardev_write(file, buf, count);
     int r = ext2_write_to_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;

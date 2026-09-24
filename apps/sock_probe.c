@@ -35,10 +35,6 @@ static int32_t raw_sys5(uint32_t nr, uint32_t a1, uint32_t a2, uint32_t a3,
 
 #define raw_sys4(nr, a1, a2, a3, a4) raw_sys5(nr, a1, a2, a3, a4, 0)
 
-static int32_t raw_sys3(uint32_t nr, uint32_t a1, uint32_t a2, uint32_t a3) {
-    return raw_sys4(nr, a1, a2, a3, 0);
-}
-
 static void fill_zero(void *p, uint32_t n) {
     uint8_t *b = (uint8_t *)p;
     for (uint32_t i = 0; i < n; i++) {

@@ -3,6 +3,7 @@
 #include <stdarg.h>
 
 #include "kernel/asm_func.h"
+#include "kernel/sched/sync.h"
 
 static uint8_t *vram = (uint8_t *)0;
 static int scrnx = 0;
@@ -244,9 +245,14 @@ static void print_signed(int v, int width, int pad0) {
         putc(buf[n]);
 }
 
+static struct SCHED_SPINLOCK console_lock;
+
 void kprintf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
+    uint32_t eflags = (uint32_t)asm_save_eflags();
+    asm_cli();
+    spinlock_acquire(&console_lock);
 
     for (; *fmt; ++fmt) {
         if (*fmt != '%') {
@@ -315,6 +321,8 @@ void kprintf(const char *fmt, ...) {
         }
     }
     va_end(ap);
+    spinlock_release(&console_lock);
+    asm_restore_eflags(eflags);
 }
 
 void console_putc(char c) {

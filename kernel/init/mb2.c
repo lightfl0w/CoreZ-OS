@@ -2,32 +2,6 @@
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
 static struct MB2_INFO g_mb2;
-static const char *tag_name(uint32_t type) {
-    switch (type) {
-    case MB2_TYPE_END: return "end";
-    case MB2_TYPE_CMDLINE: return "cmdline";
-    case MB2_TYPE_BOOT_LOADER_NAME: return "bootloader";
-    case MB2_TYPE_MODULE: return "module";
-    case MB2_TYPE_BASIC_MEMINFO: return "meminfo";
-    case MB2_TYPE_BOOTDEV: return "bootdev";
-    case MB2_TYPE_MMAP: return "mmap";
-    case MB2_TYPE_VBE: return "vbe";
-    case MB2_TYPE_FRAMEBUFFER: return "framebuffer";
-    case MB2_TYPE_ELF_SECTIONS: return "elf-sections";
-    case MB2_TYPE_APM: return "apm";
-    case MB2_TYPE_EFI32: return "efi32";
-    case MB2_TYPE_EFI64: return "efi64";
-    case MB2_TYPE_SMBIOS: return "smbios";
-    case MB2_TYPE_ACPI_OLD: return "acpi-old";
-    case MB2_TYPE_ACPI_NEW: return "acpi-new";
-    case MB2_TYPE_NETWORK: return "network";
-    case MB2_TYPE_EFI_MMAP: return "efi-mmap";
-    case MB2_TYPE_EFI_BS: return "efi-bs";
-    case MB2_TYPE_LOAD_BASE: return "load-base";
-    default: return "?";
-    }
-}
-
 static void parse_tag(const struct MB2_TAG *tag) {
     uint32_t size = tag->size;
     switch (tag->type) {

@@ -4,6 +4,7 @@
 #include "kernel/sched/sync.h"
 #include "kernel/gui/gfx.h"
 #include "kernel/gui/theme.h"
+#include "drivers/char/keyboard.h"
 #include <stdint.h>
 
 struct WL_SHM_POOL;
@@ -26,9 +27,9 @@ struct WL_EVENT {
     int32_t a, b, c;
 };
 
-#define MOD_SHIFT 1
-#define MOD_CTRL 2
-#define MOD_ALT 4
+#define MOD_SHIFT KBD_MOD_SHIFT
+#define MOD_CTRL KBD_MOD_CTRL
+#define MOD_ALT KBD_MOD_ALT
 
 struct WL_CLIENT {
     int used;
@@ -54,6 +55,10 @@ struct WL_SURFACE {
     int frame_pending;
     void *x11_owner;
     uint32_t x11_xid;
+
+    struct GFX_CANVAS bs;
+    uint8_t bs_frame_valid;
+    uint8_t bs_content_dirty;
 };
 
 struct WL_CLIENT *wl_display_connect(const char *name);
@@ -74,9 +79,13 @@ void comp_damage_surface(struct WL_SURFACE *s);
 
 void comp_set_wallpaper(const uint32_t *pixels, int w, int h);
 void comp_damage_content(struct WL_SURFACE *s);
+void comp_surface_invalidate(struct WL_SURFACE *s);
+void comp_invalidate_all(void);
 void comp_post_key(uint8_t scancode, int pressed, uint8_t mods);
 void comp_post_mouse(int dx, int dy, uint8_t buttons);
 void comp_log(const char *s);
+void comp_lock_acquire(void);
+void comp_lock_release(void);
 
 struct WL_SURFACE **comp_surfaces(int *count);
 int comp_screen_w(void);

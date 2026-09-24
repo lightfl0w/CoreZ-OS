@@ -3,6 +3,7 @@
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
+#include "drivers/char/rtc.h"
 #include "drivers/char/tty.h"
 #include "drivers/net/net.h"
 #include "drivers/net/socket.h"
@@ -33,29 +34,33 @@ static uint32_t sys_getpid(void) {
     return current->pid;
 }
 
-int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
+static int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
     if (tp == NULL) {
         return -1;
     }
-    (void)clk_id;
     memset(tp, 0, sizeof(*tp));
+    if (clk_id == 0) {
+        tp->tv_sec = (int32_t)rtc_unix_time();
+        tp->tv_nsec = 0;
+        return 0;
+    }
     tp->tv_sec = (int32_t)(tick / PIT_HZ);
     tp->tv_nsec = (int32_t)((tick % PIT_HZ) * (1000u * 1000u * 1000u / PIT_HZ));
     return 0;
 }
 
-int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
+static int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
     if (tv == NULL) {
         return -1;
     }
     (void)tz;
     memset(tv, 0, sizeof(*tv));
-    tv->tv_sec = (int32_t)(tick / PIT_HZ);
-    tv->tv_usec = (int32_t)((tick % PIT_HZ) * (1000u * 1000u / PIT_HZ));
+    tv->tv_sec = (int32_t)rtc_unix_time();
+    tv->tv_usec = 0;
     return 0;
 }
 
-int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
+static int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
     if (req == NULL || req->tv_sec < 0 || req->tv_nsec < 0) {
         return -1;
     }
@@ -236,16 +241,6 @@ static int ok_write(struct X86_REGS *r, uint32_t p, uint32_t n) {
     return kern_call(r) || access_ok((const void *)p, (size_t)n, 1);
 }
 
-/**
- * 从指定参数寄存器取路径参数。
- *
- * @param reg 寄存器里的原始指针
- * @param kbuf 用户路径的内核拷贝缓冲
- * @param cap kbuf 容量
- * @returns 可供文件系统使用的路径指针；用户指针不可达时返回 NULL
- * @remarks 内核调用方直接透传；用户调用方经 copy_str_from_user 逐页校验
- *          PTE_U 后拷入内核缓冲，杜绝内核 strlen 越过未映射页引发 panic
- */
 static const char *path_arg_reg(struct X86_REGS *r, uint32_t reg, char *kbuf,
                                 uint32_t cap) {
     if (kern_call(r)) {
@@ -871,7 +866,6 @@ uint64_t syscall_handler(struct X86_REGS *r) {
     uint32_t nr = r->eax;
     uint64_t ret = (uint32_t)-1;
     if (r->int_no == 0x81 || current->compat || nr >= COMPAT_SYSCALL_BASE) {
-        check_pending_signals(r);
         if (r->int_no == 0x80 && nr < COMPAT_SYSCALL_BASE) {
             r->rdi = r->rbx;
             r->rsi = r->rcx;
@@ -879,7 +873,11 @@ uint64_t syscall_handler(struct X86_REGS *r) {
             r->r8 = r->edi;
             r->r9 = r->ebp;
         }
-        return linux_compat_handler(r);
+        ret = (uint64_t)linux_compat_handler(r);
+        r->rax = ret;
+
+        check_pending_signals(r);
+        return ret;
     }
     if (nr < sizeof(nsys_table) / sizeof(nsys_table[0]) && nsys_table[nr]) {
         ret = (uint64_t)nsys_table[nr](r);
@@ -891,7 +889,6 @@ uint64_t syscall_handler(struct X86_REGS *r) {
 
 void syscall_init(void) {
     extern void syscall_entry(void);
-    extern uint64_t syscall_kstack_top_data;
     const uint64_t MSR_STAR = 0xC0000081;
     const uint64_t MSR_LSTAR = 0xC0000082;
     const uint64_t MSR_FMASK = 0xC0000084;
@@ -903,7 +900,6 @@ void syscall_init(void) {
     asm_wrmsr(MSR_FMASK, 0x5700);
     uint64_t efer = asm_rdmsr(MSR_EFER);
     asm_wrmsr(MSR_EFER, efer | 1);
-    syscall_kstack_top_data = 0;
 
     kprintf("[OK] syscall init, 0x80 full table + syscall/sysret entry\n");
 }

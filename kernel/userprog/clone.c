@@ -30,25 +30,14 @@ static void build_clone_stack(struct TASK *child,
     child->self_kstack = (uint64_t *)ts;
 }
 
-/*
- * clone 语义（对照 Linux）：
- *   CLONE_VM    —— 与父共享地址空间（PML4 + vaddr 位图），引用计数管理，
- *                  两者谁最后退出谁释放；
- *   无 CLONE_VM —— 与 fork 相同，COW 复制一份独立地址空间；
- *   CLONE_FS / CLONE_FILES / CLONE_SIGHAND —— 内核没有可共享的 cwd/fd 表/
- *                  信号处理结构，按"带引用计数的拷贝"处理（FILE 对象本身
- *                  由 file_table_ref 计数，语义与 Linux 不带对应标志一致）；
- *   CLONE_THREAD —— 线程不进入父进程的父子树（parent_pid = -1）：父进程
- *                  退出时不会被 kill_orphan_children 连坐（线程本就共享其
- *                  地址空间），也不会被 wait/waitid 误收尸，退出后由调度器
- *                  回收内核栈与任务槽；
- *   CLONE_SETTLS —— TLS 基址取第 5 个参数（x86-64 ABI：rbp 传入），否则
- *                  继承父的 TLS；
- *   其余标志位   —— 与 Linux 一致地忽略。
- */
+pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
+                   struct X86_REGS *r);
 pid_t sys_clone(struct X86_REGS *r) {
-    uint32_t flags = r->ebx;
-    uint32_t child_user_stack = r->ecx;
+    return sys_clone_ex((uint32_t)r->ebx, (uint32_t)r->ecx, (uint32_t)r->ebp, r);
+}
+
+pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
+                   struct X86_REGS *r) {
     struct TASK *parent = current;
     struct TASK *child =
         thread_alloc_slot(parent->name, parent->priority);
@@ -67,6 +56,7 @@ pid_t sys_clone(struct X86_REGS *r) {
             file_table_ref(child->fd_table[i]);
         }
     }
+    child->pipe_wr_mask = parent->pipe_wr_mask;
     child->exit_status = 0;
     child->signal_mask = parent->signal_mask;
     child->signal_pending = 0;
@@ -86,12 +76,19 @@ pid_t sys_clone(struct X86_REGS *r) {
     child->suid = parent->suid;
     child->sgid = parent->sgid;
     if (flags & CLONE_SETTLS) {
-        child->tls_base = (uint32_t)r->ebp;
+        child->tls_base = tls;
         child->tls_selector = 0;
         child->tls_msr = 1;
     }
     if (flags & CLONE_THREAD) {
         child->parent_pid = -1;
+    }
+    if ((flags & CLONE_CHILD_CLEARTID) != 0) {
+        child->clear_child_tid = (uint32_t)r->r10;
+        if ((flags & CLONE_CHILD_SETTID) != 0 && r->r10 != 0)
+            *(volatile int32_t *)(uintptr_t)r->r10 = 0;
+    } else if ((flags & CLONE_CHILD_SETTID) != 0) {
+        child->clear_child_tid = 0;
     }
 
     if (flags & CLONE_VM) {
@@ -115,7 +112,6 @@ pid_t sys_clone(struct X86_REGS *r) {
 
     if (child_user_stack == 0) {
         if (flags & CLONE_VM) {
-            /* 共享地址空间：在共享位图里找一页空闲虚拟页做新栈 */
             for (uint32_t v = USER_STACK_BOTTOM - PAGE_SIZE;
                  v > USER_VADDR_START; v -= PAGE_SIZE) {
                 uint64_t *pde = pde_ptr(v);
@@ -136,7 +132,6 @@ pid_t sys_clone(struct X86_REGS *r) {
                 goto clone_fail;
             }
         } else {
-            /* 独立地址空间且未指定栈：沿用父当前的栈位置（COW 私有副本） */
             child_user_stack = (uint32_t)r->user_esp;
         }
     }

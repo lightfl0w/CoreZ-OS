@@ -409,7 +409,7 @@ static int font_draw_impl(struct GFX_CANVAS *c, int x, int y, const char *utf8,
                     int cov = sr[gx];
                     if (!cov)
                         continue;
-                    int a = fa * cov / 255;
+                    int a = gfx_div255(fa * cov);
                     if (a <= 0)
                         continue;
                     if (a >= 255)

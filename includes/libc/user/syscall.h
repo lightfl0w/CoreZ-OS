@@ -1,4 +1,3 @@
-
 #ifndef USER_SYSCALL_H
 #define USER_SYSCALL_H
 
@@ -45,7 +44,9 @@ struct LINUX_DIRENT {
 #define MAP_ANONYMOUS 0x20
 #define MAP_ANON      MAP_ANONYMOUS
 
+#ifndef MAP_FAILED
 #define MAP_FAILED    ((void*)-1)
+#endif
 
 uint32_t getpid(void);
 int32_t  write(int32_t fd, const void* buf, uint32_t count);
@@ -68,7 +69,7 @@ struct FS_DIRENT* readdir(struct FS_DIR* dir);
 void     rewinddir(struct FS_DIR* dir);
 void     ps(void);
 int32_t  execv(const char* path, const char* argv[]);
-void     exit(int32_t status);
+__attribute__((noreturn)) void exit(int32_t status);
 int32_t  wait(int32_t* status);
 int32_t  pipe(int32_t pipefd[2]);
 void     fd_redirect(uint32_t old_local_fd, uint32_t new_local_fd);

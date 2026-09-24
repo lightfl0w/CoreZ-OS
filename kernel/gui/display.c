@@ -68,9 +68,19 @@ static int udi_disp_set_mode(uint32_t w, uint32_t h, uint32_t bpp) {
     return -1;
 }
 
+static int udi_disp_cursor_set(int w, int h, const void *argb, int hot_x,
+                               int hot_y) {
+    return udi_cursor_set(w, h, argb, hot_x, hot_y);
+}
+
+static int udi_disp_cursor_move(int x, int y) {
+    return udi_cursor_move(x, y);
+}
+
 struct GUI_DISPLAY_OPS udi_display_ops = {
     "udi", udi_disp_init, udi_disp_surface, udi_disp_flip,
     udi_disp_wait_vblank, udi_disp_set_mode,
+    udi_disp_cursor_set, udi_disp_cursor_move,
 };
 
 void display_init(void) {

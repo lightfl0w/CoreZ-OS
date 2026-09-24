@@ -20,7 +20,6 @@
 
 #define LVIT_MASK (1u << 16)
 
-#define IOAPIC_BASE 0xFEC00000u
 #define IOAPIC_VER 0x01
 #define IOREG_TABLE 0x10
 #define IOAPIC_MAX_PINS 23
@@ -98,6 +97,24 @@ void lapic_send_ipi_sipi(uint32_t apic_id, uint32_t vector) {
     lapic_send_icr(apic_id, 0x00000600u | (vector & 0xFF));
 }
 
+void lapic_ap_enable(void) {
+    uint32_t base = rdmsr(MSR_APIC_BASE);
+    if (!(base & APIC_BASE_ENABLE)) {
+        wrmsr(MSR_APIC_BASE, base | APIC_BASE_ENABLE);
+    }
+
+    lapic_write(LAPIC_LVT_LINT0, LVIT_MASK);
+    lapic_write(LAPIC_LVT_LINT1, LVIT_MASK);
+    lapic_write(LAPIC_LVT_PMC, LVIT_MASK);
+    lapic_write(LAPIC_LVT_T, VECTOR_BASE | LVIT_MASK);
+    lapic_write(LAPIC_SVR, (lapic_read(LAPIC_SVR) & ~0xFFu) | 0x100u | 0x2F);
+}
+
+void lapic_send_ipi_all_but_self(uint32_t vector) {
+    lapic_write(LAPIC_ICR_HIGH, 0);
+    lapic_write(LAPIC_ICR, 0x000C4000u | (vector & 0xFFu));
+}
+
 static uint32_t ioapic_read(uint32_t reg) {
     ioapic[0] = reg;
     return ioapic[4];
@@ -113,7 +130,6 @@ static void ioapic_write(uint32_t reg, uint32_t v) {
  *
  * @param irq 逻辑 IRQ 号，同时决定中断向量（VECTOR_BASE + irq）
  * @returns 引脚号
-
  */
 static uint32_t irq_pin(uint32_t irq) {
     const struct ACPI_MADT_INFO *madt = acpi_madt();

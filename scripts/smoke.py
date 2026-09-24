@@ -13,13 +13,16 @@ TIMEOUT = 300
 
 
 def main():
+    smp = "1"
+    if "--smp" in sys.argv:
+        smp = sys.argv[sys.argv.index("--smp") + 1]
     subprocess.run(
         ["python3", "scripts/make_ext2.py", "build", "build/test_hd.img",
          "--smoke"], check=True, cwd=ROOT)
     LOG.unlink(missing_ok=True)
     proc = subprocess.Popen(
         ["qemu-system-x86_64", "-accel", "tcg,tb-size=256", "-m", "1G",
-         "-smp", "1", "-hda", str(IMG), "-debugcon", f"file:{LOG}",
+         "-smp", smp, "-hda", str(IMG), "-debugcon", f"file:{LOG}",
          "-display", "none", "-no-reboot"], cwd=ROOT,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

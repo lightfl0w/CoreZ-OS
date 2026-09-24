@@ -10,9 +10,6 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/file.h"
 #include "kernel/userprog/exec.h"
-#define EFLAGS_MBS (1 << 1)
-#define EFLAGS_IF_1 (1 << 9)
-#define EFLAGS_IOPL_0 0
 #define MSR_FS_BASE 0xC0000100ull
 
 void start_process(void *arg) {

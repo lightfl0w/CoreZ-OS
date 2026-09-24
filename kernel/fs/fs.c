@@ -8,6 +8,7 @@
 #include "kernel/fs/ext2.h"
 #include "kernel/fs/file.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/pty.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
 struct DISK_PARTITION *cur_part;
@@ -119,19 +120,23 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     uint32_t tino = 0;
     int tft = 0;
     if (ext2_lookup_ftype(pathname, &tino, &tft, 0) == 0) {
+        kprintf("create: exists tino=%u\n", tino);
         return -1;
     }
     struct FS_INODE par;
     if (ext2_read_inode(pino, &par)) {
+        kprintf("create: read inode fail\n");
         return -1;
     }
     if (fs_check_perm(&par, 2u)) {
+        kprintf("create: perm deny\n");
         current->errno = 13;
         return -1;
     }
     struct FS_INODE newi;
     uint32_t ino = ext2_new_inode(mode, &newi);
     if (ino == 0) {
+        kprintf("create: no inode\n");
         return -1;
     }
     newi.i_uid = current->euid;
@@ -150,6 +155,7 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
                 : fmt == 0x2000u ? 2u
                                  : 1u;
     if (ext2_add_entry_dt(&par, ino, base, dt)) {
+        kprintf("create: add entry fail\n");
         ext2_free_best_effort(&newi);
         return -1;
     }
@@ -296,6 +302,22 @@ int open_file(const char *pathname, uint8_t flags) {
     if (pathname == NULL || pathname[strlen(pathname) - 1] == '/') {
         return -1;
     }
+    char altpath[32];
+    if (strncmp(pathname, "/dev/pts/", 9) == 0) {
+        const char *d = pathname + 9;
+        int i = 0;
+        for (; d[i] && i < 8; i++) {
+            if (d[i] < '0' || d[i] > '9')
+                break;
+        }
+        if (d[i] == '\0' && i > 0) {
+            memcpy(altpath, "/dev/pty", 8);
+            for (int j = 0; j < i; j++)
+                altpath[8 + j] = d[j];
+            altpath[8 + i] = '\0';
+            pathname = altpath;
+        }
+    }
     if (proc_match(pathname)) {
         return proc_open(pathname, flags);
     }
@@ -303,7 +325,8 @@ int open_file(const char *pathname, uint8_t flags) {
     int is_dir = 0;
     if (ext2_lookup(pathname, &ino, &is_dir)) {
         if ((flags & O_CREAT) != 0) {
-            if (create_file(pathname) != 0) {
+            if (create_file(pathname) <= 0) {
+                current->errno = 2;
                 return -1;
             }
             if (ext2_lookup(pathname, &ino, &is_dir) || is_dir) {
@@ -337,13 +360,19 @@ int open_file(const char *pathname, uint8_t flags) {
         file_table_free_slot(gfd);
         return -1;
     }
-    if (fs_is_chardev(file->fd_inode) &&
-        (fs_chardev_dev(file->fd_inode) >> 8) == 5u) {
-        inode_close(file->fd_inode);
-        file_table_free_slot(gfd);
-        return fd_install(0);
-    }
     file->ref_cnt = 1;
+    if (fs_is_chardev(file->fd_inode)) {
+        uint32_t dev = fs_chardev_dev(file->fd_inode);
+        uint32_t major = dev >> 8;
+        if (major == PTY_MASTER_MAJOR || major == PTY_SLAVE_MAJOR) {
+            if (pty_chardev_open(file, dev) < 0) {
+                inode_close(file->fd_inode);
+                file_table_free_slot(gfd);
+                current->errno = 16;
+                return -1;
+            }
+        }
+    }
     int fd = fd_install(gfd);
     if (fd == -1) {
         inode_close(file->fd_inode);
@@ -361,6 +390,7 @@ int close_file(int fd) {
     if (global_fd_idx == (uint32_t)-1)
         return -1;
 
+    current->pipe_wr_mask &= ~(1u << (uint32_t)fd);
     fd_release((uint32_t)fd);
     if (global_fd_idx >= MAX_FILE_OPEN)
         return 0;
@@ -371,6 +401,9 @@ int close_file(int fd) {
 
     if (file_table_unref(global_fd_idx) > 0)
         return 0;
+
+    if (file->dev_priv)
+        pty_chardev_close(file);
 
     if (file->fd_flag == PIPE_FLAG) {
         if (file->fd_inode != NULL) {
@@ -469,11 +502,13 @@ static int remove_entry_common(const char *pathname, int want_dir,
     uint32_t ino = 0;
     int is_dir = 0;
     if (ext2_lookup(pathname, &ino, &is_dir) || is_dir != want_dir) {
+        current->errno = 2;
         return -1;
     }
     struct FS_INODE par;
     struct FS_INODE obj;
     if (ext2_read_inode(pino, &par) || ext2_read_inode(ino, &obj)) {
+        current->errno = 5;
         return -1;
     }
     if (fs_check_perm(&par, 2u)) {
@@ -494,6 +529,148 @@ static int remove_entry_common(const char *pathname, int want_dir,
 
 int sys_unlink(const char *pathname) {
     return remove_entry_common(pathname, 0, 0);
+}
+
+int fs_rename_path(const char *oldpath, const char *newpath) {
+    if (oldpath == NULL || newpath == NULL) {
+        current->errno = 14;
+        return -1;
+    }
+    char opar[MAX_PATH_LEN];
+    char obase[MAX_PATH_LEN];
+    char npar[MAX_PATH_LEN];
+    char nbase[MAX_PATH_LEN];
+    if (split_parent_path(oldpath, opar, obase, MAX_PATH_LEN) ||
+        split_parent_path(newpath, npar, nbase, MAX_PATH_LEN)) {
+        current->errno = 22;
+        return -1;
+    }
+    uint32_t opino = get_parent_inode(opar);
+    uint32_t npino = get_parent_inode(npar);
+    if (opino == 0 || npino == 0) {
+        current->errno = 2;
+        return -1;
+    }
+    uint32_t oino = 0;
+    int oft = 0;
+    if (ext2_lookup_ftype(oldpath, &oino, &oft, 0)) {
+        current->errno = 2;
+        return -1;
+    }
+    uint32_t exino = 0;
+    int exft = 0;
+    if (ext2_lookup_ftype(newpath, &exino, &exft, 0) == 0) {
+        if (exft == FT_DIRECTORY) {
+            current->errno = 21;
+            return -1;
+        }
+        struct FS_INODE npar_ino;
+        struct FS_INODE ex;
+        if (ext2_read_inode(npino, &npar_ino) || ext2_read_inode(exino, &ex)) {
+            current->errno = 5;
+            return -1;
+        }
+        if (fs_check_perm(&npar_ino, 2u)) {
+            current->errno = 13;
+            return -1;
+        }
+        if (ext2_remove_entry(&npar_ino, nbase)) {
+            current->errno = 5;
+            return -1;
+        }
+        ext2_truncate_inode(&ex);
+        ext2_write_inode(exino, &ex);
+        ext2_free_inode(exino);
+    }
+    if (oft == FT_DIRECTORY && opino != npino) {
+        current->errno = 18;
+        return -1;
+    }
+    struct FS_INODE par;
+    if (ext2_read_inode(opino, &par)) {
+        current->errno = 5;
+        return -1;
+    }
+    if (fs_check_perm(&par, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
+    uint8_t dt = oft == FT_DIRECTORY ? EXT2_DT_DIR
+                 : oft == FT_SYMLINK ? EXT2_DT_LNK
+                                     : 1u;
+    if (ext2_add_entry_dt(&par, oino, nbase, dt)) {
+        current->errno = 5;
+        return -1;
+    }
+    struct FS_INODE par2;
+    if (ext2_read_inode(opino, &par2) || ext2_remove_entry(&par2, obase)) {
+        current->errno = 5;
+        return -1;
+    }
+    return 0;
+}
+
+int fs_truncate_path(const char *path, uint32_t length) {
+    if (path == NULL) {
+        current->errno = 14;
+        return -1;
+    }
+    uint32_t ino = 0;
+    int ft = 0;
+    if (ext2_lookup_ftype(path, &ino, &ft, 1)) {
+        current->errno = 2;
+        return -1;
+    }
+    if (ft != FT_REGULAR) {
+        current->errno = 22;
+        return -1;
+    }
+    struct FS_INODE obj;
+    if (ext2_read_inode(ino, &obj)) {
+        current->errno = 5;
+        return -1;
+    }
+    if (fs_check_perm(&obj, 2u)) {
+        current->errno = 13;
+        return -1;
+    }
+    uint32_t old = obj.i_size;
+    if (length < old) {
+        uint8_t zeros[256];
+        memset(zeros, 0, sizeof(zeros));
+        uint32_t off = length;
+        while (off < old) {
+            uint32_t chunk = old - off;
+            if (chunk > sizeof(zeros)) {
+                chunk = sizeof(zeros);
+            }
+            if (ext2_write_to_inode(&obj, off, zeros, chunk) < 0) {
+                current->errno = 5;
+                return -1;
+            }
+            off += chunk;
+        }
+        obj.i_size = length;
+        return ext2_write_inode(ino, &obj) ? -1 : 0;
+    }
+    if (length > old) {
+        uint8_t zeros[256];
+        memset(zeros, 0, sizeof(zeros));
+        uint32_t off = old;
+        while (off < length) {
+            uint32_t chunk = length - off;
+            if (chunk > sizeof(zeros)) {
+                chunk = sizeof(zeros);
+            }
+            if (ext2_write_to_inode(&obj, off, zeros, chunk) < 0) {
+                current->errno = 28;
+                return -1;
+            }
+            off += chunk;
+        }
+        return ext2_write_inode(ino, &obj) ? -1 : 0;
+    }
+    return 0;
 }
 
 int32_t sys_mkdir(const char *pathname) {

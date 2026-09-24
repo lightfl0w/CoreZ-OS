@@ -33,8 +33,9 @@ void sema_down(struct SCHED_SEMAPHORE *psema) {
     spinlock_acquire(&psema->lock);
     while (psema->value == 0) {
         list_append(&psema->waiters, &current->wait_tag);
+        uint32_t bf = thread_block_prepare(TASK_BLOCKED);
         spinlock_release(&psema->lock);
-        thread_block();
+        thread_block_commit(bf);
         spinlock_acquire(&psema->lock);
     }
     psema->value--;
@@ -115,8 +116,9 @@ void lock_acquire(struct SCHED_LOCK *plock) {
     while (plock->semaphore.value == 0) {
         list_append(&plock->semaphore.waiters, &current->wait_tag);
         lklog(plock, 3);
+        uint32_t bf = thread_block_prepare(TASK_BLOCKED);
         spinlock_release(&plock->semaphore.lock);
-        thread_block();
+        thread_block_commit(bf);
         spinlock_acquire(&plock->semaphore.lock);
         lklog(plock, 4);
     }

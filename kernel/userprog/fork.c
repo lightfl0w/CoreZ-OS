@@ -115,10 +115,13 @@ int copy_user_space(struct TASK *parent, struct TASK *child) {
     }
     uint64_t *pdp = (uint64_t *)VIRT_OF(PTE_PHYS(pml4e));
     uint64_t *child_pdp = (uint64_t *)VIRT_OF(PTE_PHYS(child_pml4[0]));
+    preempt_disable();
     if (alloc_child_page_tables(child, pdp, child_pdp) != 0) {
+        preempt_enable();
         return -1;
     }
     share_user_space_cow(child, pdp, child_pdp);
+    preempt_enable();
     return 0;
 }
 
@@ -160,6 +163,7 @@ pid_t sys_fork(struct X86_REGS *r) {
             file_table_ref(child->fd_table[i]);
         }
     }
+    child->pipe_wr_mask = parent->pipe_wr_mask;
     child->exit_status = 0;
     child->signal_mask = parent->signal_mask;
     child->signal_pending = 0;

@@ -1,4 +1,3 @@
-
 #include "kernel/gui/gpu.h"
 
 #include <stddef.h>
@@ -112,7 +111,7 @@ static void exec_fill(const struct GPU_CMD *c) {
     struct GFX_RECT r = {c->x, c->y, c->w, c->h}, v;
     if (!clip_rect(&v, &r) || !gpu_dst)
         return;
-    int a = (GFX_A(c->color) * c->alpha + 127) / 255;
+    int a = gfx_div255(GFX_A(c->color) * c->alpha + 127);
     if (a <= 0)
         return;
     gfx_color rgb = c->color & 0x00FFFFFFu;
@@ -122,7 +121,7 @@ static void exec_fill(const struct GPU_CMD *c) {
                      (size_t)v.x * 4u;
         if (off + (size_t)v.w * 4u > mapped)
             return;
-        gfx_color *p = (gfx_color *)(void *)((uint8_t *)gpu_dst->pixels + off);
+        gfx_color *p = gfx_px_at(gpu_dst, off);
         if (a >= 255) {
             for (int i = 0; i < v.w; i++)
                 p[i] = rgb | 0xFF000000u;
@@ -168,9 +167,9 @@ static inline gfx_color blend_px(gfx_color d, gfx_color s, int sa) {
     int dr = GFX_R(d), dg = GFX_G(d), db = GFX_B(d);
     int sr = GFX_R(s), sg = GFX_G(s), sb = GFX_B(s);
     return (uint32_t)0xFF000000u |
-           ((uint32_t)(dr + ((sr - dr) * sa + 127) / 255) << 16) |
-           ((uint32_t)(dg + ((sg - dg) * sa + 127) / 255) << 8) |
-           (uint32_t)(db + ((sb - db) * sa + 127) / 255);
+           ((uint32_t)(dr + gfx_div255((sr - dr) * sa + 127)) << 16) |
+           ((uint32_t)(dg + gfx_div255((sg - dg) * sa + 127)) << 8) |
+           (uint32_t)(db + gfx_div255((sb - db) * sa + 127));
 }
 
 static void blend_run(gfx_color *d, const gfx_color *s, int n, int ga) {
@@ -179,7 +178,7 @@ static void blend_run(gfx_color *d, const gfx_color *s, int n, int ga) {
         int sa = GFX_A(sp);
         if (sa == 0)
             continue;
-        sa = (sa * ga + 127) / 255;
+        sa = gfx_div255(sa * ga + 127);
         d[i] = blend_px(d[i], sp, sa);
     }
 }
@@ -213,8 +212,8 @@ static void exec_blend(const struct GPU_CMD *c) {
                       (size_t)sx * 4u;
         if (doff + (size_t)w * 4u > dmapped || soff + (size_t)w * 4u > smapped)
             return;
-        blend_run((gfx_color *)(void *)((uint8_t *)gpu_dst->pixels + doff),
-                  (const gfx_color *)(const void *)((const uint8_t *)c->src->pixels + soff),
+        blend_run(gfx_px_at(gpu_dst, doff),
+                  gfx_px_at_c(c->src, soff),
                   w, c->alpha);
     }
 }
@@ -248,9 +247,9 @@ static void exec_round_blend(const struct GPU_CMD *c) {
                       (size_t)sx0 * 4u;
         if (doff + (size_t)w * 4u > dmapped || soff + (size_t)w * 4u > smapped)
             return;
-        gfx_color *d = (gfx_color *)(void *)((uint8_t *)gpu_dst->pixels + doff);
+        gfx_color *d = gfx_px_at(gpu_dst, doff);
         const gfx_color *s =
-            (const gfx_color *)(const void *)((const uint8_t *)c->src->pixels + soff);
+            gfx_px_at_c(c->src, soff);
         int in_corner_band = (ly < top_band) || (ly >= h - bot_band);
         int mid0 = 0, mid1 = w;
         if (in_corner_band && rad > 0) {
@@ -262,8 +261,8 @@ static void exec_round_blend(const struct GPU_CMD *c) {
                 if (cov <= 0)
                     continue;
                 gfx_color sp = s[lx];
-                int sa = (GFX_A(sp) * c->alpha + 127) / 255;
-                sa = sa * cov / 255;
+                int sa = gfx_div255(GFX_A(sp) * c->alpha + 127);
+                sa = gfx_div255(sa * cov);
                 if (sa > 0)
                     d[lx] = blend_px(d[lx], sp, sa);
             }
@@ -275,8 +274,8 @@ static void exec_round_blend(const struct GPU_CMD *c) {
                 if (cov <= 0)
                     continue;
                 gfx_color sp = s[lx];
-                int sa = (GFX_A(sp) * c->alpha + 127) / 255;
-                sa = sa * cov / 255;
+                int sa = gfx_div255(GFX_A(sp) * c->alpha + 127);
+                sa = gfx_div255(sa * cov);
                 if (sa > 0)
                     d[lx] = blend_px(d[lx], sp, sa);
             }
@@ -315,7 +314,7 @@ static void exec_roundfill(const struct GPU_CMD *c) {
         rad = w / 2;
     if (rad * 2 > h)
         rad = h / 2;
-    int ca = (GFX_A(c->color) * c->alpha + 127) / 255;
+    int ca = gfx_div255(GFX_A(c->color) * c->alpha + 127);
     if (ca <= 0)
         return;
     gfx_color rgb = c->color & 0x00FFFFFFu;
@@ -328,7 +327,7 @@ static void exec_roundfill(const struct GPU_CMD *c) {
         size_t off = (size_t)py * (size_t)gpu_dst->pitch + (size_t)v.x * 4u;
         if (off + (size_t)v.w * 4u > mapped)
             return;
-        gfx_color *p = (gfx_color *)(void *)((uint8_t *)gpu_dst->pixels + off);
+        gfx_color *p = gfx_px_at(gpu_dst, off);
         int full_row = (ly >= top_band && ly < h - bot_band);
         if (full_row && ca >= 255) {
             for (int col = 0; col < v.w; col++)
@@ -344,7 +343,7 @@ static void exec_roundfill(const struct GPU_CMD *c) {
                 cov = gfx_round_coverage(lx, ly, w, h, rad, c->corners);
             if (cov <= 0)
                 continue;
-            int a = ca * cov / 255;
+            int a = gfx_div255(ca * cov);
             if (a >= 255)
                 p[col] = rgb | 0xFF000000u;
             else
@@ -386,9 +385,9 @@ static void exec_shadow(const struct GPU_CMD *c) {
             doff + (size_t)span * 4u > dmapped)
             return;
         const gfx_color *s =
-            (const gfx_color *)(const void *)((const uint8_t *)sp->pixels + soff);
+            gfx_px_at_c(sp, soff);
         gfx_color *d =
-            (gfx_color *)(void *)((uint8_t *)gpu_dst->pixels + doff);
+            gfx_px_at(gpu_dst, doff);
         if (ly >= blur && ly < blur + fh) {
             int lend = (cx1 < blur) ? cx1 : blur;
             if (cx0 < lend)
