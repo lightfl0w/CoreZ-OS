@@ -33,7 +33,7 @@ static struct LINUX_TERMIOS tty_tios;
 static uint16_t tty_ws[4] = {TTY_WINSZ_ROW, TTY_WINSZ_COL, 0, 0};
 static uint32_t tty_pgrp;
 
-int tty_write(const char *buf, uint32_t n) {
+static int tty_write(const char *buf, uint32_t n) {
     for (uint32_t i = 0; i < n; i++)
         console_putc(buf[i]);
     return (int)n;
@@ -120,7 +120,7 @@ static int tty_read_raw(char *buf, uint32_t n) {
     return (int)got;
 }
 
-int tty_read(char *buf, uint32_t n) {
+static int tty_read(char *buf, uint32_t n) {
     if (n == 0)
         return 0;
     if (tty_tios.c_lflag & LINUX_ICANON)
@@ -128,7 +128,7 @@ int tty_read(char *buf, uint32_t n) {
     return tty_read_raw(buf, n);
 }
 
-uint32_t tty_avail(void) { return ioq_length(&keyboard_ioq); }
+static uint32_t tty_avail(void) { return ioq_length(&keyboard_ioq); }
 
 static void tty_getwinsz(uint16_t *w) {
     w[0] = tty_ws[0];
@@ -137,7 +137,7 @@ static void tty_getwinsz(uint16_t *w) {
     w[3] = tty_ws[3];
 }
 
-int tty_ioctl(uint32_t cmd, uint64_t arg) {
+static int tty_ioctl(uint32_t cmd, uint64_t arg) {
     switch (cmd) {
     case TTY_IOCTL_TCGETS:
         if (arg)

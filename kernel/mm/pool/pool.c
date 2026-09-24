@@ -50,7 +50,6 @@ static volatile uint8_t frame_owner[FRAME_IDX_MAX];
 uint64_t kernel_pml4;
 uint32_t kernel_kphys;
 
-#define KERNEL_VADDR_START 0x40400000
 
 static uint32_t e820_mem_upper(void) {
     uint64_t top = mb2_mem_top();

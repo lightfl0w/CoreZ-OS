@@ -1,4 +1,3 @@
-
 #include "kernel/gui/x11.h"
 
 #include <stddef.h>
@@ -91,7 +90,7 @@ static const int16_t g_sin_q10[91] = {
     738,  749,  760,  771,  781,  791,  801,  811,  820,  829,  838,  846,
     855,  863,  870,  878,  885,  892,  898,  905,  911,  916,  922,  927,
     932,  936,  941,  945,  948,  952,  955,  958,  960,  962,  964,  966,
-    967,  968,  969,  970,  970,  970,  970,  969};
+    967,  968,  969,  970,  970,  970,  970};
 
 static int trig_sin(int deg) {
     deg %= 360;
@@ -1371,10 +1370,9 @@ static void h_get_image(struct X11_CONN *c, const uint8_t *p, uint32_t len) {
             int px = x + (int)xx, py = y + (int)r;
             if (px < 0 || py < 0 || px >= d.cv.w || py >= d.cv.h)
                 continue;
-            gfx_color col = *(gfx_color *)(void *)((uint8_t *)d.cv.pixels +
-                                                   (size_t)py *
-                                                       (size_t)d.cv.pitch +
-                                                   (size_t)px * 4u);
+            gfx_color col = *gfx_px_at(&d.cv,
+                                       (size_t)py * (size_t)d.cv.pitch +
+                                           (size_t)px * 4u);
             if (xx * 3u + 2 < n) {
                 row[xx * 3 + 0] = (uint8_t)GFX_B(col);
                 row[xx * 3 + 1] = (uint8_t)GFX_G(col);

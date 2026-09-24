@@ -49,7 +49,6 @@ static const char *cursor_bmp[CURSOR_H] = {
 };
 #define CURSOR_OUTLINE GFX_RGB(0, 0, 0)
 #define CURSOR_FILL GFX_RGB(255, 255, 255)
-#define UI_FONT_PX 13
 #define TITLE_FONT_PX 13
 #define CLOSE_FONT_PX 10
 
@@ -384,11 +383,11 @@ static gfx_color wallpaper_color(int y) {
     if (grad > 255)
         grad = 255;
     int r = GFX_R(t->wp_top) +
-            (GFX_R(t->wp_bot) - GFX_R(t->wp_top)) * grad / 255;
+            gfx_div255((GFX_R(t->wp_bot) - GFX_R(t->wp_top)) * grad);
     int g = GFX_G(t->wp_top) +
-            (GFX_G(t->wp_bot) - GFX_G(t->wp_top)) * grad / 255;
+            gfx_div255((GFX_G(t->wp_bot) - GFX_G(t->wp_top)) * grad);
     int b = GFX_B(t->wp_top) +
-            (GFX_B(t->wp_bot) - GFX_B(t->wp_top)) * grad / 255;
+            gfx_div255((GFX_B(t->wp_bot) - GFX_B(t->wp_top)) * grad);
     return GFX_RGB(r, g, b);
 }
 
@@ -673,7 +672,7 @@ static gfx_color bs_blend(gfx_color d, gfx_color src, int ga) {
     int sa = GFX_A(src);
     if (sa == 0)
         return d;
-    sa = (sa * ga + 127) / 255;
+    sa = gfx_div255(sa * ga + 127);
     if (sa <= 0)
         return d;
     if (sa >= 255)
@@ -681,9 +680,9 @@ static gfx_color bs_blend(gfx_color d, gfx_color src, int ga) {
     int dr = GFX_R(d), dg = GFX_G(d), db = GFX_B(d);
     int sr = GFX_R(src), sg = GFX_G(src), sb = GFX_B(src);
     return 0xFF000000u |
-           ((uint32_t)(dr + ((sr - dr) * sa + 127) / 255) << 16) |
-           ((uint32_t)(dg + ((sg - dg) * sa + 127) / 255) << 8) |
-           (uint32_t)(db + ((sb - db) * sa + 127) / 255);
+           ((uint32_t)(dr + gfx_div255((sr - dr) * sa + 127)) << 16) |
+           ((uint32_t)(dg + gfx_div255((sg - dg) * sa + 127)) << 8) |
+           (uint32_t)(db + gfx_div255((sb - db) * sa + 127));
 }
 
 static void bs_fill_round(struct GFX_CANVAS *cv, int x, int y, int w, int h,
@@ -704,7 +703,7 @@ static void bs_fill_round(struct GFX_CANVAS *cv, int x, int y, int w, int h,
         size_t off = (size_t)py * (size_t)cv->pitch + (size_t)x * 4u;
         if (off + (size_t)w * 4u > mapped)
             continue;
-        gfx_color *row = (gfx_color *)(void *)((uint8_t *)cv->pixels + off);
+        gfx_color *row = gfx_px_at(cv, off);
         int full = (ly >= top && ly < h - bot);
         for (int lx = 0; lx < w; lx++) {
             int cov = full ? 255
@@ -726,15 +725,15 @@ static gfx_color bs_mix(gfx_color base, gfx_color top, int w) {
         return top & 0x00FFFFFFu;
     int br = GFX_R(base), bg = GFX_G(base), bb = GFX_B(base);
     int tr = GFX_R(top), tg = GFX_G(top), tb = GFX_B(top);
-    return ((uint32_t)(br + ((tr - br) * w + 127) / 255) << 16) |
-           ((uint32_t)(bg + ((tg - bg) * w + 127) / 255) << 8) |
-           (uint32_t)(bb + ((tb - bb) * w + 127) / 255);
+    return ((uint32_t)(br + gfx_div255((tr - br) * w + 127)) << 16) |
+           ((uint32_t)(bg + gfx_div255((tg - bg) * w + 127)) << 8) |
+           (uint32_t)(bb + gfx_div255((tb - bb) * w + 127));
 }
 
 static gfx_color bs_content_px(gfx_color base_rgb, gfx_color p, int cov) {
     if (cov <= 0)
         return 0;
-    int eff = (GFX_A(p) * cov + 127) / 255;
+    int eff = gfx_div255(GFX_A(p) * cov + 127);
     return bs_mix(base_rgb, p, eff) | ((uint32_t)cov << 24);
 }
 
@@ -791,7 +790,7 @@ static void bs_render_content(struct WL_SURFACE *s) {
         size_t doff = (size_t)py * (size_t)cv->pitch + (size_t)cx * 4u;
         if (doff + (size_t)w * 4u > mapped)
             break;
-        gfx_color *dp = (gfx_color *)(void *)((uint8_t *)cv->pixels + doff);
+        gfx_color *dp = gfx_px_at(cv, doff);
         const gfx_color *sp = with_buf ? src + (size_t)ly * (size_t)w : 0;
         int in_band = (ly >= h - rad);
         for (int lx = 0; lx < w; lx++) {
@@ -915,14 +914,14 @@ static void bs_content_fused(struct WL_SURFACE *s, struct GFX_RECT *clip) {
                       (size_t)COMP_BORDER * 4u;
         if (coff + (size_t)w * 4u > cmapped)
             break;
-        gfx_color *crow = (gfx_color *)(void *)((uint8_t *)cv->pixels + coff);
+        gfx_color *crow = gfx_px_at(cv, coff);
         const gfx_color *sp = with_buf ? src + (size_t)ly * (size_t)w : 0;
         int py = s->y + ly;
         gfx_color *drow = 0;
         if (py >= clip->y && py < clip->y + clip->h && py >= 0 && py < scrny) {
             size_t doff = (size_t)py * (size_t)dst->pitch + (size_t)s->x * 4u;
             if (doff + (size_t)w * 4u <= dmapped)
-                drow = (gfx_color *)(void *)((uint8_t *)dst->pixels + doff);
+                drow = gfx_px_at(dst, doff);
         }
         int in_band = (ly >= h - rad);
         for (int lx = 0; lx < w; lx++) {
@@ -962,17 +961,17 @@ static void bs_blit(struct WL_SURFACE *s, struct GFX_RECT *clip) {
         rad = b->h / 2;
     size_t mapped = gfx_canvas_mapped_bytes(dst, &(int){0});
     size_t smapped = gfx_canvas_mapped_bytes(b, &(int){0});
+    int lx = v.x + v.w - 1, ly_last = v.y + v.h - 1;
+    size_t dend = (size_t)ly_last * (size_t)dst->pitch + (size_t)lx * 4u + 4u;
+    size_t send = (size_t)(ly_last - fy) * (size_t)b->pitch +
+                  (size_t)(lx - fx) * 4u + 4u;
+    if (dend > mapped || send > smapped)
+        return;
     for (int py = v.y; py < v.y + v.h; py++) {
-        size_t doff = (size_t)py * (size_t)dst->pitch + (size_t)v.x * 4u;
-        size_t soff = (size_t)(py - fy) * (size_t)b->pitch +
-                      (size_t)(v.x - fx) * 4u;
-        if (doff + (size_t)v.w * 4u > mapped ||
-            soff + (size_t)v.w * 4u > smapped)
-            return;
-        gfx_color *dp = (gfx_color *)(void *)((uint8_t *)dst->pixels + doff);
-        const gfx_color *sp =
-            (const gfx_color *)(const void *)((const uint8_t *)b->pixels +
-                                              soff);
+        gfx_color *dp = gfx_px_at(
+            dst, (size_t)py * (size_t)dst->pitch + (size_t)v.x * 4u);
+        const gfx_color *sp = gfx_px_at_c(
+            b, (size_t)(py - fy) * (size_t)b->pitch + (size_t)(v.x - fx) * 4u);
         if (ga >= 255) {
             int ly = py - fy;
             if (ly >= rad && ly < b->h - rad) {

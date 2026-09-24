@@ -326,7 +326,7 @@ static int ext2_bitmap_clear(uint32_t blk, uint32_t bit) {
     return was_set ? 0 : 1;
 }
 
-void ext2_free_block(uint32_t blk) {
+static void ext2_free_block(uint32_t blk) {
     if (blk == 0 || blk >= total_blocks) {
         return;
     }

@@ -171,10 +171,6 @@ static uint32_t vg_cfg_read32(uint32_t off) {
     return vg_mmio_read32(vg.common, off);
 }
 
-static uint16_t vg_cfg_read16(uint32_t off) {
-    return (uint16_t)vg_mmio_read32(vg.common, off);
-}
-
 static void vg_cfg_write16(uint32_t off, uint16_t v) {
     vg_mmio_write16(vg.common, off, v);
 }

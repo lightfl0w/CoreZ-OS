@@ -54,46 +54,21 @@ LLVM_BIN_GLOBS = (
     "/usr/local/opt/llvm*/bin",
     "/opt/homebrew/opt/llvm*/bin",
 )
-CFLAGS_BASE = [
-    "-ffreestanding", "-fno-builtin", "-fno-sanitize=all",
-    "-fno-stack-protector",
-    "-I", str(ROOT / "includes"),
-]
-CFLAGS = CFLAGS_BASE
-KERNEL_CFLAGS = CFLAGS_BASE + [
-    "-mcmodel=large",
-    "-mno-red-zone",
-    "-mstackrealign",
+FREE      = ["-ffreestanding", "-fno-builtin", "-fno-sanitize=all", "-O2"]
+INCS      = ["-I", str(ROOT / "includes")]
+USER_INCS = ["-I", str(ROOT / "includes" / "libc" / "user"),
+             "-I", str(ROOT / "includes" / "lib"), *INCS]
+
+KERNEL_CFLAGS = FREE + INCS + [
+    "-mcmodel=large", "-mno-red-zone", "-mstackrealign",
     "-fstack-protector-strong",
     "-Wall", "-Wunused-function", "-Wunused-variable",
 ]
-UP_CFLAGS = CFLAGS_BASE + [
-    "-I", str(ROOT / "includes" / "libc" / "user"),
-    "-I", str(ROOT / "includes" / "lib"),
-    "-I", str(ROOT / "includes"),
-]
-UP_LDFLAGS = ["-s", "-m", "elf_i386", "-T", str(ROOT / "linker" / "user.ld"), "-e", "_start"]
-
-UP_CFLAGS_64 = [
-    "-ffreestanding", "-fno-builtin", "-fno-sanitize=all", "-fPIE",
-    "-fno-stack-protector",
-    "-I", str(ROOT / "includes" / "libc" / "user"),
-    "-I", str(ROOT / "includes" / "lib"),
-    "-I", str(ROOT / "includes"),
-]
+UP_CFLAGS_64 = FREE + ["-fPIE", "-fno-stack-protector", *USER_INCS]
 UP_LDFLAGS_64 = ["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
                  "-e", "_start", "-static", "-pie", "--no-dynamic-linker",
                  "-z", "pack-relative-relocs"]
-
-MUSL64_BASE = [
-    "-ffreestanding", "-fno-builtin", "-fno-sanitize=all", "-fPIE",
-]
-MUSL_CFLAGS = MUSL64_BASE + [
-    "-I", str(MUSL_SRC / "arch" / "x86_64"),
-    "-I", str(MUSL_SRC / "arch" / "generic"),
-    "-I", str(MUSL_SRC / "src" / "internal"),
-    "-I", str(MUSL_SRC / "include"),
-]
+MUSL64_BASE = FREE + ["-fPIE"]
 
 MUSL_PREFIX = BUILD_DIR / "musl"
 MUSL_INC   = MUSL_PREFIX / "include"
@@ -1316,10 +1291,12 @@ def do_clean(console: Console) -> None:
         console.ok(f"removed {BUILD_DIR}")
     else:
         console.info(f"{BUILD_DIR} already absent")
-TOOLCHAIN_STAMP = BUILD_DIR / ".toolchain"
+BUILD_ENV_STAMP = BUILD_DIR / ".buildenv"
 
-def _toolchain_fingerprint(tools: Tools) -> str:
-    parts = [" ".join(tools.cc), tools.kind, tools.ld, tools.objcopy, tools.nasm]
+def _build_env_fingerprint(tools: Tools) -> str:
+    flags = " ".join(KERNEL_CFLAGS + UP_CFLAGS_64 + MUSL64_BASE)
+    parts = [" ".join(tools.cc), tools.kind, tools.ld, tools.objcopy, tools.nasm,
+             flags]
     try:
         res = run([*tools.cc, "--version"])
         line = (res.stdout or res.stderr).splitlines()
@@ -1329,28 +1306,25 @@ def _toolchain_fingerprint(tools: Tools) -> str:
         pass
     return " | ".join(parts)
 
-def restamp_toolchain(tools: Tools, console: Console) -> None:
-    """工具链指纹变化即清空 build/：mtime 缓存识别不到"换了编译器"。"""
-    fingerprint = _toolchain_fingerprint(tools)
+def restamp_build_env(tools: Tools, console: Console) -> None:
+    fingerprint = _build_env_fingerprint(tools)
     old = ""
-    if TOOLCHAIN_STAMP.exists():
+    if BUILD_ENV_STAMP.exists():
         try:
-            old = TOOLCHAIN_STAMP.read_text(encoding="utf-8").strip()
+            old = BUILD_ENV_STAMP.read_text(encoding="utf-8").strip()
         except OSError:
             old = ""
     if old == fingerprint:
         return
     stale_objs = BUILD_DIR.exists() and any(BUILD_DIR.glob("*.o"))
     if old or stale_objs:
+        console.warn("build environment changed, forcing rebuild:")
         if old:
-            console.warn("toolchain changed, forcing rebuild:")
             console.warn(f"  was: {old}")
-        else:
-            console.warn("build/ has objects but no toolchain stamp, forcing rebuild")
         console.warn(f"  now: {fingerprint}")
         do_clean(console)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    TOOLCHAIN_STAMP.write_text(fingerprint + "\n", encoding="utf-8")
+    BUILD_ENV_STAMP.write_text(fingerprint + "\n", encoding="utf-8")
 def do_run(console: Console, stats: BuildStats,
            smp: int, gdb: bool, no_net: bool, boot_floppy: bool,
            kvm: bool) -> None:
@@ -1440,7 +1414,7 @@ def main(argv: Sequence[str]) -> int:
     console.info(f"nasm    = {tools.nasm}")
     console.info(f"objcopy = {tools.objcopy}")
     console.writeln()
-    restamp_toolchain(tools, console)
+    restamp_build_env(tools, console)
     plan = make_plan(tools, with_musl_lib=True)
     try:
         stats = execute_plan(plan, tools, console, jobs=args.jobs)

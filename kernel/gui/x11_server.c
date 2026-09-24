@@ -1,4 +1,3 @@
-
 #include "kernel/gui/x11.h"
 
 #include "drivers/char/console/io.h"

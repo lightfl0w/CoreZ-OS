@@ -8,7 +8,6 @@
 #include "lib/str/str.h"
 
 #define PTY_EAGAIN 11
-#define PTY_EIO 5
 #define PTY_EINTR 4
 
 static struct PTY ptys[NPTY];

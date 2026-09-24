@@ -17,7 +17,7 @@ struct IDE_CHANNEL {
 };
 
 void ide_read(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
-void ide_write(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt);
+void ide_write(struct DISK *hd, uint32_t lba, const void *buf, uint32_t sec_cnt);
 void intr_hd_handler(uint8_t irq_no);
 void ide_init(void);
 

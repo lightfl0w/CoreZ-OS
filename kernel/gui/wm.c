@@ -1,4 +1,3 @@
-
 #include "kernel/gui/wm.h"
 
 #include "arch/x86/interrupt/interrupt.h"

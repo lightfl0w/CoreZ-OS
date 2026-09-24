@@ -68,14 +68,14 @@ static void *acpi_map_table(uint64_t phys) {
     return acpi_map((uint32_t)phys, hdr->len);
 }
 
-uint8_t acpi_checksum(uint8_t *addr, uint32_t len) {
+static uint8_t acpi_checksum(uint8_t *addr, uint32_t len) {
     uint8_t sum = 0;
     for (uint32_t i = 0; i < len; i++)
         sum += addr[i];
     return (sum == 0);
 }
 
-struct ACPI_RSDP *acpi_find_rsdp(void) {
+static struct ACPI_RSDP *acpi_find_rsdp(void) {
     void *ebda = acpi_map(0x000E0000, 0x20000);
     if (!ebda)
         return NULL;
@@ -92,7 +92,7 @@ struct ACPI_RSDP *acpi_find_rsdp(void) {
     return NULL;
 }
 
-struct ACPI_SDT_HEADER *acpi_find_table(const char *signature) {
+static struct ACPI_SDT_HEADER *acpi_find_table(const char *signature) {
     if (!XSDT) {
         if (RSDP && RSDP->revision >= 2 && RSDP->xsdt_address) {
             XSDT = (struct ACPI_XSDT *)acpi_map_table(RSDP->xsdt_address);

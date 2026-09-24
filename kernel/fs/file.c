@@ -125,10 +125,6 @@ uint32_t fd_local2global(uint32_t local_fd) {
     return current->fd_table[local_fd];
 }
 
-static int chardev_tty(const struct FS_INODE *ino) {
-    return (ino->i_block[0] >> 8) == 5u;
-}
-
 static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {
     if (file->dev_priv) {
         int32_t r = pty_chardev_read(file, buf, count);

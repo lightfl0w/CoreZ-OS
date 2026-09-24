@@ -34,7 +34,7 @@ static uint32_t sys_getpid(void) {
     return current->pid;
 }
 
-int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
+static int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
     if (tp == NULL) {
         return -1;
     }
@@ -49,7 +49,7 @@ int32_t sys_clock_gettime(int32_t clk_id, struct SYS_TIMESPEC *tp) {
     return 0;
 }
 
-int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
+static int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
     if (tv == NULL) {
         return -1;
     }
@@ -60,7 +60,7 @@ int32_t sys_gettimeofday(struct SYS_TIMEVAL *tv, void *tz) {
     return 0;
 }
 
-int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
+static int32_t sys_nanosleep(const struct SYS_TIMESPEC *req, struct SYS_TIMESPEC *rem) {
     if (req == NULL || req->tv_sec < 0 || req->tv_nsec < 0) {
         return -1;
     }

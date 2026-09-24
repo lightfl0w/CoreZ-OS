@@ -13,12 +13,17 @@ typedef uint32_t gfx_color;
 #define GFX_R(c) ((int)(((c) >> 16) & 0xFFu))
 #define GFX_G(c) ((int)(((c) >> 8) & 0xFFu))
 #define GFX_B(c) ((int)((c) & 0xFFu))
+static inline int gfx_div255(int x) {
+    uint32_t n = (uint32_t)(x < 0 ? -x : x);
+    uint32_t q = (n * 0x8081u) >> 23;
+    return x < 0 ? -(int)q : (int)q;
+}
 static inline gfx_color gfx_alpha_mul(gfx_color c, int a) {
     if (a >= 255)
         return c;
     if (a <= 0)
         return c & 0x00FFFFFFu;
-    int na = (GFX_A(c) * a + 127) / 255;
+    int na = gfx_div255(GFX_A(c) * a + 127);
     return (c & 0x00FFFFFFu) | ((uint32_t)na << 24);
 }
 
@@ -43,6 +48,13 @@ static inline const gfx_color *gfx_row_c(const struct GFX_CANVAS *c, int y) {
                                              (size_t)y * (size_t)c->pitch);
 }
 
+static inline gfx_color *gfx_px_at(struct GFX_CANVAS *c, size_t off) {
+    return (gfx_color *)(void *)((uint8_t *)c->pixels + off);
+}
+static inline const gfx_color *gfx_px_at_c(const struct GFX_CANVAS *c,
+                                           size_t off) {
+    return (const gfx_color *)(const void *)((const uint8_t *)c->pixels + off);
+}
 static inline size_t gfx_canvas_mapped_bytes(const struct GFX_CANVAS *c,
                                              int *ok) {
     *ok = 1;

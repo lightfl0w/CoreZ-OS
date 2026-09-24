@@ -1,4 +1,3 @@
-
 ORG     0x0600
 
 %define PART_START      2048

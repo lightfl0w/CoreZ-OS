@@ -15,7 +15,6 @@
 #include "kernel/mm/pool/pool.h"
 
 #define reg_data(channel) ((channel)->port_base + 0)
-#define reg_error(channel) ((channel)->port_base + 1)
 #define reg_sect_cnt(channel) ((channel)->port_base + 2)
 #define reg_lba_l(channel) ((channel)->port_base + 3)
 #define reg_lba_m(channel) ((channel)->port_base + 4)
@@ -23,11 +22,8 @@
 #define reg_dev(channel) ((channel)->port_base + 6)
 #define reg_status(channel) ((channel)->port_base + 7)
 #define reg_cmd(channel) (reg_status(channel))
-#define reg_alt_status(channel) ((channel)->port_base + 0x206)
-#define reg_ctl(channel) (reg_alt_status(channel))
 
 #define BIT_ALT_STAT_BSY 0x80
-#define BIT_ALT_STAT_DRDY 0x40
 #define BIT_ALT_STAT_DRQ 0x8
 
 #define BIT_DEV_MBS 0xa0
@@ -47,7 +43,6 @@
 #define IDE_BM_READ (1u << 3)
 #define IDE_BM_ACTIVE 0x01u
 #define IDE_BM_DMA_ERR 0x02u
-#define IDE_BM_INTR 0x04u
 #define IDE_BM_RW_CLEAR 0x06u
 
 #define IDE_DMA_SECTORS 128u
@@ -266,7 +261,8 @@ void ide_read(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
     lock_release(&hd->my_channel->lock);
 }
 
-void ide_write(struct DISK *hd, uint32_t lba, void *buf, uint32_t sec_cnt) {
+void ide_write(struct DISK *hd, uint32_t lba, const void *buf,
+               uint32_t sec_cnt) {
     ASSERT(lba <= hd->max_lba);
     ASSERT(sec_cnt > 0);
     lock_acquire(&hd->my_channel->lock);

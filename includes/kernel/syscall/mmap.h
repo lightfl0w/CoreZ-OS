@@ -14,7 +14,9 @@
 #define MAP_ANONYMOUS 0x20
 #define MAP_ANON MAP_ANONYMOUS
 
+#ifndef MAP_FAILED
 #define MAP_FAILED ((void *)-1)
+#endif
 
 struct SYS_MMAP_ARGS {
     uint32_t addr;

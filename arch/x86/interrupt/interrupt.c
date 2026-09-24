@@ -48,7 +48,6 @@ static const char *exc_names[32] = {"Divide Error",
                                     "(Reserved)",
                                     "(Reserved)",
                                     "(Reserved)"};
-#define INT_NO_UNREGISTERED 0xFFFFu
 static int handle_cow_fault(uint32_t fault_addr, uint32_t error_code) {
     if (fault_addr < USER_VADDR_START || fault_addr >= 0xc0000000) {
         return 0;

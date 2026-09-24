@@ -20,7 +20,6 @@
 
 #define LVIT_MASK (1u << 16)
 
-#define IOAPIC_BASE 0xFEC00000u
 #define IOAPIC_VER 0x01
 #define IOREG_TABLE 0x10
 #define IOAPIC_MAX_PINS 23

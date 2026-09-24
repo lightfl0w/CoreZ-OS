@@ -5,8 +5,8 @@
 #include "kernel/asm_func.h"
 
 int pic_init(void) {
-    uint8_t a1 = inb(PIC1_DATA);
-    uint8_t a2 = inb(PIC2_DATA);
+    inb(PIC1_DATA);
+    inb(PIC2_DATA);
 
     outb(PIC1_CMD, ICW1_INIT_NEED_ICW4);
     outb(PIC2_CMD, ICW1_INIT_NEED_ICW4);

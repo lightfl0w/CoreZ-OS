@@ -968,6 +968,9 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         }
 
         ustack_ptr &= ~amask;
+        if (is64 && ((ustack_ptr -
+                      (uint32_t)(naw + envc + (int32_t)argc + 3) * 8u) & 0xFu))
+            ustack_ptr -= 8;
         ustack_ptr -= (uint32_t)naw * aw;
         aux_dst = ustack_ptr;
         if (ustack_ptr < cur->stack_bottom) {

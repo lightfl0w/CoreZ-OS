@@ -1,4 +1,3 @@
-
 #include "kernel/gui/theme.h"
 
 #include "lib/str/str.h"

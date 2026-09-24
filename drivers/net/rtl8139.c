@@ -5,7 +5,6 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 
-#define RX_BUF_SIZE 8192 + 16
 
 #define REG_CMD 0x37
 #define REG_CAPR 0x38
