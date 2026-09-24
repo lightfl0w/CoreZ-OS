@@ -4,6 +4,7 @@
 #include "kernel/sched/sync.h"
 #include "kernel/gui/gfx.h"
 #include "kernel/gui/theme.h"
+#include "drivers/char/keyboard.h"
 #include <stdint.h>
 
 struct WL_SHM_POOL;
@@ -26,9 +27,9 @@ struct WL_EVENT {
     int32_t a, b, c;
 };
 
-#define MOD_SHIFT 1
-#define MOD_CTRL 2
-#define MOD_ALT 4
+#define MOD_SHIFT KBD_MOD_SHIFT
+#define MOD_CTRL KBD_MOD_CTRL
+#define MOD_ALT KBD_MOD_ALT
 
 struct WL_CLIENT {
     int used;

@@ -325,6 +325,17 @@ struct LINUX_IOVEC {
     uint64_t iov_len;
 };
 
+struct LINUX_MSGHDR {
+    uint64_t name;
+    uint32_t namelen;
+    uint32_t pad;
+    uint64_t iov;
+    uint64_t iovlen;
+    uint64_t ctrl;
+    uint64_t ctrllen;
+    int32_t flags;
+};
+
 struct LINUX_DIRENT64 {
     uint64_t d_ino;
     int64_t d_off;

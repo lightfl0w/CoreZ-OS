@@ -1,27 +1,9 @@
 #include "kernel/gui/wm.h"
 
-#include "arch/x86/interrupt/interrupt.h"
-#include "kernel/gui/font.h"
-#include "kernel/init/pit/pit.h"
-#include "lib/str/str.h"
-#include "drivers/char/console/io.h"
-#include "drivers/char/rtc.h"
+#include "kernel/gui/wm_internal.h"
 
 extern void clients_spawn_next(void);
 extern void clients_broadcast_close(void);
-
-#define SC_ENTER 0x1C
-#define SC_TAB 0x0F
-#define SC_Q 0x10
-#define SC_A 0x1E
-#define SC_M 0x32
-#define SC_T 0x14
-#define SC_E 0x12
-#define SC_1 0x02
-#define SC_UP 0x48
-#define SC_DOWN 0x50
-#define SC_LEFT 0x4B
-#define SC_RIGHT 0x4D
 
 enum WIN_HIT {
     WIN_HIT_NONE = 0,
@@ -51,8 +33,6 @@ struct GUI_WORKSPACE {
 
 static struct GUI_WORKSPACE workspaces[WL_MAX_WS];
 static int cur_ws = 0;
-static int bar_dirty = 1;
-static uint32_t bar_clock = 0;
 
 static struct WL_SURFACE *grab;
 static enum WIN_HIT grab_kind;
@@ -64,19 +44,9 @@ static int last_click_x, last_click_y;
 
 #define DBL_CLICK_TICKS (PIT_HZ * 4 / 10)
 #define SNAP_MARGIN 14
-#define BAR_FONT_PX 12
-#define BAR_PILL_W 24
-#define TASKBAR_H (COMP_BAR_H - 10)
-#define TASKBAR_BTN_MIN 78
-#define TASKBAR_BTN_MAXW 170
-#define TASKBAR_TOP (comp_screen_h() - COMP_BAR_H)
 
 static const int alpha_levels[] = {255, 216, 176, 136};
 static int alpha_idx = 0;
-
-static void bar_invalidate(void) {
-    bar_dirty = 1;
-}
 
 static int ws_index_of(struct GUI_WORKSPACE *ws, struct WL_SURFACE *s) {
     if ((unsigned long)ws < 0xC0000000ul ||
@@ -95,11 +65,10 @@ void wm_init_state(void) {
         workspaces[i].focus = -1;
     }
     cur_ws = 0;
+    wm_bar_reset();
     grab = 0;
     grab_kind = WIN_HIT_NONE;
     alpha_idx = 0;
-    bar_dirty = 1;
-    bar_clock = 0;
 }
 
 int wm_current_ws(void) {
@@ -107,6 +76,10 @@ int wm_current_ws(void) {
     int ws = cur_ws;
     comp_lock_release();
     return ws;
+}
+
+int wm_ws_occupied(int ws) {
+    return ws >= 0 && ws < WL_MAX_WS && workspaces[ws].n > 0;
 }
 
 struct WL_SURFACE *wm_focused_surface(void) {
@@ -162,7 +135,7 @@ static void apply_geom(struct WL_SURFACE *s, int x, int y, int w, int h) {
     }
     clamp_geom(s);
     comp_damage_surface(s);
-    bar_invalidate();
+    wm_bar_invalidate();
 }
 
 static void raise_and_focus(struct GUI_WORKSPACE *ws, int idx) {
@@ -184,58 +157,14 @@ static void raise_and_focus(struct GUI_WORKSPACE *ws, int idx) {
         if (old)
             comp_damage_surface(old);
         comp_damage_surface(ws->win[idx].s);
-        bar_invalidate();
+        wm_bar_invalidate();
     }
-}
-
-struct WIN_ANIM {
-    struct WL_SURFACE *s;
-    int target;
-};
-static struct WIN_ANIM anims[WL_MAX_SURFACES];
-static int anim_n;
-
-static void anim_start(struct WL_SURFACE *s, int target) {
-    for (int i = 0; i < anim_n; i++)
-        if (anims[i].s == s)
-            return;
-    if (anim_n >= WL_MAX_SURFACES)
-        return;
-    wl_surface_set_alpha(s, 0);
-    anims[anim_n].s = s;
-    anims[anim_n].target = target;
-    anim_n++;
-}
-
-int wm_anim_step(void) {
-    comp_lock_acquire();
-    int progressed = 0;
-    for (int i = anim_n - 1; i >= 0; i--) {
-        struct WL_SURFACE *s = anims[i].s;
-        if (!s || !s->used) {
-            anims[i] = anims[--anim_n];
-            continue;
-        }
-        int a = s->alpha + 48;
-        if (a > anims[i].target)
-            a = anims[i].target;
-        wl_surface_set_alpha(s, a);
-        progressed = 1;
-        if (a == anims[i].target)
-            anims[i] = anims[--anim_n];
-    }
-    comp_lock_release();
-    return progressed;
 }
 
 static struct WL_SURFACE *hit_test(int x, int y, enum WIN_HIT *kind);
-static int taskbar_pills_x(void);
-static int taskbar_layout(int *xs, int *bws, int max);
 
 static struct WL_SURFACE *hover_s;
 static int hover_close;
-static int hover_btn = -1;
-static int hover_pill = -1;
 
 int wm_hover_close(struct WL_SURFACE *s) {
     return s != 0 && s == hover_s && hover_close;
@@ -244,8 +173,6 @@ int wm_hover_close(struct WL_SURFACE *s) {
 void wm_handle_hover(int x, int y) {
     struct WL_SURFACE *ns = 0;
     int nclose = 0;
-    int nbtn = -1;
-    int npill = -1;
     if (y < TASKBAR_TOP) {
         enum WIN_HIT kind = WIN_HIT_NONE;
         ns = hit_test(x, y, &kind);
@@ -259,18 +186,7 @@ void wm_handle_hover(int x, int y) {
                       x >= fx + fw - 20 && x < fx + fw - COMP_BORDER);
         }
     } else {
-        int px = taskbar_pills_x();
-        for (int i = 0; i < WL_MAX_WS; i++) {
-            int bx = px + i * (BAR_PILL_W + 4);
-            if (x >= bx && x < bx + BAR_PILL_W)
-                npill = i;
-        }
-        int xs[WL_MAX_SURFACES];
-        int bws[WL_MAX_SURFACES];
-        int n = taskbar_layout(xs, bws, WL_MAX_SURFACES);
-        for (int i = 0; i < n; i++)
-            if (x >= xs[i] && x < xs[i] + bws[i])
-                nbtn = i;
+        wm_bar_hover(x, y);
     }
     if (ns != hover_s || nclose != hover_close) {
         if (hover_s && hover_s->used) {
@@ -288,11 +204,6 @@ void wm_handle_hover(int x, int y) {
             comp_damage_rect(fx, fy, fw, COMP_TITLE_H + COMP_BORDER + 1);
         }
     }
-    if (nbtn != hover_btn || npill != hover_pill) {
-        hover_btn = nbtn;
-        hover_pill = npill;
-        bar_invalidate();
-    }
 }
 
 static void wm_manage_locked(struct WL_SURFACE *s) {
@@ -301,7 +212,7 @@ static void wm_manage_locked(struct WL_SURFACE *s) {
         return;
     s->ws = cur_ws;
     s->alpha = (uint8_t)alpha_levels[alpha_idx];
-    anim_start(s, alpha_levels[alpha_idx]);
+    wm_anim_start(s, alpha_levels[alpha_idx]);
 
     int cascade = ws->n % 6;
     s->w = 480;
@@ -349,7 +260,7 @@ static void wm_unmanage_locked(struct WL_SURFACE *s) {
         ws->focus--;
     comp_log("wm: window closed");
     if (s->ws == cur_ws)
-        bar_invalidate();
+        wm_bar_invalidate();
 }
 
 static void focus_index(struct GUI_WORKSPACE *ws, int idx) {
@@ -362,7 +273,11 @@ static void focus_index(struct GUI_WORKSPACE *ws, int idx) {
     raise_and_focus(ws, idx);
 }
 
-static void ws_switch(int target) {
+void wm_focus_index(int idx) {
+    raise_and_focus(&workspaces[cur_ws], idx);
+}
+
+void wm_switch_ws(int target) {
     if (target == cur_ws || target < 0 || target >= WL_MAX_WS)
         return;
     struct GUI_WORKSPACE *old = &workspaces[cur_ws];
@@ -371,7 +286,7 @@ static void ws_switch(int target) {
     cur_ws = target;
     comp_damage_rect(0, 0, comp_screen_w(), comp_screen_h());
     comp_log("wm: switch workspace");
-    bar_invalidate();
+    wm_bar_invalidate();
 }
 
 static void move_focused_to(int target) {
@@ -403,7 +318,7 @@ static void move_focused_to(int target) {
         cur->focus = cur->n - 1;
     s->ws = target;
     comp_log("wm: window moved to workspace");
-    bar_invalidate();
+    wm_bar_invalidate();
 }
 
 static void toggle_maximize(void) {
@@ -435,7 +350,7 @@ static void cycle_alpha(void) {
     struct WL_SURFACE *s = wm_focused_surface();
     if (s)
         wl_surface_set_alpha(s, alpha_levels[alpha_idx]);
-    bar_invalidate();
+    wm_bar_invalidate();
 }
 
 static void nudge_focused(int dx, int dy) {
@@ -529,11 +444,11 @@ void wm_handle_key(uint8_t scancode, int pressed, uint8_t mods) {
     if (!pressed) {
         if (tab_sel >= 0)
             kprintf("wm: tab release sc=%02x sel=%d\n", scancode, tab_sel);
-        if (scancode == 0x38 && tab_sel >= 0)
+        if (scancode == KBD_SC_ALT && tab_sel >= 0)
             tab_commit();
         return;
     }
-    if (scancode == 0x0F)
+    if (scancode == KBD_SC_TAB)
         kprintf("wm: tab press mods=%x\n", mods);
     cur_mods = mods;
 
@@ -546,54 +461,54 @@ void wm_handle_key(uint8_t scancode, int pressed, uint8_t mods) {
 
     int shift = mods & MOD_SHIFT;
 
-    if (scancode >= SC_1 && scancode < SC_1 + WL_MAX_WS) {
-        int target = scancode - SC_1;
+    if (scancode >= KBD_SC_1 && scancode < KBD_SC_1 + WL_MAX_WS) {
+        int target = scancode - KBD_SC_1;
         if (shift)
             move_focused_to(target);
         else
-            ws_switch(target);
+            wm_switch_ws(target);
         return;
     }
 
     switch (scancode) {
-    case SC_ENTER:
+    case KBD_SC_ENTER:
         clients_spawn_next();
         break;
-    case SC_TAB:
+    case KBD_SC_TAB:
         tab_advance();
         break;
-    case SC_Q: {
+    case KBD_SC_Q: {
         struct WL_SURFACE *f = wm_focused_surface();
         if (f)
             comp_send_close(f);
         break;
     }
-    case SC_A:
+    case KBD_SC_A:
         cycle_alpha();
         break;
-    case SC_M:
+    case KBD_SC_M:
         toggle_maximize();
         break;
-    case SC_T:
+    case KBD_SC_T:
         comp_log(theme()->name);
         theme_toggle();
         comp_invalidate_all();
         comp_damage_rect(0, 0, comp_screen_w(), comp_screen_h());
-        bar_invalidate();
+        wm_bar_invalidate();
         break;
-    case SC_LEFT:
+    case KBD_SC_LEFT:
         nudge_focused(shift ? -1 : -16, 0);
         break;
-    case SC_RIGHT:
+    case KBD_SC_RIGHT:
         nudge_focused(shift ? 1 : 16, 0);
         break;
-    case SC_UP:
+    case KBD_SC_UP:
         nudge_focused(0, shift ? -1 : -16);
         break;
-    case SC_DOWN:
+    case KBD_SC_DOWN:
         nudge_focused(0, shift ? 1 : 16);
         break;
-    case SC_E:
+    case KBD_SC_E:
         if (shift) {
             comp_log("wm: session exit requested");
             clients_broadcast_close();
@@ -690,58 +605,6 @@ static void apply_snap(struct WL_SURFACE *s) {
     snap_pending = WIN_HIT_NONE;
 }
 
-static int taskbar_btn_w(struct WL_SURFACE *s) {
-    int w = font_text_width(s->title, BAR_FONT_PX) + 22;
-    if (w < TASKBAR_BTN_MIN)
-        w = TASKBAR_BTN_MIN;
-    if (w > TASKBAR_BTN_MAXW)
-        w = TASKBAR_BTN_MAXW;
-    return w;
-}
-
-static int taskbar_pills_x(void) {
-    return comp_screen_w() - 8 - (WL_MAX_WS * (BAR_PILL_W + 4) - 4);
-}
-
-static int taskbar_layout(int *xs, int *bws, int max) {
-    struct GUI_WORKSPACE *ws = &workspaces[cur_ws];
-    int limit = taskbar_pills_x() - 12 - font_text_width("00:00",
-                                                         BAR_FONT_PX) - 8;
-    int x = 8;
-    int n = 0;
-    for (int i = 0; i < ws->n && n < max; i++) {
-        int bw = taskbar_btn_w(ws->win[i].s);
-        if (x + bw > limit)
-            break;
-        xs[n] = x;
-        bws[n] = bw;
-        x += bw + 4;
-        n++;
-    }
-    return n;
-}
-
-static void taskbar_click(int x, int y) {
-    if (y < TASKBAR_TOP + 1 || y >= comp_screen_h() - 1)
-        return;
-    int px = taskbar_pills_x();
-    for (int i = 0; i < WL_MAX_WS; i++) {
-        int bx = px + i * (BAR_PILL_W + 4);
-        if (x >= bx && x < bx + BAR_PILL_W) {
-            ws_switch(i);
-            return;
-        }
-    }
-    int xs[WL_MAX_SURFACES], bws[WL_MAX_SURFACES];
-    int n = taskbar_layout(xs, bws, WL_MAX_SURFACES);
-    for (int i = 0; i < n; i++) {
-        if (x >= xs[i] && x < xs[i] + bws[i]) {
-            raise_and_focus(&workspaces[cur_ws], i);
-            return;
-        }
-    }
-}
-
 void wm_handle_button(int x, int y, uint8_t buttons, uint8_t edge) {
     if ((edge & 1) && !(buttons & 1)) {
         if (grab && snap_pending != WIN_HIT_NONE)
@@ -756,7 +619,7 @@ void wm_handle_button(int x, int y, uint8_t buttons, uint8_t edge) {
     if (!(buttons & 1))
         return;
     if (y >= TASKBAR_TOP) {
-        taskbar_click(x, y);
+        wm_bar_click(x, y);
         return;
     }
     enum WIN_HIT kind = WIN_HIT_NONE;
@@ -858,81 +721,6 @@ int wm_collect_visible(struct WL_SURFACE **out, int max) {
     return n;
 }
 
-int wm_bar_check_dirty(void) {
-    comp_lock_acquire();
-    if (tick / PIT_HZ != bar_clock) {
-        bar_clock = tick / PIT_HZ;
-        bar_dirty = 1;
-    }
-    int d = bar_dirty;
-    bar_dirty = 0;
-    comp_lock_release();
-    return d;
-}
-
-void wm_draw_bar(struct GFX_CANVAS *c, struct GFX_RECT *clip) {
-    int sw = comp_screen_w();
-    struct GFX_RECT bar = {0, TASKBAR_TOP, sw, COMP_BAR_H}, v;
-    if (!gfx_rect_intersect(bar, *clip, &v))
-        return;
-    const struct GUI_THEME *t = theme();
-
-    gfx_fill(c, v.x, v.y, v.w, v.h, t->bar);
-    gfx_hline(c, 0, TASKBAR_TOP, sw, t->bar_line);
-
-    int by = TASKBAR_TOP + 5;
-    int ty = by + (TASKBAR_H - font_ascent(BAR_FONT_PX)) / 2;
-    struct WL_SURFACE *f = wm_focused_surface();
-    struct GUI_WORKSPACE *ws = &workspaces[cur_ws];
-
-    int xs[WL_MAX_SURFACES], bws[WL_MAX_SURFACES];
-    int n = taskbar_layout(xs, bws, WL_MAX_SURFACES);
-    for (int i = 0; i < n; i++) {
-        struct WL_SURFACE *s = ws->win[i].s;
-        int focused = (s == f);
-        gfx_fill_round(c, xs[i], by, bws[i], TASKBAR_H, 6,
-                       focused ? t->accent
-                               : (i == hover_btn ? t->frame_foc
-                                                 : t->frame_unf));
-        struct GFX_RECT btn = {xs[i], by, bws[i], TASKBAR_H}, bv;
-        if (!gfx_rect_intersect(btn, v, &bv))
-            continue;
-        font_draw_clip(c, xs[i] + 9, ty, s->title, BAR_FONT_PX,
-                       focused ? t->title_fg_foc : t->text, &bv);
-    }
-
-    int px = taskbar_pills_x();
-    for (int i = 0; i < WL_MAX_WS; i++) {
-        int cur = (i == cur_ws);
-        int occ = workspaces[i].n > 0;
-        int bx = px + i * (BAR_PILL_W + 4);
-        gfx_color pill = cur ? t->accent
-                             : (i == hover_pill ? t->frame_foc
-                                                : (occ ? t->frame_unf
-                                                       : t->dim));
-        gfx_fill_round(c, bx, by, BAR_PILL_W, TASKBAR_H, 6, pill);
-        char label[4] = {' ', (char)('1' + i), ' ', 0};
-        gfx_color fg = cur ? t->title_fg_foc : (occ ? t->text : t->muted);
-        int lw = font_text_width(label, BAR_FONT_PX);
-        font_draw_clip(c, bx + (BAR_PILL_W - lw) / 2, ty, label, BAR_FONT_PX,
-                       fg, &v);
-    }
-
-    uint8_t hh;
-    uint8_t mm;
-    uint8_t ss;
-    rtc_read_time(&hh, &mm, &ss);
-    char up[8];
-    up[0] = (char)('0' + hh / 10);
-    up[1] = (char)('0' + hh % 10);
-    up[2] = ':';
-    up[3] = (char)('0' + mm / 10);
-    up[4] = (char)('0' + mm % 10);
-    up[5] = 0;
-    int rw = font_text_width(up, BAR_FONT_PX);
-    font_draw_clip(c, px - 12 - rw, ty, up, BAR_FONT_PX, t->muted, &v);
-    (void)ss;
-}
 
 void wm_manage(struct WL_SURFACE *s) {
     comp_lock_acquire();
