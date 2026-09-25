@@ -8,6 +8,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/dir.h"
+#include "drivers/char/rtc.h"
 
 /**
  * ext2 元数据读写锁。
@@ -257,6 +258,9 @@ static int ext2_read_inode_impl(uint32_t ino, struct FS_INODE *out) {
     out->i_uid = *(uint16_t *)(p + 2);
     out->i_size = *(uint32_t *)(p + 4);
     out->i_gid = *(uint16_t *)(p + 24);
+    out->i_atime = *(uint32_t *)(p + 8);
+    out->i_ctime = *(uint32_t *)(p + 12);
+    out->i_mtime = *(uint32_t *)(p + 16);
     uint32_t bi = 0;
     for (bi = 0; bi < 15; bi++) {
         out->i_block[bi] = *(uint32_t *)(p + 40 + 4 * bi);
@@ -403,6 +407,9 @@ static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in) {
     *(uint16_t *)(p + 2) = (uint16_t)in->i_uid;
     *(uint16_t *)(p + 24) = (uint16_t)in->i_gid;
     *(uint32_t *)(p + 4) = in->i_size;
+    *(uint32_t *)(p + 8) = in->i_atime;
+    *(uint32_t *)(p + 12) = in->i_ctime;
+    *(uint32_t *)(p + 16) = in->i_mtime;
     for (uint32_t bi = 0; bi < 15; bi++) {
         *(uint32_t *)(p + 40 + 4 * bi) = in->i_block[bi];
     }
@@ -557,6 +564,9 @@ static int ext2_write_to_inode_impl(struct FS_INODE *ino, uint32_t off,
         ino->i_size = off + done;
     }
     if (done > 0) {
+        uint32_t now = (uint32_t)rtc_unix_time();
+        ino->i_mtime = now;
+        ino->i_ctime = now;
         ext2_write_inode_impl(ino->i_no, (struct FS_INODE *)ino);
     }
     return (int)done;
@@ -632,6 +642,9 @@ static uint32_t ext2_new_inode_impl(uint32_t mode, struct FS_INODE *out) {
     out->i_no = ino;
     out->i_mode = mode;
     out->i_size = 0;
+    out->i_atime = (uint32_t)rtc_unix_time();
+    out->i_ctime = out->i_atime;
+    out->i_mtime = out->i_atime;
     memset(out->i_block, 0, sizeof(out->i_block));
     if (ext2_write_inode_impl(ino, out)) {
         ext2_free_inode_impl(ino);
@@ -937,7 +950,7 @@ static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
     return (int)len;
 }
 
-static int ext2_abs_path(const char *path, char *out, uint32_t cap) {
+int ext2_abs_path(const char *path, char *out, uint32_t cap) {
     if (path == NULL || path[0] == 0) {
         return -1;
     }

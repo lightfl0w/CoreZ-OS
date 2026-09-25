@@ -348,6 +348,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_openat] = lc_openat,
     [SYS_LINUX_newfstatat] = lc_newfstatat,
     [SYS_LINUX_unlinkat] = lc_unlinkat,
+    [SYS_LINUX_utimensat] = lc_utimensat,
     [SYS_LINUX_mkdirat] = lc_mkdirat,
     [SYS_LINUX_renameat] = lc_renameat,
     [SYS_LINUX_renameat2] = lc_renameat2,

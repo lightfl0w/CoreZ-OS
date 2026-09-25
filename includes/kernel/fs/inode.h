@@ -11,6 +11,9 @@ struct FS_INODE {
     uint32_t i_mode;
     uint32_t i_uid;
     uint32_t i_gid;
+    uint32_t i_atime;
+    uint32_t i_ctime;
+    uint32_t i_mtime;
     uint32_t i_open_cnt;
     uint8_t write_deny;
     uint32_t i_block[15];

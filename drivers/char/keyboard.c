@@ -1,6 +1,7 @@
 #include "drivers/char/keyboard.h"
 #include "drivers/driver_ops.h"
 #include "drivers/char/tty.h"
+#include "drivers/char/console/io.h"
 
 #include "kernel/asm_func.h"
 #include "kernel/sched/thread.h"

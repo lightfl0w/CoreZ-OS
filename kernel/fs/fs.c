@@ -60,17 +60,24 @@ int search_file(const char *pathname) {
 }
 
 static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir);
+int create_file_mode(const char *pathname, uint32_t mode) {
+    return ext2_create_common(pathname, 0x8000u | (mode & 0o7777u), 0);
+}
 int create_file(const char *pathname) {
-    return ext2_create_common(pathname, 0x8000u, 0);
+    return create_file_mode(pathname, 0o666);
 }
 
 static int split_parent_path(const char *pathname, char *parent, char *base,
                              uint32_t buf_len) {
-    uint32_t plen = (uint32_t)strlen(pathname);
+    char abs[MAX_PATH_LEN];
+    if (ext2_abs_path(pathname, abs, sizeof(abs)) != 0) {
+        return -1;
+    }
+    uint32_t plen = (uint32_t)strlen(abs);
     if (plen >= buf_len) {
         return -1;
     }
-    memcpy(parent, pathname, plen + 1);
+    memcpy(parent, abs, plen + 1);
     uint32_t i = plen;
     while (i > 1 && parent[i - 1] == '/') {
         parent[--i] = 0;
@@ -298,7 +305,7 @@ int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev) {
     return ext2_write_inode(ino, &node) ? -1 : 0;
 }
 
-int open_file(const char *pathname, uint8_t flags) {
+int open_file_mode(const char *pathname, uint8_t flags, uint32_t mode) {
     if (pathname == NULL || pathname[strlen(pathname) - 1] == '/') {
         return -1;
     }
@@ -325,7 +332,7 @@ int open_file(const char *pathname, uint8_t flags) {
     int is_dir = 0;
     if (ext2_lookup(pathname, &ino, &is_dir)) {
         if ((flags & O_CREAT) != 0) {
-            if (create_file(pathname) <= 0) {
+            if (create_file_mode(pathname, mode & ~current->umask) <= 0) {
                 current->errno = 2;
                 return -1;
             }
@@ -380,6 +387,28 @@ int open_file(const char *pathname, uint8_t flags) {
         return -1;
     }
     return fd;
+}
+
+int open_file(const char *pathname, uint8_t flags) {
+    return open_file_mode(pathname, flags, 0o666);
+}
+
+uint32_t fs_dir_nlink(uint32_t ino) {
+    struct FS_INODE *dino = inode_open(cur_part, ino);
+    if (dino == NULL) {
+        return 2;
+    }
+    uint32_t pos = 0;
+    uint32_t n = 2;
+    struct FS_DIRENT de;
+    while (ext2_dir_next(dino, &pos, &de) == 0) {
+        if (de.f_type == FT_DIRECTORY && strcmp(de.filename, ".") != 0 &&
+            strcmp(de.filename, "..") != 0) {
+            n++;
+        }
+    }
+    inode_close(dino);
+    return n;
 }
 
 int close_file(int fd) {
@@ -677,7 +706,8 @@ int32_t sys_mkdir(const char *pathname) {
     if (pathname == NULL) {
         return -1;
     }
-    int r = ext2_create_common(pathname, 0x4000u, 1);
+    uint32_t perms = 0o777u & ~current->umask;
+    int r = ext2_create_common(pathname, 0x4000u | perms, 1);
     return r > 0 ? 0 : -1;
 }
 

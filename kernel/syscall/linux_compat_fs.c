@@ -369,6 +369,21 @@ void compat_stat_fill(struct LINUX_STAT *ls, uint32_t ino, int64_t size,
     ls->st_mtim = ls->st_atim;
     ls->st_ctim = ls->st_atim;
 }
+static void stat_fill_inode(struct LINUX_STAT *ls, uint32_t ino,
+                            uint32_t mode) {
+    struct FS_INODE obj;
+    uint32_t now = (uint32_t)rtc_unix_time();
+    ls->st_nlink = (mode & 0xF000u) == 0x4000u ? fs_dir_nlink(ino) : 1;
+    if (ext2_read_inode(ino, &obj) != 0) {
+        ls->st_atim.tv_sec = now;
+        ls->st_mtim.tv_sec = now;
+        ls->st_ctim.tv_sec = now;
+        return;
+    }
+    ls->st_atim.tv_sec = obj.i_atime ? (int64_t)obj.i_atime : (int64_t)now;
+    ls->st_mtim.tv_sec = obj.i_mtime ? (int64_t)obj.i_mtime : (int64_t)now;
+    ls->st_ctim.tv_sec = obj.i_ctime ? (int64_t)obj.i_ctime : (int64_t)now;
+}
 int32_t compat_stat_linux(const char *path, uint64_t ub, int follow) {
     struct LINUX_STAT ls;
     uint32_t ino = 0, size = 0, mode = 0, uid = 0, gid = 0;
@@ -378,6 +393,7 @@ int32_t compat_stat_linux(const char *path, uint64_t ub, int follow) {
         return -LINUX_ENOENT;
     } else {
         compat_stat_fill(&ls, ino, (int64_t)size, mode, uid, gid);
+        stat_fill_inode(&ls, ino, mode);
     }
     memcpy((void *)(uintptr_t)ub, &ls, sizeof(ls));
     return 0;
@@ -392,6 +408,7 @@ int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, pf->fd_inode->i_no, (int64_t)pf->fd_inode->i_size,
                          pf->fd_inode->i_mode, pf->fd_inode->i_uid,
                          pf->fd_inode->i_gid);
+        stat_fill_inode(&ls, pf->fd_inode->i_no, pf->fd_inode->i_mode);
     } else if (is_pipe(fd)) {
         compat_stat_fill(&ls, 0, 0, LINUX_S_IFIFO | 0600u, 0, 0);
     } else {
@@ -402,12 +419,13 @@ int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, pf->fd_inode->i_no,
                          (int64_t)pf->fd_inode->i_size, pf->fd_inode->i_mode,
                          pf->fd_inode->i_uid, pf->fd_inode->i_gid);
+        stat_fill_inode(&ls, pf->fd_inode->i_no, pf->fd_inode->i_mode);
     }
     memcpy((void *)(uintptr_t)ub, &ls, sizeof(ls));
     return 0;
 }
-int32_t compat_openat(int32_t dirfd, const char *kpath,
-                             uint32_t lflags) {
+int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags,
+                      uint32_t mode) {
     if (dirfd != LINUX_AT_FDCWD)
         return -LINUX_EINVAL;
     struct FS_STAT pst;
@@ -428,7 +446,9 @@ int32_t compat_openat(int32_t dirfd, const char *kpath,
         if (sys_stat(kpath, &pst) == 0)
             return -LINUX_EEXIST;
     }
-    int32_t fd = open_file(kpath, (uint8_t)compat_flags_linux2native(lflags));
+    int32_t fd = open_file_mode(kpath,
+                                (uint8_t)compat_flags_linux2native(lflags),
+                                mode & 0o7777u & ~current->umask);
     if (fd < 0)
         return -(current->errno > 0 ? current->errno : LINUX_ENOENT);
     if (lflags & LINUX_O_TRUNC)
@@ -804,14 +824,14 @@ int64_t lc_open(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)b);
+    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)b, (uint32_t)c);
 }
 int64_t lc_openat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     int rc = lc_at_path(r, (int32_t)a, b, kpath);
     if (rc != 0)
         return rc;
-    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)c);
+    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)c, (uint32_t)d);
 }
 int64_t lc_newfstatat(LC_ARGS) {
     if (!user_ptr_ok(r, c, sizeof(struct LINUX_STAT), 1))
@@ -870,6 +890,51 @@ int64_t lc_faccessat(LC_ARGS) {
     if (rc != 0)
         return rc;
     return sys_access(kpath, (int32_t)c);
+}
+int64_t lc_utimensat(LC_ARGS) {
+    uint32_t now = (uint32_t)rtc_unix_time();
+    uint32_t at = now;
+    uint32_t mt = now;
+    if (c != 0) {
+        struct LINUX_TIMESPEC ts[2];
+        if (!user_ptr_ok(r, c, sizeof(ts), 1))
+            return -LINUX_EFAULT;
+        memcpy(ts, (const void *)(uintptr_t)c, sizeof(ts));
+        if (ts[0].tv_nsec != LINUX_UTIME_OMIT)
+            at = ts[0].tv_nsec == LINUX_UTIME_NOW ? now
+                                                  : (uint32_t)ts[0].tv_sec;
+        if (ts[1].tv_nsec != LINUX_UTIME_OMIT)
+            mt = ts[1].tv_nsec == LINUX_UTIME_NOW ? now
+                                                  : (uint32_t)ts[1].tv_sec;
+    }
+    uint32_t ino = 0;
+    if (b == 0 || *(const char *)(uintptr_t)b == 0) {
+        if (a < 0 || a >= MAX_FILES_OPEN_PER_PROC)
+            return -LINUX_EBADF;
+        struct FILE *pf = file_get(fd_local2global((uint32_t)a));
+        if (pf == NULL || pf->fd_inode == NULL)
+            return -LINUX_EBADF;
+        ino = pf->fd_inode->i_no;
+    } else {
+        char kpath[MAX_PATH_LEN];
+        int rc = lc_at_path(r, (int32_t)a, b, kpath);
+        if (rc != 0)
+            return rc;
+        int ft = 0;
+        if (ext2_lookup_ftype(kpath, &ino, &ft, 1) != 0)
+            return -LINUX_ENOENT;
+    }
+    struct FS_INODE obj;
+    if (ext2_read_inode(ino, &obj))
+        return -LINUX_EIO;
+    if (current->euid != 0 && current->euid != obj.i_uid &&
+        fs_check_perm(&obj, 2u)) {
+        return -LINUX_EACCES;
+    }
+    obj.i_atime = at;
+    obj.i_mtime = mt;
+    obj.i_ctime = now;
+    return ext2_write_inode(ino, &obj) ? -LINUX_EIO : 0;
 }
 
 int64_t lc0_open(LC_ARGS) {

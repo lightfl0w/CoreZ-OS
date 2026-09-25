@@ -26,7 +26,6 @@ static uint32_t wake_pid[MAX_TASKS];
 #define SCHED_LATENCY 8U
 static uint64_t min_vruntime;
 static uint64_t run_bitmap;
-static int64_t rq_sum;
 static uint64_t rq_weight;
 static uint64_t rq_avg;
 
@@ -103,28 +102,26 @@ static int is_idle_task(const struct TASK *t) {
     return 0;
 }
 
-static void rq_bump(int64_t delta) {
-    int64_t v = (int64_t)rq_avg + delta;
-    rq_avg = v > 0 ? (uint64_t)v : 0;
-}
-
 static void rq_add(struct TASK *t) {
-    rq_sum += (int64_t)t->weight * ((int64_t)t->vruntime - (int64_t)rq_avg);
-    rq_weight += t->weight;
-    rq_bump(rq_sum / (int64_t)rq_weight);
+    int64_t w = (int64_t)t->weight;
+    int64_t total = (int64_t)rq_weight + w;
+    int64_t v = (int64_t)rq_avg +
+                w * ((int64_t)t->vruntime - (int64_t)rq_avg) / total;
+    rq_avg = v > 0 ? (uint64_t)v : 0;
+    rq_weight = (uint64_t)total;
 }
 
 static void rq_del(struct TASK *t) {
-    int64_t ve = (int64_t)t->vruntime;
-    rq_weight -= t->weight;
-    rq_sum -= (int64_t)t->weight * (ve - (int64_t)rq_avg);
-    if (rq_weight)
-        rq_bump(rq_sum / (int64_t)rq_weight);
-    else {
-        rq_sum = 0;
-        if (rq_avg < min_vruntime)
-            rq_avg = min_vruntime;
+    int64_t w = (int64_t)t->weight;
+    int64_t total = (int64_t)rq_weight - w;
+    if (total > 0) {
+        int64_t v = (int64_t)rq_avg -
+                    w * ((int64_t)t->vruntime - (int64_t)rq_avg) / total;
+        rq_avg = v > 0 ? (uint64_t)v : 0;
+    } else {
+        rq_avg = min_vruntime;
     }
+    rq_weight = (uint64_t)(total > 0 ? total : 0);
 }
 
 static void set_status(struct TASK *t, enum TASK_STATUS status) {

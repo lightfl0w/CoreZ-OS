@@ -415,7 +415,7 @@ def build(build_dir, out, smoke=False, autoexec=None):
         for name, _ in EXTRA_DIRS:
             ino = dir_inos[name]
             f.seek(base * SECTOR + dir_blk_list[name] * BLOCK)
-            f.write(build_dirent_blocks([(ino, 2, "."), (ino, 2, "..")]))
+            f.write(build_dirent_blocks([(ino, 2, "."), (2, 2, "..")]))
         for dirname, entries in subdir_entries.items():
             f.seek(base * SECTOR + subdir_dir_blocks[dirname] * BLOCK)
             f.write(build_dirent_blocks(entries))

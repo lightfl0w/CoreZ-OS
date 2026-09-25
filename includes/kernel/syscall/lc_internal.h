@@ -58,7 +58,8 @@ int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count);
 int32_t compat_getitimer(uint32_t which, uint64_t cur_val);
 int32_t compat_getpgid(uint32_t pid);
 int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg);
-int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags);
+int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags,
+                      uint32_t mode);
 int32_t compat_read(int32_t fd, void *buf, uint32_t count);
 int32_t compat_readv(int32_t fd, struct LINUX_IOVEC *iov, int32_t iovcnt);
 int32_t compat_set_thread_area(uint32_t base);
@@ -219,6 +220,7 @@ int64_t lc_umask(LC_ARGS);
 int64_t lc_uname(LC_ARGS);
 int64_t lc_unlink(LC_ARGS);
 int64_t lc_unlinkat(LC_ARGS);
+int64_t lc_utimensat(LC_ARGS);
 int64_t lc_wait4(LC_ARGS);
 int64_t lc_waitid(LC_ARGS);
 int64_t lc_write(LC_ARGS);

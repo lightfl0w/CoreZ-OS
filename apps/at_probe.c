@@ -11,6 +11,8 @@ static int checks, passed;
         checks++;                                                                                                          \
         if (c)                                                                                                             \
             passed++;                                                                                                      \
+        else                                                                                                               \
+            printf("  at_probe fail@%d\n", __LINE__);                                                                       \
     } while (0)
 
 int main(void) {
@@ -32,6 +34,40 @@ int main(void) {
 
     CK(lstat("/bin/sh", &st) == 0 && S_ISLNK(st.st_mode));
     CK(stat("/bin/sh", &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0);
+
+    int tfd = open("/tmp", O_RDONLY | O_DIRECTORY);
+    CK(tfd >= 0);
+    int nf = openat(tfd, "atp", O_CREAT | O_RDWR, 0644);
+    CK(nf >= 0);
+    if (nf >= 0)
+        close(nf);
+    CK(fstatat(tfd, "atp", &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+       S_ISREG(st.st_mode));
+    CK(chdir("/tmp") == 0);
+    CK(getcwd(cwd, sizeof cwd) != 0 && strcmp(cwd, "/tmp") == 0);
+    CK(stat("atp", &st) == 0 && S_ISREG(st.st_mode));
+    CK(unlink("atp") == 0);
+
+    int mfd = open("/tmp/atm", O_CREAT | O_RDWR, 0644);
+    CK(mfd >= 0);
+    if (mfd >= 0)
+        close(mfd);
+    CK(stat("/tmp/atm", &st) == 0 && (st.st_mode & 07777u) == 0644u &&
+       st.st_mtime > 0);
+    struct timespec ts2[2] = {{1000000000, 0}, {1000000000, 0}};
+    CK(utimensat(AT_FDCWD, "/tmp/atm", ts2, 0) == 0);
+    CK(stat("/tmp/atm", &st) == 0 && st.st_mtim.tv_sec == 1000000000);
+    int wfd = open("/tmp/atm", O_WRONLY);
+    CK(wfd >= 0 && write(wfd, "x", 1) == 1);
+    if (wfd >= 0)
+        close(wfd);
+    CK(stat("/tmp/atm", &st) == 0 && st.st_mtime > 1000000000);
+    CK(unlink("/tmp/atm") == 0);
+    CK(stat("/lib", &st) == 0 && S_ISDIR(st.st_mode) && st.st_nlink >= 2);
+
+    chdir("/");
+    if (tfd >= 0)
+        close(tfd);
 
     CK(chdir("/etc") == 0);
     CK(getcwd(cwd, sizeof cwd) != 0 && strcmp(cwd, "/etc") == 0);

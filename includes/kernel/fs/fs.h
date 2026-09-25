@@ -44,7 +44,10 @@ int search_dir_entry(struct DISK_PARTITION *part, struct FS_DIR *pdir, const cha
                      struct FS_DIRENT *dir_e);
 int search_file(const char *pathname);
 int create_file(const char *pathname);
+int create_file_mode(const char *pathname, uint32_t mode);
 int open_file(const char *pathname, uint8_t flags);
+int open_file_mode(const char *pathname, uint8_t flags, uint32_t mode);
+uint32_t fs_dir_nlink(uint32_t ino);
 int close_file(int fd);
 uint32_t read_file(int fd, void *buf, uint32_t count);
 uint32_t write_file(int fd, const void *buf, uint32_t count);
