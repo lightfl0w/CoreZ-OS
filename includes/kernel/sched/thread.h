@@ -44,11 +44,9 @@ struct TASK {
     uint32_t pid;
     char name[16];
     uint8_t priority;
-    uint8_t ticks;
     uint32_t elapsed_ticks;
     uint64_t vruntime;
     uint64_t deadline;
-    int64_t vlag;
     uint32_t weight;
     uint32_t slice;
     struct LIST_ELEM all_list_tag;

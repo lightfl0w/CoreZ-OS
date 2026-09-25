@@ -21,18 +21,23 @@ static uint64_t sleep_bitmap;
 static uint32_t wake_tick[MAX_TASKS];
 static uint32_t wake_pid[MAX_TASKS];
 
-#define W0 1024U          
-#define MIN_SLICE 4U      
+#define W0 1024U
+#define WVSTEP (W0 << 10)
+#define SCHED_LATENCY 8U
 static uint64_t min_vruntime;
+static uint64_t run_bitmap;
+static int64_t rq_sum;
+static uint64_t rq_weight;
+static uint64_t rq_avg;
 
 static uint32_t prio_to_weight(uint8_t prio) {
     uint32_t p = prio ? prio : 1;
-    uint32_t w = W0 / (1u + p); 
+    uint32_t w = W0 / (1u + p);
     return w < 16u ? 16u : w;
 }
 
-static uint32_t entity_slice(uint32_t weight) {
-    uint64_t s = (uint64_t)MIN_SLICE * W0 / weight;
+static uint32_t weight_slice(uint32_t weight) {
+    uint64_t s = (uint64_t)SCHED_LATENCY * WVSTEP / weight;
     return s ? (uint32_t)s : 1u;
 }
 
@@ -91,6 +96,74 @@ static inline uint32_t aff_of(const struct TASK *t) {
     return t->cpu_aff ? (uint32_t)t->cpu_aff : ((1u << NR_CPU) - 1u);
 }
 
+static int is_idle_task(const struct TASK *t) {
+    for (uint32_t k = 0; k < NR_CPU; k++)
+        if (t == idle_threads[k])
+            return 1;
+    return 0;
+}
+
+static void rq_bump(int64_t delta) {
+    int64_t v = (int64_t)rq_avg + delta;
+    rq_avg = v > 0 ? (uint64_t)v : 0;
+}
+
+static void rq_add(struct TASK *t) {
+    rq_sum += (int64_t)t->weight * ((int64_t)t->vruntime - (int64_t)rq_avg);
+    rq_weight += t->weight;
+    rq_bump(rq_sum / (int64_t)rq_weight);
+}
+
+static void rq_del(struct TASK *t) {
+    int64_t ve = (int64_t)t->vruntime;
+    rq_weight -= t->weight;
+    rq_sum -= (int64_t)t->weight * (ve - (int64_t)rq_avg);
+    if (rq_weight)
+        rq_bump(rq_sum / (int64_t)rq_weight);
+    else {
+        rq_sum = 0;
+        if (rq_avg < min_vruntime)
+            rq_avg = min_vruntime;
+    }
+}
+
+static void set_status(struct TASK *t, enum TASK_STATUS status) {
+    uint64_t bit = 1ULL << task_slot(t);
+    int was = (run_bitmap & bit) != 0;
+    int now = !is_idle_task(t) &&
+              (status == TASK_RUNNING || status == TASK_READY);
+    t->status = status;
+    if (now && !was) {
+        run_bitmap |= bit;
+        rq_add(t);
+    } else if (!now && was) {
+        run_bitmap &= ~bit;
+        rq_del(t);
+    }
+}
+
+static uint64_t rq_avg_now(void) {
+    return rq_weight ? rq_avg : min_vruntime;
+}
+
+static void place_entity(struct TASK *t) {
+    uint64_t avg = rq_avg_now();
+    uint64_t lag = t->slice / 2;
+    if (lag < 1)
+        lag = 1;
+    if (t->vruntime + lag < avg)
+        t->vruntime = avg - lag;
+    if (avg > 0 && t->vruntime >= avg)
+        t->vruntime = avg - 1;
+    t->deadline = t->vruntime + t->slice;
+}
+
+static void renew_deadline(struct TASK *t) {
+    if ((int64_t)(t->vruntime - t->deadline) < 0)
+        return;
+    t->deadline = t->vruntime + t->slice;
+}
+
 static void ready_enqueue(struct TASK *t) {
     uint64_t bit = 1ULL << task_slot(t);
     if (ready_bitmap & bit)
@@ -98,19 +171,15 @@ static void ready_enqueue(struct TASK *t) {
 
     if (t->status != TASK_RUNNING) {
         t->on_cpu = NR_CPU;
-        if (t->vruntime > min_vruntime)
-            t->vruntime = min_vruntime;
-        else if (t->vruntime + t->slice < min_vruntime)
-            t->vruntime = min_vruntime - t->slice;
+        place_entity(t);
     }
-    t->deadline = t->vruntime + t->slice;
     ready_bitmap |= bit;
     uint32_t aff = aff_of(t);
     for (uint32_t c = 0; c < NR_CPU; c++) {
         if (aff & (1u << c))
             ready_cpu[c] |= bit;
     }
-    t->status = TASK_READY;
+    set_status(t, TASK_READY);
 }
 
 static void ready_remove(struct TASK *t) {
@@ -159,7 +228,7 @@ static void init_fd_table(struct TASK *t) {
 }
 
 static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
-    t->status = TASK_BLOCKED;
+    set_status(t, TASK_BLOCKED);
     t->pid = cpu_xadd32(&pid_alloc, 1);
     t->elapsed_ticks = 0;
     t->kernel_stack_top = 0;
@@ -236,7 +305,7 @@ static void thread_create_idle(uint32_t cpu) {
         return;
     uint32_t f = sched_lock_irq();
     ready_remove(t);
-    t->status = TASK_BLOCKED;
+    set_status(t, TASK_BLOCKED);
     idle_threads[cpu] = t;
     sched_unlock_irq(f);
 }
@@ -255,16 +324,13 @@ void thread_init(void) {
 
     set_current(&task_table[0]);
     task_table[0].self_kstack = 0;
-    task_table[0].status = TASK_RUNNING;
     task_table[0].pid = pid_alloc++;
     strcpy(task_table[0].name, "main");
     task_table[0].priority = 5;
-    task_table[0].ticks = 5;
     task_table[0].weight = prio_to_weight(5);
-    task_table[0].slice = entity_slice(task_table[0].weight);
+    task_table[0].slice = weight_slice(task_table[0].weight);
     task_table[0].vruntime = 0;
     task_table[0].deadline = task_table[0].slice;
-    task_table[0].vlag = 0;
     task_table[0].elapsed_ticks = 0;
     task_table[0].kernel_stack_top = 0;
     task_table[0].pml4_phys = 0;
@@ -289,6 +355,7 @@ void thread_init(void) {
     task_table[0].cpu_aff = 1;
     task_table[0].on_cpu = 0;
     fpu_state_reset(&task_table[0]);
+    set_status(&task_table[0], TASK_RUNNING);
     list_append(&thread_all_list, &task_table[0].all_list_tag);
 
     for (uint32_t c = 0; c < NR_CPU; c++)
@@ -308,7 +375,7 @@ struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
     slot_inuse |= 1ULL << i;
     t->slot_used = 1;
     t->pid = (uint32_t)-1;
-    t->status = TASK_BLOCKED;
+    set_status(t, TASK_BLOCKED);
     all_unlock_irq(f);
 
     uint64_t stack = (uint64_t)get_kernel_pages(THREAD_STACK_SIZE / PAGE_SIZE);
@@ -334,12 +401,10 @@ struct TASK *thread_alloc_slot(const char *name, uint8_t priority) {
     init_task_struct_basic(t, -1);
     strcpy(t->name, name);
     t->priority = priority;
-    t->ticks = priority;
     t->weight = prio_to_weight(priority);
-    t->slice = entity_slice(t->weight);
+    t->slice = weight_slice(t->weight);
     t->vruntime = min_vruntime;
     t->deadline = min_vruntime + t->slice;
-    t->vlag = 0;
     t->kernel_stack_top = stack + THREAD_STACK_SIZE;
     list_append(&thread_all_list, &t->all_list_tag);
     all_unlock_irq(f3);
@@ -366,7 +431,7 @@ uint32_t thread_block_prepare(enum TASK_STATUS status) {
     asm_cli();
     spinlock_acquire(&sched_lock);
     ready_remove(current);
-    current->status = status;
+    set_status(current, status);
     spinlock_release(&sched_lock);
     return old;
 }
@@ -400,7 +465,7 @@ int32_t thread_sleep_ticks(uint32_t ticks) {
     wake_pid[slot] = current->pid;
     sleep_bitmap |= 1ULL << slot;
     ready_remove(current);
-    current->status = TASK_BLOCKED;
+    set_status(current, TASK_BLOCKED);
     spinlock_release(&sched_lock);
     schedule();
     current->sleep_intr = 0;
@@ -465,78 +530,47 @@ uint32_t preempt_disabled(void) {
     return percpu_preempt_count();
 }
 
-static int is_idle_task(const struct TASK *t) {
-    for (uint32_t k = 0; k < NR_CPU; k++)
-        if (t == idle_threads[k])
-            return 1;
-    return 0;
-}
-
-static void update_min_vruntime(void) {
-    uint64_t m = ready_bitmap;
-    uint64_t v = (uint64_t)-1;
-    while (m) {
-        uint32_t s = (uint32_t)__builtin_ctzll(m);
-        m &= m - 1;
-        struct TASK *t = &task_table[s];
-        if (is_idle_task(t))
-            continue;
-        if (t->vruntime < v)
-            v = t->vruntime;
-    }
-    if (v != (uint64_t)-1)
-        min_vruntime = v;
-}
-
 static uint32_t pick_cpu_slot(uint32_t c) {
-    uint64_t V = (uint64_t)-1;
+    uint64_t avg = rq_avg_now();
     uint64_t m = ready_cpu[c];
-    while (m) {
-        uint32_t s = (uint32_t)__builtin_ctzll(m);
-        m &= m - 1;
-        struct TASK *t = &task_table[s];
-        if (t->on_cpu != NR_CPU && t->on_cpu != c)
-            continue;
-        if (t->vruntime < V)
-            V = t->vruntime;
-    }
-    if (V == (uint64_t)-1)
-        return MAX_TASKS;
-
     uint32_t best = MAX_TASKS;
-    uint64_t best_dl = (uint64_t)-1;
-    uint64_t best_vr = (uint64_t)-1;
-    uint32_t fb = MAX_TASKS;
-    uint64_t fb_vr = (uint64_t)-1;
-    m = ready_cpu[c];
+    uint32_t fallback = MAX_TASKS;
+    uint64_t best_vd = (uint64_t)-1;
+    uint64_t fb_ve = (uint64_t)-1;
     while (m) {
         uint32_t s = (uint32_t)__builtin_ctzll(m);
         m &= m - 1;
         struct TASK *t = &task_table[s];
         if (t->on_cpu != NR_CPU && t->on_cpu != c)
             continue;
-        if (t->vruntime < fb_vr) {
-            fb_vr = t->vruntime;
-            fb = s;
+        if (t->vruntime < fb_ve) {
+            fb_ve = t->vruntime;
+            fallback = s;
         }
-        if (t->vruntime > V)
+        if (t->vruntime > avg)
             continue;
-        uint64_t dl = t->deadline;
-        if (dl < best_dl || (dl == best_dl && t->vruntime < best_vr)) {
-            best_dl = dl;
-            best_vr = t->vruntime;
+        if (t->deadline < best_vd) {
+            best_vd = t->deadline;
             best = s;
         }
     }
-    return best != MAX_TASKS ? best : fb;
+    return best != MAX_TASKS ? best : fallback;
 }
 
 void scheduler_tick(void) {
     struct TASK *cur = current;
     if (cur == NULL || cur->weight == 0)
         return;
-    cur->vruntime += W0 / cur->weight;
+    uint32_t f = sched_lock_irq();
+    int in_rq = (run_bitmap & (1ULL << task_slot(cur))) != 0;
+    if (in_rq)
+        rq_del(cur);
+    cur->vruntime += WVSTEP / cur->weight;
+    if (in_rq)
+        rq_add(cur);
+    sched_unlock_irq(f);
     cur->elapsed_ticks++;
+    renew_deadline(cur);
 }
 
 void schedule(void) {
@@ -560,7 +594,6 @@ void schedule(void) {
     if (current->status == TASK_RUNNING)
         ready_enqueue(current);
 
-    update_min_vruntime();
     uint32_t slot = pick_cpu_slot(c);
     if (slot == MAX_TASKS && idle_threads[c] != NULL) {
         ready_enqueue(idle_threads[c]);
@@ -573,7 +606,7 @@ void schedule(void) {
     struct TASK *next = &task_table[slot];
     ready_remove(next);
     assert_stack_magic(next);
-    next->status = TASK_RUNNING;
+    set_status(next, TASK_RUNNING);
     next->on_cpu = c;
     if (next != idle_threads[c])
         cpu_work_switches[c]++;
@@ -611,7 +644,7 @@ void thread_exit_current(void) {
     uint32_t old = asm_save_eflags();
     asm_cli();
     spinlock_acquire(&sched_lock);
-    current->status = TASK_DIED;
+    set_status(current, TASK_DIED);
     ready_remove(current);
     died_pending++;
     spinlock_release(&sched_lock);
@@ -637,7 +670,7 @@ void thread_kill_pid(uint32_t pid) {
     asm_cli();
     spinlock_acquire(&sched_lock);
     t->exit_status = -1;
-    t->status = TASK_HANGING;
+    set_status(t, TASK_HANGING);
     ready_remove(t);
     spinlock_release(&sched_lock);
 
@@ -672,7 +705,7 @@ void thread_exit(struct TASK *thread_over, int need_schedule) {
         sched_unlock_irq(f);
         return;
     }
-    thread_over->status = TASK_DIED;
+    set_status(thread_over, TASK_DIED);
     ready_remove(thread_over);
     died_pending++;
     sched_unlock_irq(f);

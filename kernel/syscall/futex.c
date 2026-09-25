@@ -46,8 +46,7 @@ static int32_t sys_futex_wait(uint32_t uaddr, uint32_t val, uint32_t timeout) {
     spinlock_release(&b->lock);
     current->sleep_eintr = 0;
     current->sleep_intr = 1;
-    current->status = TASK_BLOCKED;
-    schedule();
+    thread_block_with_status(TASK_BLOCKED);
     current->sleep_intr = 0;
     int32_t ret = 0;
     if (current->futex_ready) {
