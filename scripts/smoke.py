@@ -8,7 +8,7 @@ IMG = ROOT / "build" / "test_hd.img"
 LOG = Path("/tmp/nit_smoke.log")
 MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS",
          "TOYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root root",
-         "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0"]
+         "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0", "at_probe: PASS"]
 TIMEOUT = 300
 
 
@@ -27,6 +27,7 @@ def main():
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + TIMEOUT
+        text = ""
         while time.time() < deadline:
             if LOG.exists():
                 text = LOG.read_text(errors="replace")
@@ -37,7 +38,8 @@ def main():
                 print(f"SMOKE FAIL: qemu exited rc={proc.returncode}")
                 return 1
             time.sleep(1)
-        print(f"SMOKE FAIL: timeout, missing {MARKS} in {TIMEOUT}s")
+        print(f"SMOKE FAIL: timeout, missing "
+              f"{[m for m in MARKS if m not in text]} in {TIMEOUT}s")
         return 1
     finally:
         proc.kill()

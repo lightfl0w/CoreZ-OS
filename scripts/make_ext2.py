@@ -35,7 +35,7 @@ FILES = [
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
-    "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf",
+    "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -124,6 +124,7 @@ SYMLINKS = [("catlink", "/cat.elf"),
 # 调试某个程序（默认这份是回归用的完整序列）
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"toybox ls -l /lib\n"
+                  b"at_probe.elf\n"
                   b"musl_abi_test.elf\n"
                   b"dyn_demo.elf\n"
                   b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"

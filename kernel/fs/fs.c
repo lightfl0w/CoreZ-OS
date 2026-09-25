@@ -240,10 +240,10 @@ static int fs_stat_node(uint32_t ino_no, uint32_t *size, uint32_t *mode,
 }
 
 int fs_stat_full(const char *path, uint32_t *ino_out, uint32_t *size,
-                 uint32_t *mode, uint32_t *uid, uint32_t *gid) {
+                 uint32_t *mode, uint32_t *uid, uint32_t *gid, int follow) {
     uint32_t ino_no = 0;
     int ft = 0;
-    if (ext2_lookup_ftype(path, &ino_no, &ft, 1))
+    if (ext2_lookup_ftype(path, &ino_no, &ft, follow))
         return -1;
     if (fs_stat_node(ino_no, size, mode, uid, gid))
         return -1;
@@ -817,62 +817,33 @@ char *sys_getcwd(char *buf, uint32_t size) {
     if (buf == NULL || size == 0) {
         return NULL;
     }
-    uint32_t child = current->cwd_inode_nr;
-
-    if (child == 0 || child == 2) {
-        if (size < 2) {
-            return NULL;
-        }
-        buf[0] = '/';
-        buf[1] = 0;
-        return buf;
-    }
-    memset(buf, 0, size);
-    char full_path_reverse[MAX_PATH_LEN] = {0};
-    while (child) {
-        uint32_t parent = get_parent_dir_inode_nr(child);
-        if (get_child_dir_name(parent, child, full_path_reverse) == -1) {
-            return NULL;
-        }
-        child = parent;
-    }
-    char *last_slash;
-    while ((last_slash = strrchr(full_path_reverse, '/'))) {
-        uint32_t len = strlen(buf);
-        uint32_t seg_len = strlen(last_slash);
-        if (len + seg_len + 1 > size) {
-            return NULL;
-        }
-        strcpy(buf + len, last_slash);
-        *last_slash = 0;
-    }
-    return buf;
+    return fs_cwd_abs_prefix(buf, size) == 0 ? buf : NULL;
 }
 
-int fs_cwd_abs_prefix(char *buf, uint32_t size) {
-    uint32_t child = (current != NULL) ? current->cwd_inode_nr : 0;
-    if (child == 0 || child == 2) {
-        if (size < 2) {
-            return -1;
-        }
+int fs_inode_abs_path(uint32_t ino, char *buf, uint32_t size) {
+    if (size < 2) {
+        return -1;
+    }
+    if (ino == 0 || ino == ROOT_DIR_INODE_NR) {
         buf[0] = '/';
         buf[1] = 0;
         return 0;
     }
-    char full_path_reverse[MAX_PATH_LEN] = {0};
-    while (child) {
+    char reverse[MAX_PATH_LEN] = {0};
+    uint32_t child = ino;
+    while (child != ROOT_DIR_INODE_NR && child != 0) {
         uint32_t parent = get_parent_dir_inode_nr(child);
-        if (parent == 0 || parent == (uint32_t)-1) {
+        if (parent == 0 || parent == (uint32_t)-1 || parent == child) {
             return -1;
         }
-        if (get_child_dir_name(parent, child, full_path_reverse) == -1) {
+        if (get_child_dir_name(parent, child, reverse) == -1) {
             return -1;
         }
         child = parent;
     }
     buf[0] = 0;
     char *last_slash;
-    while ((last_slash = strrchr(full_path_reverse, '/'))) {
+    while ((last_slash = strrchr(reverse, '/'))) {
         uint32_t len = strlen(buf);
         uint32_t seg_len = strlen(last_slash);
         if (len + seg_len + 1 > size) {
@@ -882,13 +853,15 @@ int fs_cwd_abs_prefix(char *buf, uint32_t size) {
         *last_slash = 0;
     }
     if (buf[0] == 0) {
-        if (size < 2) {
-            return -1;
-        }
         buf[0] = '/';
         buf[1] = 0;
     }
     return 0;
+}
+
+int fs_cwd_abs_prefix(char *buf, uint32_t size) {
+    uint32_t cwd = (current != NULL) ? current->cwd_inode_nr : ROOT_DIR_INODE_NR;
+    return fs_inode_abs_path(cwd, buf, size);
 }
 
 int32_t sys_chdir(const char *path) {

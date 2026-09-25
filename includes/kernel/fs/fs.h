@@ -9,6 +9,7 @@
 #define SECTOR_SIZE 512
 #define BLOCK_SIZE SECTOR_SIZE
 #define MAX_PATH_LEN 512
+#define ROOT_DIR_INODE_NR 2
 
 #define FS_MAGIC 0x19590318
 
@@ -57,12 +58,13 @@ void sys_rewinddir(struct FS_DIR *dir);
 int32_t sys_rmdir(const char *pathname);
 char *sys_getcwd(char *buf, uint32_t size);
 int fs_cwd_abs_prefix(char *buf, uint32_t size);
+int fs_inode_abs_path(uint32_t ino, char *buf, uint32_t size);
 int32_t sys_chdir(const char *path);
 int32_t sys_stat(const char *path, struct FS_STAT *buf);
 int32_t sys_mknod(const char *path, uint32_t mode, uint32_t dev);
 int32_t sys_chown(const char *path, uint32_t uid, uint32_t gid);
 int fs_stat_full(const char *path, uint32_t *ino_no, uint32_t *size,
-                 uint32_t *mode, uint32_t *uid, uint32_t *gid);
+                 uint32_t *mode, uint32_t *uid, uint32_t *gid, int follow);
 int32_t sys_symlink(const char *target, const char *linkpath);
 int fs_check_perm(const struct FS_INODE *ino, uint32_t bits);
 int fs_is_chardev(const struct FS_INODE *ino);
