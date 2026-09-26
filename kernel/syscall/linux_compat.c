@@ -1,6 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
 #include "arch/x86/interrupt/interrupt.h"
-#include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
 #include "drivers/char/rtc.h"
@@ -245,6 +244,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_munmap] = lc_munmap,
     [SYS_LINUX_set_thread_area] = lc_set_thread_area,
     [SYS_LINUX_set_tid_address] = lc_set_tid_address,
+    [SYS_LINUX_gettid] = lc_gettid,
     [SYS_LINUX_writev] = lc_writev,
     [SYS_LINUX_getpid] = lc_getpid,
     [SYS_LINUX_getppid] = lc_getppid,
@@ -290,6 +290,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_futex] = lc_futex,
     [SYS_LINUX_gettimeofday] = lc_gettimeofday,
     [SYS_LINUX_nanosleep] = lc_nanosleep,
+    [SYS_LINUX_clock_nanosleep] = lc_clock_nanosleep,
     [SYS_LINUX_clock_gettime] = lc_clock_gettime,
     [SYS_LINUX_clock_getres] = lc_clock_getres,
     [SYS_LINUX_mprotect] = lc_mprotect,

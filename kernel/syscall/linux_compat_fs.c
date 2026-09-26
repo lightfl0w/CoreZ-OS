@@ -683,11 +683,42 @@ int64_t lc_getcwd(LC_ARGS) {
         return -LINUX_EFAULT;
     return sys_getcwd((char *)a, (uint32_t)b) ? (int64_t)a : -LINUX_ENOENT;
 }
+static void lc_parent_of(const char *path, char *out) {
+    uint32_t n = (uint32_t)strlen(path);
+    while (n > 1 && path[n - 1] == '/')
+        n--;
+    while (n > 1 && path[n - 1] != '/')
+        n--;
+    while (n > 1 && path[n - 1] == '/')
+        n--;
+    if (n <= 1) {
+        out[0] = '/';
+        out[1] = '\0';
+        return;
+    }
+    memcpy(out, path, n);
+    out[n] = '\0';
+}
+
+static int64_t lc_mkdir_apply(const char *kpath) {
+    if (sys_mkdir(kpath) == 0)
+        return 0;
+    uint32_t ino = 0;
+    int is_dir = 0;
+    if (ext2_lookup(kpath, &ino, &is_dir) == 0)
+        return -LINUX_EEXIST;
+    char parent[MAX_PATH_LEN];
+    lc_parent_of(kpath, parent);
+    if (ext2_lookup(parent, &ino, &is_dir) != 0 || !is_dir)
+        return -LINUX_ENOENT;
+    return -LINUX_EPERM;
+}
+
 int64_t lc_mkdir(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    return sys_mkdir(kpath);
+    return lc_mkdir_apply(kpath);
 }
 int64_t lc_rmdir(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
@@ -730,9 +761,9 @@ int64_t lc_symlink(LC_ARGS) {
 int64_t lc_symlinkat(LC_ARGS) {
     char ktarget[MAX_PATH_LEN];
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, ktarget, b))
+    if (!copy_user_str(r, ktarget, a))
         return -LINUX_EFAULT;
-    int rc = lc_at_path(r, (int32_t)a, c, kpath);
+    int rc = lc_at_path(r, (int32_t)b, c, kpath);
     if (rc != 0)
         return rc;
     return sys_symlink(ktarget, kpath);
@@ -858,7 +889,7 @@ int64_t lc_mkdirat(LC_ARGS) {
     int rc = lc_at_path(r, (int32_t)a, b, kpath);
     if (rc != 0)
         return rc;
-    return sys_mkdir(kpath);
+    return lc_mkdir_apply(kpath);
 }
 int64_t lc_renameat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];

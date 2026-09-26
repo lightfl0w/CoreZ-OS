@@ -442,6 +442,38 @@ void thread_block_with_status(enum TASK_STATUS status) {
     thread_block_commit(thread_block_prepare(status));
 }
 
+uint32_t thread_block_prepare_timed(enum TASK_STATUS status, uint32_t ticks) {
+    uint32_t old = asm_save_eflags();
+    asm_cli();
+    uint32_t slot = task_slot(current);
+    spinlock_acquire(&sched_lock);
+    ready_remove(current);
+    set_status(current, status);
+    current->futex_timed = 0;
+    if (ticks) {
+        wake_tick[slot] = tick + ticks;
+        wake_pid[slot] = current->pid;
+        sleep_bitmap |= 1ULL << slot;
+        current->futex_timed = 1;
+    }
+    spinlock_release(&sched_lock);
+    return old;
+}
+
+void thread_timer_cancel(void) {
+    uint32_t f = sched_lock_irq();
+    sleep_bitmap &= ~(1ULL << task_slot(current));
+    current->futex_timed = 0;
+    sched_unlock_irq(f);
+}
+
+void thread_timer_disarm(struct TASK *t) {
+    uint32_t f = sched_lock_irq();
+    sleep_bitmap &= ~(1ULL << task_slot(t));
+    t->futex_timed = 0;
+    sched_unlock_irq(f);
+}
+
 void thread_block(void) {
     thread_block_with_status(TASK_BLOCKED);
 }
@@ -458,6 +490,7 @@ int32_t thread_sleep_ticks(uint32_t ticks) {
     current->sleep_intr = 1;
     current->sleep_eintr = 0;
     current->sleep_left = 0;
+    current->futex_timed = 0;
     wake_tick[slot] = tick + ticks;
     wake_pid[slot] = current->pid;
     sleep_bitmap |= 1ULL << slot;
@@ -493,6 +526,10 @@ void thread_timer_wake(void) {
         struct TASK *t = &task_table[slot];
         if (t->slot_used && t->pid == wake_pid[slot] &&
             (t->status & TASK_WAKE_MASK)) {
+            if (t->futex_timed) {
+                t->futex_timed = 0;
+                t->futex_ready = 2;
+            }
             ready_enqueue(t);
         }
     }

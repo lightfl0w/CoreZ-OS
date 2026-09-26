@@ -18,7 +18,7 @@ static void release_prog_resource(struct TASK *release_thread) {
         if (access_ok((const void *)(uintptr_t)addr, 4, 1)) {
             *(volatile int32_t *)(uintptr_t)addr = 0;
             if (release_thread == current) {
-                sys_futex(addr, FUTEX_WAKE, 0x7FFFFFFF, 0);
+                sys_futex(addr, FUTEX_WAKE, 0x7FFFFFFF, 0, 0, 0);
             }
         }
     }

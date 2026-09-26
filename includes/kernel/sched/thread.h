@@ -55,6 +55,8 @@ struct TASK {
     uint32_t futex_ready;
     uint32_t futex_uaddr;
     uint32_t futex_pml4;
+    uint32_t futex_bitset;
+    uint32_t futex_timed;
     uint32_t sleep_intr;
     uint32_t sleep_eintr;
     uint32_t sleep_left;
@@ -125,6 +127,9 @@ int32_t thread_sleep_ticks(uint32_t ticks);
 void thread_timer_wake(void);
 void thread_yield(void);
 void thread_block_with_status(enum TASK_STATUS status);
+uint32_t thread_block_prepare_timed(enum TASK_STATUS status, uint32_t ticks);
+void thread_timer_cancel(void);
+void thread_timer_disarm(struct TASK *t);
 uint32_t thread_block_prepare(enum TASK_STATUS status);
 void thread_block_commit(uint32_t flags);
 struct TASK *pid2thread(int32_t pid);

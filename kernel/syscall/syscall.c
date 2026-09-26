@@ -502,8 +502,12 @@ static int64_t nsys_futex(struct X86_REGS *r) {
     if (!ok_read(r, r->ebx, 4)) {
         return (uint32_t)-1;
     }
-    return (uint32_t)sys_futex((uint32_t)r->ebx, (uint32_t)r->ecx,
-                               (uint32_t)r->edx, (uint32_t)r->esi);
+    int32_t rc = sys_futex((uint32_t)r->ebx, (uint32_t)r->ecx,
+                           (uint32_t)r->edx, (uint32_t)r->esi, 0, 0);
+    if (rc == -EINVAL || rc == -ENOSYS) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)rc;
 }
 
 static int64_t nsys_clone(struct X86_REGS *r) {

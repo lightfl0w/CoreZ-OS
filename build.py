@@ -980,7 +980,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
              BUILD_DIR / "test_basename.o", BUILD_DIR / "test_dirname.o",
              BUILD_DIR / "test_fnmatch.o"])
         tasks.append(libc_tests_elf)
-        for stem in ("termios_probe", "pty_demo", "jc_demo", "at_probe"):
+        for stem in ("termios_probe", "pty_demo", "jc_demo", "at_probe",
+                     "futex_bs_probe"):
             cobj = BUILD_DIR / (stem + ".o")
             ct = task_cc("musl_" + stem + ".o", APPS_DIR / (stem + ".c"),
                          cobj, tools,
@@ -990,6 +991,20 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             app_elf = link_musl_user("musl_" + stem + ".elf",
                                      BUILD_DIR / (stem + ".elf"), [cobj])
             tasks.append(app_elf)
+
+        rustc = Path("/opt/cargo/bin/rustc")
+        if rustc.exists():
+            for stem in ("rust_hello", "rust_probe", "rust_probe2"):
+                rs = APPS_DIR / (stem + ".rs")
+                tasks.append(Task(
+                    name="musl_rust_" + stem,
+                    cmd=[str(rustc), "--target", "x86_64-unknown-linux-musl",
+                         "-O", "-C", "panic=abort", "-C", "debuginfo=0",
+                         "-o", str(BUILD_DIR / (stem + ".elf")), str(rs)],
+                    out=BUILD_DIR / (stem + ".elf"),
+                    env={"CARGO_HOME": "/opt/cargo", "RUSTUP_HOME": "/opt/rustup"},
+                    optional=True, group="musl",
+                    description="rustc " + stem))
 
         if (PCRE2_SRC / "configure").exists():
             pcre2_script = (

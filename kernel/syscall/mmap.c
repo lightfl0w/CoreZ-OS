@@ -73,18 +73,16 @@ static uint32_t find_free_region(uint32_t pages) {
         return 0;
     uint32_t offset = rand_u32() % total;
     uint32_t run = 0;
-    uint32_t base = 0;
+    uint32_t last = 0;
     for (uint32_t i = 0; i < total; i++) {
         uint32_t v = start + ((offset + total - 1 - i) % total) * PAGE_SIZE;
-        if (pages > (limit - v) / PAGE_SIZE || page_is_mapped(v)) {
+        if (page_is_mapped(v) || (run != 0 && v + PAGE_SIZE != last)) {
             run = 0;
-            base = 0;
             continue;
         }
-        if (run == 0)
-            base = v;
+        last = v;
         if (++run == pages)
-            return base;
+            return v;
     }
     return 0;
 }

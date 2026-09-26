@@ -465,11 +465,21 @@ int64_t lc_set_thread_area(LC_ARGS) {
     (void)r;
     return compat_set_thread_area((uint32_t)a);
 }
+int64_t lc_gettid(LC_ARGS) {
+    (void)r;
+    (void)a;
+    (void)b;
+    (void)c;
+    (void)d;
+    (void)e;
+    (void)f;
+    return (int64_t)current->pid;
+}
 int64_t lc_set_tid_address(LC_ARGS) {
     (void)r;
     struct TASK *cur = current;
-    if (a)
-        *(volatile int32_t *)a = (int32_t)cur->pid;
+    if (user_ptr_ok(r, a, 4, 1))
+        cur->clear_child_tid = a;
     return (int64_t)cur->pid;
 }
 int64_t lc_kill(LC_ARGS) {
@@ -479,7 +489,12 @@ int64_t lc_kill(LC_ARGS) {
 int64_t lc_futex(LC_ARGS) {
     if (!user_ptr_ok(r, a, 4, 0))
         return -LINUX_EFAULT;
-    return sys_futex(a, b, c, d);
+    uint32_t op = (uint32_t)b & 0x7f;
+    if (d && (op == FUTEX_WAIT || op == FUTEX_WAIT_BITSET)) {
+        if (!user_ptr_ok(r, d, sizeof(struct LINUX_TIMESPEC), 0))
+            return -LINUX_EFAULT;
+    }
+    return sys_futex(a, b, c, d, e, f);
 }
 int64_t lc_gettimeofday(LC_ARGS) {
     struct LINUX_TIMEVAL tv;
@@ -498,18 +513,75 @@ int64_t lc_gettimeofday(LC_ARGS) {
 int64_t lc_nanosleep(LC_ARGS) {
     struct LINUX_TIMESPEC req;
     memset(&req, 0, sizeof(req));
-    if (b && !user_ptr_ok(r, b, sizeof(req), 0))
+    if (!a || !user_ptr_ok(r, a, sizeof(req), 0))
         return -LINUX_EFAULT;
-    if (b)
-        memcpy(&req, (const void *)(uintptr_t)b, sizeof(req));
+    memcpy(&req, (const void *)(uintptr_t)a, sizeof(req));
     int64_t ms = req.tv_sec * 1000 + req.tv_nsec / 1000000;
-    mtime_sleep(ms < 0 ? 0 : (uint32_t)ms);
-    if (d) {
-        if (!user_ptr_ok(r, d, sizeof(struct LINUX_TIMESPEC), 1))
-            return -LINUX_EFAULT;
-        struct LINUX_TIMESPEC rem;
-        memset(&rem, 0, sizeof(rem));
-        memcpy((void *)(uintptr_t)d, &rem, sizeof(rem));
+    if (ms < 0)
+        return -LINUX_EINVAL;
+    if (ms > 0x7fffffff)
+        ms = 0x7fffffff;
+    if (mtime_sleep_interruptible((uint32_t)ms) == -EINTR) {
+        if (b && user_ptr_ok(r, b, sizeof(struct LINUX_TIMESPEC), 1)) {
+            uint64_t ns = (uint64_t)current->sleep_left *
+                          (uint64_t)(1000000000u / PIT_HZ);
+            struct LINUX_TIMESPEC rem;
+            rem.tv_sec = (int64_t)(ns / 1000000000ull);
+            rem.tv_nsec = (int64_t)(ns % 1000000000ull);
+            memcpy((void *)(uintptr_t)b, &rem, sizeof(rem));
+        }
+        return -LINUX_EINTR;
+    }
+    return 0;
+}
+int64_t lc_clock_nanosleep(LC_ARGS) {
+    int32_t clk = (int32_t)a;
+    int32_t flags = (int32_t)b;
+    struct LINUX_TIMESPEC req;
+    if (clk != 0 && clk != 1)
+        return -LINUX_EINVAL;
+    if (flags & ~LINUX_TIMER_ABSTIME)
+        return -LINUX_EINVAL;
+    memset(&req, 0, sizeof(req));
+    if (!c || !user_ptr_ok(r, c, sizeof(req), 0))
+        return -LINUX_EFAULT;
+    memcpy(&req, (const void *)(uintptr_t)c, sizeof(req));
+    if (req.tv_nsec < 0 || req.tv_nsec >= 1000000000)
+        return -LINUX_EINVAL;
+    int64_t ms;
+    if (flags & LINUX_TIMER_ABSTIME) {
+        int64_t now_ns;
+        if (clk == 0) {
+            now_ns = (int64_t)rtc_unix_time() * 1000000000LL;
+        } else {
+            now_ns = (int64_t)(tick / (uint32_t)PIT_HZ) * 1000000000LL +
+                     (int64_t)(tick % (uint32_t)PIT_HZ) *
+                         (1000000000LL / (int64_t)PIT_HZ);
+        }
+        int64_t delta = req.tv_sec * 1000000000LL + req.tv_nsec - now_ns;
+        if (delta <= 0)
+            return 0;
+        ms = delta / 1000000;
+        if (ms == 0)
+            ms = 1;
+    } else {
+        ms = req.tv_sec * 1000 + req.tv_nsec / 1000000;
+    }
+    if (ms < 0)
+        return -LINUX_EINVAL;
+    if (ms > 0x7fffffff)
+        ms = 0x7fffffff;
+    if (mtime_sleep_interruptible((uint32_t)ms) == -EINTR) {
+        if (!(flags & LINUX_TIMER_ABSTIME) && d &&
+            user_ptr_ok(r, d, sizeof(struct LINUX_TIMESPEC), 1)) {
+            uint64_t ns = (uint64_t)current->sleep_left *
+                          (uint64_t)(1000000000u / PIT_HZ);
+            struct LINUX_TIMESPEC rem;
+            rem.tv_sec = (int64_t)(ns / 1000000000ull);
+            rem.tv_nsec = (int64_t)(ns % 1000000000ull);
+            memcpy((void *)(uintptr_t)d, &rem, sizeof(rem));
+        }
+        return -LINUX_EINTR;
     }
     return 0;
 }
