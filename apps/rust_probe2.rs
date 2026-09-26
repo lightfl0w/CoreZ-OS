@@ -237,8 +237,8 @@ fn main() {
     chk!("bigvec", {
         let v: Vec<u64> = vec![7u64; 262_144];
         let s: u64 = v.iter().take(1000).sum();
-        if s != 7000 {
-            return Err(format!("sum={}", s));
+        if let Some(i) = v.iter().position(|&x| x != 7) {
+            return Err(format!("bad@{} = {:#x} sum={} len={}", i, v[i], s, v.len()));
         }
         Ok(format!("bytes={}", v.len() * 8))
     });

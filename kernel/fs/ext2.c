@@ -699,10 +699,27 @@ static int ext2_add_entry_impl(struct FS_INODE *dino, uint32_t ino,
                 }
                 break;
             }
-            if (de->inode == 0 && rl >= need) {
-                target = off;
-                slot_rec = rl;
-                break;
+            if (de->inode == 0) {
+                if (rl >= need) {
+                    target = off;
+                    slot_rec = rl;
+                    break;
+                }
+            } else {
+                uint32_t used = (8u + (uint32_t)de->name_len + 3u) & ~3u;
+                if (used < rl && rl - used >= need) {
+                    de->rec_len = (uint16_t)used;
+                    struct EXT2_DIRENT *nd =
+                        (struct EXT2_DIRENT *)(blk + off + used);
+                    nd->inode = ino;
+                    nd->rec_len = (uint16_t)(rl - used);
+                    nd->name_len = (uint8_t)nl;
+                    nd->file_type = dtype;
+                    memcpy(nd->name, name, nl);
+                    ext2_write_block(addr, blk);
+                    free_kernel_page((uint32_t)blk);
+                    return 0;
+                }
             }
             off += rl;
         }

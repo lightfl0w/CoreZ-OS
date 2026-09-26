@@ -69,14 +69,19 @@ static uint32_t find_free_region(uint32_t pages) {
     uint32_t start = cur->userprog_v_addr.vaddr_start;
     uint32_t limit = USER_LOW_CEILING;
     uint32_t total = (limit - start) / PAGE_SIZE;
+    uint32_t slots = cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8;
+    if (total > slots)
+        total = slots;
     if (pages == 0 || pages > total)
         return 0;
     uint32_t offset = rand_u32() % total;
     uint32_t run = 0;
     uint32_t last = 0;
     for (uint32_t i = 0; i < total; i++) {
-        uint32_t v = start + ((offset + total - 1 - i) % total) * PAGE_SIZE;
-        if (page_is_mapped(v) || (run != 0 && v + PAGE_SIZE != last)) {
+        uint32_t idx = (offset + total - 1 - i) % total;
+        uint32_t v = start + idx * PAGE_SIZE;
+        if (bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap, idx) ||
+            page_is_mapped(v) || (run != 0 && v + PAGE_SIZE != last)) {
             run = 0;
             continue;
         }

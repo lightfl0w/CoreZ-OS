@@ -15,11 +15,14 @@ INODES_PER_GROUP = 1024
 INODE_SIZE = 128
 FIRST_DATA_BLOCK = 1
 
+TOTAL_BLOCKS = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
+
 SUPER_BLK = 1
 GDT_BLK = FIRST_DATA_BLOCK + 1
 BLOCK_BITMAP_BLK = 3
-INODE_BITMAP_BLK = 4
-ITABLE_BLK = 5
+BLOCK_BITMAP_BLOCKS = (TOTAL_BLOCKS + 8 * BLOCK - 1) // (8 * BLOCK)
+INODE_BITMAP_BLK = BLOCK_BITMAP_BLK + BLOCK_BITMAP_BLOCKS
+ITABLE_BLK = INODE_BITMAP_BLK + 1
 ITABLE_BLOCKS = (INODES_PER_GROUP * INODE_SIZE + BLOCK - 1) // BLOCK
 DATA_START = ITABLE_BLK + ITABLE_BLOCKS
 
@@ -366,13 +369,11 @@ def build(build_dir, out, smoke=False, autoexec=None):
     total_blocks = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
     free_blocks = total_blocks - len(used_blocks)
 
-    bm_len = (total_blocks + 7) // 8
-    block_bitmap = bytearray(bm_len)
+    block_bitmap = bytearray(BLOCK_BITMAP_BLOCKS * BLOCK)
     for b in used_blocks:
         block_bitmap[b >> 3] |= 0x80 >> (b & 7)
 
-    im_len = (used_inodes + 7) // 8
-    inode_bitmap = bytearray(im_len)
+    inode_bitmap = bytearray(BLOCK)
     for i in range(1, used_inodes + 1):
         inode_bitmap[(i - 1) >> 3] |= 0x80 >> ((i - 1) & 7)
 
