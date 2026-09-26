@@ -69,6 +69,10 @@ uint64_t *pde_ptr(uint32_t vaddr);
 void page_table_dump(uint32_t vaddr);
 void *get_a_page(uint32_t vaddr);
 void *get_kernel_pages(uint32_t pg_cnt);
+uint32_t vaddr_reserve_run(uint32_t pages);
+int vaddr_reserve_at(uint32_t base, uint32_t pages);
+void vaddr_unreserve(uint32_t base, uint32_t pages);
+void *map_reserved_page(uint32_t vaddr);
 
 void *ioremap(uint32_t phy_addr, uint32_t size);
 void free_kernel_page(uint32_t vaddr);

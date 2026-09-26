@@ -3,9 +3,12 @@
 #include "kernel/assert.h"
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
+#include "lib/rand/rand.h"
 #include "kernel/sched/percpu.h"
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
+#include "kernel/userprog/process.h"
+#include "kernel/mm/access.h"
 #include "kernel/init/mb2.h"
 
 /**
@@ -392,6 +395,8 @@ static uint32_t pool_alloc_page(void) {
         cpu_xadd32(&pool_free_pages, (uint32_t)-1);
     }
     lock_release(&pool_lock);
+    if (phy != 0) {
+    }
     return phy;
 }
 
@@ -634,6 +639,102 @@ void *get_a_page(uint32_t vaddr) {
     lock_release(&pool_lock);
     if (rc != 0) {
         bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bit_idx, 0);
+        lock_release(&map_lock);
+        pool_free_page(phy);
+        return 0;
+    }
+    memset((void *)vaddr, 0, PAGE_SIZE);
+    lock_release(&map_lock);
+    return (void *)vaddr;
+}
+
+uint32_t vaddr_reserve_run(uint32_t pages) {
+    struct TASK *cur = current;
+    uint32_t start = cur->userprog_v_addr.vaddr_start;
+    uint32_t limit = USER_LOW_CEILING;
+    uint32_t total = (limit - start) / PAGE_SIZE;
+    uint32_t slots = cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8;
+    if (total > slots)
+        total = slots;
+    if (pages == 0 || pages > total)
+        return 0;
+    lock_acquire(&map_lock);
+    uint32_t offset = rand_u32() % total;
+    uint32_t run = 0;
+    uint32_t last = 0;
+    uint32_t base = 0;
+    for (uint32_t i = 0; i < total && base == 0; i++) {
+        uint32_t idx = (offset + total - 1 - i) % total;
+        uint32_t v = start + idx * PAGE_SIZE;
+        if (bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap, idx) ||
+            page_is_mapped(v) || (run != 0 && v + PAGE_SIZE != last)) {
+            run = 0;
+            continue;
+        }
+        last = v;
+        if (++run == pages)
+            base = v;
+    }
+    if (base != 0) {
+        uint32_t bidx = (base - start) / PAGE_SIZE;
+        for (uint32_t i = 0; i < pages; i++)
+            bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bidx + i, 1);
+    }
+    lock_release(&map_lock);
+    return base;
+}
+
+int vaddr_reserve_at(uint32_t base, uint32_t pages) {
+    struct TASK *cur = current;
+    if (base < cur->userprog_v_addr.vaddr_start)
+        return -1;
+    uint32_t bidx0 = (base - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
+    lock_acquire(&map_lock);
+    for (uint32_t i = 0; i < pages; i++) {
+        uint32_t idx = bidx0 + i;
+        if (idx >= cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8 ||
+            bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap, idx)) {
+            for (uint32_t j = 0; j < i; j++)
+                bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bidx0 + j, 0);
+            lock_release(&map_lock);
+            return -1;
+        }
+        bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, idx, 1);
+    }
+    lock_release(&map_lock);
+    return 0;
+}
+
+void vaddr_unreserve(uint32_t base, uint32_t pages) {
+    struct TASK *cur = current;
+    if (base < cur->userprog_v_addr.vaddr_start)
+        return;
+    uint32_t bidx0 = (base - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
+    lock_acquire(&map_lock);
+    for (uint32_t i = 0; i < pages; i++) {
+        uint32_t idx = bidx0 + i;
+        if (idx < cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8)
+            bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, idx, 0);
+    }
+    lock_release(&map_lock);
+}
+
+void *map_reserved_page(uint32_t vaddr) {
+    struct TASK *cur = current;
+    uint32_t bit_idx = (vaddr - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
+    if (bit_idx >= cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8) {
+        return 0;
+    }
+    lock_acquire(&map_lock);
+    uint32_t phy = pool_alloc_page();
+    if (phy == 0) {
+        lock_release(&map_lock);
+        return 0;
+    }
+    lock_acquire(&pool_lock);
+    int rc = page_table_add_raw(vaddr, phy);
+    lock_release(&pool_lock);
+    if (rc != 0) {
         lock_release(&map_lock);
         pool_free_page(phy);
         return 0;

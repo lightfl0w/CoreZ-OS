@@ -2,13 +2,13 @@
 #include "kernel/assert.h"
 #include "kernel/syscall/linux_abi.h"
 #include "lib/str/str.h"
-#include "lib/rand/rand.h"
 #include "kernel/mm/bitmap/bitmap.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
 #include "kernel/fs/fs.h"
 #include "kernel/mm/access.h"
+#include "drivers/char/console/io.h"
 #define MMAP_MAX_BYTES 0x10000000u
 #define PROT_MASK (PROT_READ | PROT_WRITE | PROT_EXEC)
 #define OFF_MASK 0x000ffffffffff000ull
@@ -40,7 +40,7 @@ static void apply_prot(uint32_t v, uint32_t prot) {
 static uint32_t map_run(uint32_t base, uint32_t pages, uint32_t prot) {
     for (uint32_t i = 0; i < pages; i++) {
         uint32_t v = base + i * PAGE_SIZE;
-        if (get_a_page(v) == 0) {
+        if (map_reserved_page(v) == 0) {
             unmap_pages(base, i);
             return 0;
         }
@@ -64,34 +64,6 @@ static void fill_file(uint32_t fd, uint32_t off, uint32_t base, uint32_t len) {
         sys_lseek((int32_t)fd, old, 0);
 }
 
-static uint32_t find_free_region(uint32_t pages) {
-    struct TASK *cur = current;
-    uint32_t start = cur->userprog_v_addr.vaddr_start;
-    uint32_t limit = USER_LOW_CEILING;
-    uint32_t total = (limit - start) / PAGE_SIZE;
-    uint32_t slots = cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8;
-    if (total > slots)
-        total = slots;
-    if (pages == 0 || pages > total)
-        return 0;
-    uint32_t offset = rand_u32() % total;
-    uint32_t run = 0;
-    uint32_t last = 0;
-    for (uint32_t i = 0; i < total; i++) {
-        uint32_t idx = (offset + total - 1 - i) % total;
-        uint32_t v = start + idx * PAGE_SIZE;
-        if (bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap, idx) ||
-            page_is_mapped(v) || (run != 0 && v + PAGE_SIZE != last)) {
-            run = 0;
-            continue;
-        }
-        last = v;
-        if (++run == pages)
-            return v;
-    }
-    return 0;
-}
-
 uint32_t sys_mmap(const struct SYS_MMAP_ARGS *a) {
     if (a == NULL)
         return -LINUX_EFAULT;
@@ -111,12 +83,19 @@ uint32_t sys_mmap(const struct SYS_MMAP_ARGS *a) {
             (a->addr < USER_HIGH_MMIO_END && a->addr + span > USER_LOW_CEILING))
             return -LINUX_ENOMEM;
         unmap_pages(a->addr, pages);
+        if (vaddr_reserve_at(a->addr, pages) != 0)
+            return -LINUX_ENOMEM;
         base = a->addr;
     } else {
-        base = find_free_region(pages);
+        base = vaddr_reserve_run(pages);
     }
-    if (base == 0 || map_run(base, pages, PROT_READ | PROT_WRITE) == 0)
+    if (base == 0)
         return -LINUX_ENOMEM;
+    if (map_run(base, pages, PROT_READ | PROT_WRITE) == 0) {
+        unmap_pages(base, pages);
+        vaddr_unreserve(base, pages);
+        return -LINUX_ENOMEM;
+    }
     if (!(a->flags & MAP_ANONYMOUS) && (int32_t)a->fd >= 0)
         fill_file(a->fd, a->offset, base, len);
 

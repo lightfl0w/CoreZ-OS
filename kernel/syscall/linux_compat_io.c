@@ -147,7 +147,7 @@ int64_t lc_socket(LC_ARGS) {
     {
         int fd = net_socket(domain, type, (int)c);
         if (fd < 0)
-            return -LINUX_EAFNOSUPPORT;
+            return -LINUX_ENFILE;
         return fd;
     }
 }
