@@ -144,7 +144,12 @@ int64_t lc_socket(LC_ARGS) {
     }
     if (domain != 2)
         return -LINUX_EAFNOSUPPORT;
-    return net_socket(domain, type, (int)c);
+    {
+        int fd = net_socket(domain, type, (int)c);
+        if (fd < 0)
+            return -LINUX_EAFNOSUPPORT;
+        return fd;
+    }
 }
 int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
                              uint64_t addrlen, uint32_t *ip,

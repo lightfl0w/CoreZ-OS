@@ -11,6 +11,7 @@
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/syscall/linux_abi.h"
 #include "kernel/userprog/elf.h"
 #include "kernel/userprog/process.h"
 #include "kernel/fs/file.h"
@@ -216,6 +217,7 @@ static int32_t open_image(const char *pathname) {
     struct FILE *xf;
 
     if (fd < 0) {
+        current->errno = LINUX_ENOENT;
         return -1;
     }
     gfd = fd_local2global((uint32_t)fd);
@@ -681,15 +683,18 @@ static int32_t load(const char *pathname, struct EXEC_IMAGE *img) {
     }
     memset(img, 0, sizeof(*img));
     if (read_file(fd, ident, sizeof(ident)) != sizeof(ident)) {
+        current->errno = LINUX_ENOEXEC;
         goto fail;
     }
     if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' ||
         ident[3] != 'F' || (ident[4] != 1 && ident[4] != 2)) {
+        current->errno = LINUX_ENOEXEC;
         goto fail;
     }
     img->is64 = (ident[4] == 2);
     rc = img->is64 ? load64(fd, img) : load32(fd, img);
     if (rc != 0) {
+        current->errno = LINUX_ENOEXEC;
         goto fail;
     }
     close_file(fd);
@@ -784,6 +789,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t argv_offs[MAX_ARG_NR];
     uint32_t envp_offs[MAX_ARG_NR];
     cur = current;
+    cur->errno = 0;
     old_pml4_phys = cur->pml4_phys;
     if (cur->pml4_phys != 0) {
         space_detach_others(cur);
@@ -791,6 +797,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     if (cur->pml4_phys == 0) {
         cur->pml4_phys = (uint32_t)create_page_dir();
         if (cur->pml4_phys == 0) {
+            cur->errno = LINUX_ENOMEM;
             return -1;
         }
         space_ref(cur->pml4_phys);
@@ -811,25 +818,28 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         int kcaller = (regs != NULL) ? ((regs->cs & 3) == 0) : 1;
         strbuf = (char *)get_kernel_pages(EXEC_STRBUF_PAGES);
         if (strbuf == NULL) {
+            cur->errno = LINUX_ENOMEM;
             kprintf("[exec] strbuf alloc failed\n");
             goto exec_fail;
         }
         argc = copy_strs(argv, slens, strbuf, EXEC_STRBUF_HALF, kcaller,
                          argv_offs);
         if (argc < 0) {
+            cur->errno = LINUX_E2BIG;
             goto exec_fail;
         }
-    const char **env_def = exec_env_defaults();
-    if (envp == NULL) {
-            envc = 4;
-            for (int ed_i = 0; ed_i < 4; ed_i++)
-                envlens[ed_i] =
-                    (uint32_t)strlen(env_def[ed_i]) + 1;
+        const char **env_def = exec_env_defaults();
+        if (envp == NULL) {
+                envc = 4;
+                for (int ed_i = 0; ed_i < 4; ed_i++)
+                    envlens[ed_i] =
+                        (uint32_t)strlen(env_def[ed_i]) + 1;
         } else {
             envc = copy_strs(envp, envlens,
                              strbuf + EXEC_STRBUF_HALF, EXEC_STRBUF_HALF,
                              kcaller, envp_offs);
             if (envc < 0) {
+                cur->errno = LINUX_E2BIG;
                 goto exec_fail;
             }
         }
@@ -854,6 +864,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         if (pde == NULL || pte == NULL || !(*pte & 1)) {
 
             if (get_a_page(sp) == 0) {
+                cur->errno = LINUX_ENOMEM;
                 kprintf("[exec] get_a_page for user stack failed\n");
                 goto exec_fail;
             }
@@ -890,6 +901,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             ustack_ptr -= slen;
             ustack_ptr &= ~(is64 ? 0x7u : 0x3u);
             if (ustack_ptr < cur->stack_bottom) {
+                cur->errno = LINUX_E2BIG;
                 kprintf("[exec] argv too large for user stack\n");
                 goto exec_fail;
             }
@@ -948,6 +960,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         ustack_ptr -= slen;
         ustack_ptr &= ~amask;
         if (ustack_ptr < cur->stack_bottom) {
+            cur->errno = LINUX_E2BIG;
             goto exec_fail;
         }
         memcpy((void *)ustack_ptr, exefn, slen);
@@ -958,6 +971,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             ustack_ptr -= slen;
             ustack_ptr &= ~amask;
             if (ustack_ptr < cur->stack_bottom) {
+                cur->errno = LINUX_E2BIG;
                 goto exec_fail;
             }
             memcpy((void *)ustack_ptr,
@@ -974,6 +988,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         ustack_ptr -= (uint32_t)naw * aw;
         aux_dst = ustack_ptr;
         if (ustack_ptr < cur->stack_bottom) {
+            cur->errno = LINUX_E2BIG;
             goto exec_fail;
         }
         aux[1] = exefn_addr;

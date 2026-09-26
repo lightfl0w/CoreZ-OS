@@ -164,6 +164,15 @@ int32_t compat_tcsets(uint32_t cmd, uint64_t arg) {
     return 0;
 }
 int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
+    if (cmd == LINUX_FIONBIO) {
+        int32_t nb = 0;
+        int32_t rc;
+        if (arg == 0 || !access_ok((const void *)(uintptr_t)arg, 4, 0))
+            return -LINUX_EFAULT;
+        memcpy(&nb, (const void *)(uintptr_t)arg, 4);
+        rc = sys_fcntl(fd, LINUX_F_SETFL, nb ? LINUX_O_NONBLOCK : 0);
+        return rc == 0 ? 0 : -LINUX_EBADF;
+    }
     if (fd >= 0 && fd < MAX_FILES_OPEN_PER_PROC) {
         struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
         if (pf != NULL && pf->dev_priv != NULL)
@@ -536,6 +545,8 @@ int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
                 return -LINUX_EBADF;
             uint32_t len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
             if (len == 0) {
+                if (!pipe_has_writer(fd_local2global((uint32_t)fd)))
+                    return 0;
                 if (pf3->fd_nonblock)
                     return -LINUX_EAGAIN;
                 if (count == 0)
