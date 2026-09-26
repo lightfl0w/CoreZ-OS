@@ -112,7 +112,11 @@ int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
         return -LINUX_ENOTDIR;
     uint32_t gfd = fd_local2global((uint32_t)fd);
     struct FILE *pf = file_get(gfd);
-    if (pf == NULL || pf->fd_inode == NULL)
+    if (pf == NULL)
+        return -LINUX_EBADF;
+    if (pf->proc_id != 0)
+        return proc_getdents64(pf, dirp, count);
+    if (pf->fd_inode == NULL)
         return -LINUX_EBADF;
     uint32_t pos = pf->fd_pos;
     uint32_t emitted = pos;

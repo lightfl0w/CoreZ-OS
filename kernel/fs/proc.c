@@ -3,10 +3,21 @@
 #include "libc/user/stdio.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/syscall/linux_abi.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
+#include "kernel/userprog/process.h"
 
-enum { PROC_NONE, PROC_DIR, PROC_MEMINFO, PROC_STAT, PROC_STATUS };
+enum {
+    PROC_NONE,
+    PROC_DIR,
+    PROC_MEMINFO,
+    PROC_STAT,
+    PROC_STATUS,
+    PROC_EXE,
+    PROC_FD,
+    PROC_MAPS
+};
 
 int proc_match(const char *path) {
     if (path == NULL) {
@@ -60,6 +71,12 @@ static int proc_node_of(const char *path) {
         return PROC_STAT;
     if (strcmp(p, "status") == 0)
         return PROC_STATUS;
+    if (strcmp(p, "exe") == 0)
+        return PROC_EXE;
+    if (strcmp(p, "fd") == 0)
+        return PROC_FD;
+    if (strcmp(p, "maps") == 0)
+        return PROC_MAPS;
     return PROC_NONE;
 }
 
@@ -97,6 +114,19 @@ static uint32_t procstatus_build(char *dst, uint32_t cap, uint32_t slot) {
                    t->uid, t->euid, t->suid, t->gid, t->egid, t->sgid);
 }
 
+static uint32_t procmaps_build(char *dst, uint32_t cap, uint32_t slot) {
+    struct TASK *t = &task_table[slot];
+    uint32_t n = 0;
+    (void)cap;
+    if (t->user_brk > t->brk_base) {
+        n += sprintf(dst + n, "%x-%x rw-p 00000000 00:00 0 [heap]\n",
+                     t->brk_base, t->user_brk);
+    }
+    n += sprintf(dst + n, "%x-%x rw-p 00000000 00:00 0 [stack]\n",
+                 t->stack_bottom, USER_STACK_TOP);
+    return n;
+}
+
 static uint32_t proc_size(int node) {
     char buf[256];
     if (node == PROC_MEMINFO) {
@@ -107,6 +137,15 @@ static uint32_t proc_size(int node) {
     }
     if (node == PROC_STATUS && proc_pid_valid) {
         return procstatus_build(buf, sizeof(buf), proc_task_of(proc_pid));
+    }
+    if (node == PROC_MAPS && proc_pid_valid) {
+        return procmaps_build(buf, sizeof(buf), proc_task_of(proc_pid));
+    }
+    if (node == PROC_EXE && proc_pid_valid) {
+        uint32_t slot = proc_task_of(proc_pid);
+        if (slot != MAX_TASKS) {
+            return (uint32_t)strlen(task_table[slot].exe_path);
+        }
     }
     return 0;
 }
@@ -122,10 +161,12 @@ int proc_open(const char *path, uint8_t flags) {
     }
     struct FILE *file = file_get((uint32_t)gfd);
     file->fd_pos = 0;
-    file->fd_flag = flags;
+    file->fd_flag = (node == PROC_DIR || node == PROC_FD) ? PROC_DIRF_FLAG
+                                                          : flags;
     file->fd_inode = NULL;
     file->proc_id = (uint32_t)node;
-    file->proc_aux = (node == PROC_STAT || node == PROC_STATUS)
+    file->proc_aux = (node == PROC_STAT || node == PROC_STATUS ||
+                      node == PROC_FD)
                          ? proc_pid
                          : 0;
     file->ref_cnt = 1;
@@ -142,6 +183,11 @@ uint32_t proc_read(struct FILE *file, void *buf, uint32_t count) {
     uint32_t len;
     if (file->proc_id == PROC_MEMINFO) {
         len = meminfo_build(info, sizeof(info));
+    } else if (file->proc_id == PROC_MAPS) {
+        uint32_t slot = proc_task_of(file->proc_aux);
+        if (slot == MAX_TASKS)
+            return 0;
+        len = procmaps_build(info, sizeof(info), slot);
     } else if (file->proc_id == PROC_STAT || file->proc_id == PROC_STATUS) {
         uint32_t slot = proc_task_of(file->proc_aux);
         if (slot == MAX_TASKS)
@@ -169,9 +215,12 @@ int proc_stat(const char *path, struct FS_STAT *buf) {
     }
     memset(buf, 0, sizeof(*buf));
     buf->st_ino = 1;
-    if (node == PROC_DIR) {
+    if (node == PROC_DIR || node == PROC_FD) {
         buf->st_filetype = FT_DIRECTORY;
         buf->st_size = 0;
+    } else if (node == PROC_EXE) {
+        buf->st_filetype = FT_SYMLINK;
+        buf->st_size = proc_size(node);
     } else {
         buf->st_filetype = FT_REGULAR;
         buf->st_size = proc_size(node);
@@ -185,12 +234,15 @@ int proc_fstat(struct FILE *file, struct FS_STAT *buf) {
     }
     memset(buf, 0, sizeof(*buf));
     buf->st_ino = 1;
-    if (file->proc_id == PROC_DIR) {
+    if (file->proc_id == PROC_DIR || file->proc_id == PROC_FD) {
         buf->st_filetype = FT_DIRECTORY;
         buf->st_size = 0;
+    } else if (file->proc_id == PROC_EXE) {
+        buf->st_filetype = FT_SYMLINK;
+        buf->st_size = proc_size((int)file->proc_id);
     } else {
         buf->st_filetype = FT_REGULAR;
-        buf->st_size = proc_size(file->proc_id);
+        buf->st_size = proc_size((int)file->proc_id);
     }
     return 0;
 }
@@ -216,4 +268,53 @@ int proc_lseek(struct FILE *file, int32_t offset, uint8_t whence) {
     }
     file->fd_pos = (uint32_t)new_pos;
     return (int32_t)file->fd_pos;
+}
+
+int proc_readlink(const char *path, char *buf, uint32_t bufsiz) {
+    int node = proc_node_of(path);
+    if (node != PROC_EXE) {
+        current->errno = 2;
+        return -1;
+    }
+    uint32_t slot = proc_pid_valid ? proc_task_of(proc_pid) : MAX_TASKS;
+    if (slot == MAX_TASKS || task_table[slot].exe_path[0] == 0) {
+        current->errno = 2;
+        return -1;
+    }
+    uint32_t len = (uint32_t)strlen(task_table[slot].exe_path);
+    uint32_t n = len < bufsiz ? len : bufsiz;
+    memcpy(buf, task_table[slot].exe_path, n);
+    return (int32_t)n;
+}
+
+int32_t proc_getdents64(struct FILE *file, void *dirp, uint32_t count) {
+    if (file->proc_id != PROC_FD) {
+        return 0;
+    }
+    uint32_t slot = proc_task_of(file->proc_aux);
+    if (slot == MAX_TASKS) {
+        return 0;
+    }
+    uint32_t written = 0;
+    for (uint32_t fd = file->fd_pos; fd < MAX_FILES_OPEN_PER_PROC; fd++) {
+        if (task_table[slot].fd_table[fd] == (uint32_t)-1) {
+            continue;
+        }
+        char name[12];
+        uint32_t nl = sprintf(name, "%d", fd);
+        uint16_t reclen = (uint16_t)((19u + nl + 1u + 7u) & ~7u);
+        if (written + reclen > count) {
+            break;
+        }
+        struct LINUX_DIRENT64 *d =
+            (struct LINUX_DIRENT64 *)((uint8_t *)dirp + written);
+        d->d_ino = 1;
+        d->d_off = (int64_t)(fd + 1);
+        d->d_reclen = reclen;
+        d->d_type = LINUX_DT_LNK;
+        memcpy(d->d_name, name, nl + 1);
+        written += reclen;
+        file->fd_pos = fd + 1;
+    }
+    return (int32_t)written;
 }

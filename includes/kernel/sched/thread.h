@@ -94,6 +94,7 @@ struct TASK {
     uint32_t sigalt_flags;
     uint32_t compat;
     uint32_t clear_child_tid;
+    char exe_path[256];
     uint32_t stack_magic;
     uint64_t fd_cloexec;
     uint8_t slot_used;

@@ -854,6 +854,13 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     aux_base = img.base;
     memcpy(cur->name, path, 15);
     cur->name[15] = 0;
+    {
+        uint32_t el;
+        for (el = 0; el < sizeof(cur->exe_path) - 1 && path[el] != 0; el++) {
+            cur->exe_path[el] = path[el];
+        }
+        cur->exe_path[el] = 0;
+    }
     cur->user_brk = 0;
     cur->brk_base = img.brk_base;
     signal_reset_user(cur);

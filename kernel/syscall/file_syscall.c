@@ -174,6 +174,9 @@ int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     if (path == NULL || buf == NULL || bufsiz == 0) {
         return -1;
     }
+    if (proc_match(path)) {
+        return proc_readlink(path, buf, bufsiz);
+    }
     uint32_t ino = 0;
     int ft = 0;
     if (ext2_lookup_ftype(path, &ino, &ft, 0) || ft != FT_SYMLINK) {

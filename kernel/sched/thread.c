@@ -235,6 +235,7 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->stack_magic = STACK_MAGIC;
     t->fd_cloexec = 0;
     t->clear_child_tid = 0;
+    t->exe_path[0] = 0;
     t->tls_base = 0;
     t->tls_selector = 0;
     t->tls_msr = 0;
