@@ -1,4 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
+#include "drivers/char/console/io.h"
 #include "arch/x86/interrupt/interrupt.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
@@ -229,7 +230,7 @@ __attribute__((noreturn)) int64_t lc_exit_group(struct X86_REGS *r,
 
 
 
-#define LC_TABLE_SIZE 320
+#define LC_TABLE_SIZE 327
 
 static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_read] = lc_read,
@@ -253,6 +254,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_lstat] = lc_lstat,
     [SYS_LINUX_lseek] = lc_lseek,
     [SYS_LINUX_fcntl] = lc_fcntl,
+    [SYS_LINUX_flock] = lc_flock,
     [SYS_LINUX_readlink] = lc_readlink,
     [SYS_LINUX_chdir] = lc_chdir,
     [SYS_LINUX_getcwd] = lc_getcwd,
@@ -356,6 +358,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_readlinkat] = lc_readlinkat,
     [SYS_LINUX_faccessat] = lc_faccessat,
     [SYS_LINUX_getrandom] = lc_getrandom,
+    [SYS_LINUX_copy_file_range] = lc_copy_file_range,
     [SYS_LINUX_poll] = lc_poll,
     [SYS_LINUX_ppoll] = lc_ppoll,
     [SYS_LINUX_select] = lc_select,

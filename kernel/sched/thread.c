@@ -234,8 +234,11 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->parent_pid = parent_pid;
     t->stack_magic = STACK_MAGIC;
     t->fd_cloexec = 0;
+    t->fd_owner_pid = (int32_t)t->pid;
     t->clear_child_tid = 0;
     t->exe_path[0] = 0;
+    t->exe_bias = 0;
+    t->sig_fault_addr = 0;
     t->tls_base = 0;
     t->tls_selector = 0;
     t->tls_msr = 0;
@@ -535,6 +538,21 @@ void thread_timer_wake(void) {
         }
     }
     sched_unlock_irq(f);
+}
+
+void sched_dbg_task(struct TASK *t) {
+    uint64_t bit = 1ULL << task_slot(t);
+    uint64_t avg = rq_avg_now();
+    kprintf("[sch] pid=%d st=%x on_cpu=%u in_ready=%d in_cpu0=%d in_run=%d "
+            "vr=%x%08x dl=%x%08x w=%u sl=%u avg=%x%08x\n",
+            (int)t->pid, (unsigned)t->status, (unsigned)t->on_cpu,
+            (int)((ready_bitmap & bit) != 0),
+            (int)((ready_cpu[0] & bit) != 0),
+            (int)((run_bitmap & bit) != 0),
+            (unsigned)(t->vruntime >> 32), (unsigned)t->vruntime,
+            (unsigned)(t->deadline >> 32), (unsigned)t->deadline,
+            (unsigned)t->weight, (unsigned)t->slice,
+            (unsigned)(avg >> 32), (unsigned)avg);
 }
 
 void thread_yield(void) {

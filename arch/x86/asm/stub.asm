@@ -69,7 +69,10 @@ isr_common_stub:
     mov  rdi, rsp
     mov  rbp, rsp
     and  rsp, -16
+    sub  rsp, 512
+    fxsave [rsp]
     call isr_handler
+    fxrstor [rsp]
     mov  rsp, rbp
 
     pop  r15
@@ -143,7 +146,10 @@ irq_common_stub:
     mov  rdi, rsp
     mov  rbp, rsp
     and  rsp, -16
+    sub  rsp, 512
+    fxsave [rsp]
     call irq_handler
+    fxrstor [rsp]
     mov  rsp, rbp
     pop  r15
     pop  r14

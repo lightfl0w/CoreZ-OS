@@ -40,7 +40,8 @@ FILES = [
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
-    "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf",
+    "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
+    "t.fish", "shell.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -93,7 +94,7 @@ DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
              ("pty6", 137, 6), ("pty7", 137, 7)]
 
 EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
-              ("tmp", 0x41ED | 0o777), ("lib", 0o40755)]
+              ("tmp", 0x41ED | 0o777), ("lib", 0o40755), ("root", 0o40755)]
 
 BIN_LINKS = ["sh", "su", "login", "id", "ls", "cat", "echo", "ps", "passwd",
              "adduser", "groups", "chmod", "chown", "mkdir", "rm", "cp",
@@ -230,6 +231,8 @@ def build(build_dir, out, smoke=False, autoexec=None):
     if smoke:
         pre["autoexec"] = SMOKE_AUTOEXEC if autoexec is None else autoexec
         names.append("autoexec")
+        pre["shell.conf"] = b"/init_sh.elf\n"
+        names.append("shell.conf")
     else:
         pre["autoexec"] = b"toybox login\n"
         names.append("autoexec")

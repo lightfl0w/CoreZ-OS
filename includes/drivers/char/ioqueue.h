@@ -11,6 +11,7 @@ struct TTY_IOQUEUE {
     struct SCHED_LOCK lock;
     struct TASK *producer;
     struct TASK *consumer;
+    uint32_t ends;
     char buf[BUFSIZE];
     int32_t head;
     int32_t tail;

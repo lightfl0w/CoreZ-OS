@@ -7,6 +7,7 @@
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/userprog/process.h"
+#include "kernel/init/mb2.h"
 
 enum {
     PROC_NONE,
@@ -16,7 +17,8 @@ enum {
     PROC_STATUS,
     PROC_EXE,
     PROC_FD,
-    PROC_MAPS
+    PROC_MAPS,
+    PROC_CMDLINE
 };
 
 int proc_match(const char *path) {
@@ -47,6 +49,9 @@ static int proc_node_of(const char *path) {
     }
     if (strcmp(path, "/proc/meminfo") == 0) {
         return PROC_MEMINFO;
+    }
+    if (strcmp(path, "/proc/cmdline") == 0) {
+        return PROC_CMDLINE;
     }
     proc_pid_valid = 0;
     const char *p = path + 6;
@@ -132,6 +137,16 @@ static uint32_t proc_size(int node) {
     if (node == PROC_MEMINFO) {
         return meminfo_build(buf, sizeof(buf));
     }
+    if (node == PROC_CMDLINE) {
+        const struct MB2_INFO *bi = mb2_get();
+        const char *cl = bi && bi->cmdline ? bi->cmdline : "";
+        uint32_t n = (uint32_t)strlen(cl);
+        if (n >= sizeof(buf))
+            n = sizeof(buf) - 1;
+        memcpy(buf, cl, n);
+        buf[n] = '\n';
+        return n + 1;
+    }
     if (node == PROC_STAT && proc_pid_valid) {
         return procstat_build(buf, sizeof(buf), proc_task_of(proc_pid));
     }
@@ -183,6 +198,15 @@ uint32_t proc_read(struct FILE *file, void *buf, uint32_t count) {
     uint32_t len;
     if (file->proc_id == PROC_MEMINFO) {
         len = meminfo_build(info, sizeof(info));
+    } else if (file->proc_id == PROC_CMDLINE) {
+        const struct MB2_INFO *bi = mb2_get();
+        const char *cl = bi && bi->cmdline ? bi->cmdline : "";
+        uint32_t n = (uint32_t)strlen(cl);
+        if (n >= sizeof(info))
+            n = sizeof(info) - 1;
+        memcpy(info, cl, n);
+        info[n] = '\n';
+        len = n + 1;
     } else if (file->proc_id == PROC_MAPS) {
         uint32_t slot = proc_task_of(file->proc_aux);
         if (slot == MAX_TASKS)

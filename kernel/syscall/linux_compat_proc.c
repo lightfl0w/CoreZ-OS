@@ -43,10 +43,10 @@
 int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
     if (pid >= MAX_TASKS || pgid >= MAX_TASKS)
         return -LINUX_EINVAL;
-    struct TASK *t = pid2thread((int32_t)pid);
+    struct TASK *t = pid ? pid2thread((int32_t)pid) : current;
     if (t == NULL || t->status == TASK_DIED)
         return -LINUX_ESRCH;
-    uint32_t want = pgid ? pgid : pid;
+    uint32_t want = pgid ? pgid : (pid ? pid : (uint32_t)t->pid);
     if (want >= MAX_TASKS)
         return -LINUX_EINVAL;
     t->pgid = want;
@@ -55,7 +55,7 @@ int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
 int32_t compat_getpgid(uint32_t pid) {
     if (pid >= MAX_TASKS)
         return -LINUX_EINVAL;
-    struct TASK *t = pid2thread((int32_t)pid);
+    struct TASK *t = pid ? pid2thread((int32_t)pid) : current;
     if (t == NULL)
         return -LINUX_ESRCH;
     return (int32_t)(t->pgid ? t->pgid : t->pid);

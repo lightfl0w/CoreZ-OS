@@ -128,6 +128,7 @@
 #define SYS_LINUX_getrandom 318
 
 #define SYS_LINUX_madvise 28
+#define SYS_LINUX_flock 73
 #define SYS_LINUX_fsync 74
 #define SYS_LINUX_fdatasync 75
 #define SYS_LINUX_truncate 76
@@ -153,6 +154,7 @@
 #define SYS_LINUX_membarrier 324
 #define SYS_LINUX_rseq 334
 #define SYS_LINUX_getrandom 318
+#define SYS_LINUX_copy_file_range 326
 
 #define LINUX_O_RDONLY 0
 #define LINUX_O_WRONLY 1
@@ -261,6 +263,7 @@
 #define LINUX_ENOTDIR 20
 #define LINUX_EISDIR 21
 #define LINUX_EINVAL 22
+#define LINUX_ENOLCK 37
 #define LINUX_ENFILE 23
 #define LINUX_EMFILE 24
 #define LINUX_ENOSPC 28

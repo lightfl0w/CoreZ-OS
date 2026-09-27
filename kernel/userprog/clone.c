@@ -46,17 +46,23 @@ pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
     }
     child->parent_pid = (int32_t)parent->pid;
     child->cwd_inode_nr = parent->cwd_inode_nr;
+    memcpy(child->exe_path, parent->exe_path, sizeof(child->exe_path));
+    child->exe_bias = parent->exe_bias;
     child->user_brk = parent->user_brk;
     child->brk_base = parent->brk_base;
     child->stack_bottom = parent->stack_bottom;
+    child->fd_owner_pid = (flags & CLONE_FILES)
+                              ? parent->fd_owner_pid
+                              : (int32_t)child->pid;
     for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
         child->fd_table[i] = parent->fd_table[i];
-        if (child->fd_table[i] != (uint32_t)-1 &&
+        if (!(flags & CLONE_FILES) && child->fd_table[i] != (uint32_t)-1 &&
             child->fd_table[i] < MAX_FILE_OPEN) {
             file_table_ref(child->fd_table[i]);
         }
     }
     child->pipe_wr_mask = parent->pipe_wr_mask;
+    child->fd_cloexec = parent->fd_cloexec;
     child->exit_status = 0;
     child->signal_mask = parent->signal_mask;
     child->signal_pending = 0;
@@ -141,6 +147,8 @@ pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
     return (pid_t)child->pid;
 
 clone_fail:
+    kprintf("[clone-fail] flags=%x parent=%d\n", (unsigned)flags,
+            (int)parent->pid);
     free_user_space(child, child->pml4_phys);
     for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
         uint32_t g = child->fd_table[i];

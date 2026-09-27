@@ -13,7 +13,7 @@
 #define FPU_SAVE_SIZE 512
 
 #define RFLAGS_INIT 0x202u
-#define MAX_FILES_OPEN_PER_PROC 32
+#define MAX_FILES_OPEN_PER_PROC 64
 typedef int32_t pid_t;
 enum TASK_STATUS {
     TASK_RUNNING = 1u << 0,
@@ -73,7 +73,7 @@ struct TASK {
     struct SYS_SIGACTION sigactions[NSIG];
     uint32_t cwd_inode_nr;
     uint32_t fd_table[MAX_FILES_OPEN_PER_PROC];
-    uint32_t pipe_wr_mask;
+    uint64_t pipe_wr_mask;
     uint32_t tls_base;
     uint32_t tls_selector;
     uint8_t tls_msr;
@@ -95,8 +95,11 @@ struct TASK {
     uint32_t compat;
     uint32_t clear_child_tid;
     char exe_path[256];
+uint32_t exe_bias;
+    uint32_t sig_fault_addr;
     uint32_t stack_magic;
     uint64_t fd_cloexec;
+    int32_t fd_owner_pid;
     uint8_t slot_used;
     uint8_t cpu_aff;
     uint32_t on_cpu;
@@ -126,6 +129,8 @@ void thread_block(void);
 void thread_unblock(struct TASK *t);
 int32_t thread_sleep_ticks(uint32_t ticks);
 void thread_timer_wake(void);
+void sched_dbg_task(struct TASK *t);
+struct TASK *fd_owner_task(void);
 void thread_yield(void);
 void thread_block_with_status(enum TASK_STATUS status);
 uint32_t thread_block_prepare_timed(enum TASK_STATUS status, uint32_t ticks);

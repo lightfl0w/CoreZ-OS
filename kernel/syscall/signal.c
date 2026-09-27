@@ -3,6 +3,7 @@
 #include "kernel/assert.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/mm/access.h"
+#include "kernel/mm/pool/pool.h"
 #include "kernel/syscall_nr.h"
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
@@ -60,12 +61,57 @@ int exception_to_signal(int int_no) {
 }
 
 void signal_terminate(struct TASK *t, int sig) {
+    kprintf("[term] pid=%d sig=%d name=%s\n", t->pid, sig, t->name);
     proc_exit(t, 128 + sig);
 }
 
 static void signal_stop_current(void) {
     thread_block_with_status(TASK_STOPPED);
 }
+
+struct SYS_SIGINFO64 {
+    uint32_t si_signo;
+    uint32_t si_errno;
+    uint32_t si_code;
+    uint32_t si_pad;
+    uint64_t si_addr;
+    uint64_t si_pad2[13];
+};
+
+struct SYS_UCONTEXT64 {
+    uint64_t uc_flags;
+    uint64_t uc_link;
+    uint64_t uc_ss_sp;
+    uint64_t uc_ss_flags;
+    uint64_t uc_ss_size;
+    uint64_t gregs[23];
+    uint64_t fpregs;
+    uint64_t uc_sigmask;
+};
+
+#define UCGR_R8 0
+#define UCGR_R9 1
+#define UCGR_R10 2
+#define UCGR_R11 3
+#define UCGR_R12 4
+#define UCGR_R13 5
+#define UCGR_R14 6
+#define UCGR_R15 7
+#define UCGR_RDI 8
+#define UCGR_RSI 9
+#define UCGR_RBP 10
+#define UCGR_RBX 11
+#define UCGR_RDX 12
+#define UCGR_RAX 13
+#define UCGR_RCX 14
+#define UCGR_RSP 15
+#define UCGR_RIP 16
+#define UCGR_EFL 17
+#define UCGR_CSGSFS 18
+#define UCGR_ERR 19
+#define UCGR_TRAPNO 20
+#define UCGR_OLDMASK 21
+#define UCGR_CR2 22
 
 struct SYS_SIGFRAME64 {
     uint64_t restorer;
@@ -91,6 +137,8 @@ struct SYS_SIGFRAME64 {
     uint64_t r14;
     uint64_t r15;
     uint64_t old_mask;
+    struct SYS_SIGINFO64 info;
+    struct SYS_UCONTEXT64 uc;
 };
 static int sigframe_valid(uint64_t cs, uint64_t rip, uint64_t rsp,
                           uint64_t ss, uint64_t rflags) {
@@ -139,6 +187,47 @@ static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
     frame.r14 = r->r14;
     frame.r15 = r->r15;
     frame.old_mask = cur->signal_mask;
+    if (sa->sa_flags & SA_SIGINFO) {
+        struct SYS_SIGINFO64 *info = &frame.info;
+        struct SYS_UCONTEXT64 *uc = &frame.uc;
+        info->si_signo = (uint32_t)sig;
+        info->si_errno = 0;
+        info->si_code = (sig == SIGSEGV) ? 1 : 0x80;
+        info->si_addr = (sig == SIGSEGV) ? (uint64_t)cur->sig_fault_addr : 0;
+        uc->uc_flags = 0;
+        uc->uc_link = 0;
+        uc->uc_ss_sp = 0;
+        uc->uc_ss_flags = 0;
+        uc->uc_ss_size = 0;
+        uc->gregs[UCGR_R8] = r->r8;
+        uc->gregs[UCGR_R9] = r->r9;
+        uc->gregs[UCGR_R10] = r->r10;
+        uc->gregs[UCGR_R11] = r->r11;
+        uc->gregs[UCGR_R12] = r->r12;
+        uc->gregs[UCGR_R13] = r->r13;
+        uc->gregs[UCGR_R14] = r->r14;
+        uc->gregs[UCGR_R15] = r->r15;
+        uc->gregs[UCGR_RDI] = r->rdi;
+        uc->gregs[UCGR_RSI] = r->rsi;
+        uc->gregs[UCGR_RBP] = r->rbp;
+        uc->gregs[UCGR_RBX] = r->rbx;
+        uc->gregs[UCGR_RDX] = r->rdx;
+        uc->gregs[UCGR_RAX] = r->rax;
+        uc->gregs[UCGR_RCX] = r->rcx;
+        uc->gregs[UCGR_RSP] = r->user_rsp;
+        uc->gregs[UCGR_RIP] = r->rip;
+        uc->gregs[UCGR_EFL] = frame.rflags;
+        uc->gregs[UCGR_CSGSFS] =
+            ((uint64_t)r->cs) | (((uint64_t)r->ss) << 16);
+        uc->gregs[UCGR_ERR] = 0;
+        uc->gregs[UCGR_TRAPNO] = 0;
+        uc->gregs[UCGR_OLDMASK] = cur->signal_mask;
+        uc->gregs[UCGR_CR2] = (sig == SIGSEGV)
+                                  ? (uint64_t)cur->sig_fault_addr
+                                  : 0;
+        uc->fpregs = 0;
+        uc->uc_sigmask = cur->signal_mask;
+    }
     uint64_t sp = r->user_rsp - 128;
     sp -= sizeof(struct SYS_SIGFRAME64);
     sp &= ~0xfULL;
@@ -149,6 +238,9 @@ static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
         signal_terminate(cur, sig);
         return;
     }
+    for (uint32_t fp = sp & ~0xfffull; fp < sp + sizeof(frame);
+         fp += PAGE_SIZE)
+        ensure_user_page((uint32_t)fp);
     memcpy((void *)sp, &frame, sizeof(frame));
     if (!(sa->sa_flags & SA_NODEFER)) {
         cur->signal_mask |= (1u << sig);
@@ -158,6 +250,13 @@ static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
     r->user_rsp = sp;
     r->rip = (uint64_t)sa->sa_handler;
     r->rdi = (uint64_t)sig;
+    if (sa->sa_flags & SA_SIGINFO) {
+        r->rsi = sp + __builtin_offsetof(struct SYS_SIGFRAME64, info);
+        r->rdx = sp + __builtin_offsetof(struct SYS_SIGFRAME64, uc);
+    } else {
+        r->rsi = 0;
+        r->rdx = 0;
+    }
     r->rax = 0;
 }
 
@@ -190,6 +289,9 @@ static void deliver_signal(struct TASK *cur, struct X86_REGS *r,
     if (new_esp < stack_low) {
         signal_terminate(cur, sig);
     }
+    for (uint32_t fp = new_esp & ~0xfffu; fp < new_esp + frame_size;
+         fp += PAGE_SIZE)
+        ensure_user_page(fp);
     memcpy((void *)new_esp, &frame, frame_size);
     if (!(sa->sa_flags & SA_NODEFER)) {
         cur->signal_mask |= (1u << sig);
@@ -337,6 +439,15 @@ static int signal_send_task(struct TASK *t, int sig) {
         }
     }
     return 0;
+}
+
+void signal_notify_child_exit(struct TASK *parent) {
+    if (parent == NULL || !parent->slot_used ||
+        parent->status == TASK_DIED)
+        return;
+    if ((uintptr_t)parent->sigactions[SIGCHLD].sa_handler <= 1)
+        return;
+    signal_send_task(parent, SIGCHLD);
 }
 
 int sys_kill(int pid, int sig) {

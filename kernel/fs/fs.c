@@ -1,5 +1,6 @@
 #include "kernel/fs/fs.h"
 #include "drivers/char/console/io.h"
+#include "drivers/char/ioqueue.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/shell/pipe.h"
@@ -11,6 +12,7 @@
 #include "drivers/char/pty.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
+#include "kernel/syscall/lc_internal.h"
 struct DISK_PARTITION *cur_part;
 void filesys_init(void) {
     file_table_init();
@@ -129,7 +131,6 @@ static int ext2_create_common(const char *pathname, uint32_t mode, int is_dir) {
     uint32_t tino = 0;
     int tft = 0;
     if (ext2_lookup_ftype(pathname, &tino, &tft, 0) == 0) {
-        kprintf("create: exists tino=%u\n", tino);
         current->errno = 17;
         return -1;
     }
@@ -421,11 +422,11 @@ int close_file(int fd) {
     if (fd < 3 || fd >= MAX_FILES_OPEN_PER_PROC)
         return -1;
 
-    uint32_t global_fd_idx = current->fd_table[fd];
+    uint32_t global_fd_idx = fd_local2global((uint32_t)fd);
     if (global_fd_idx == (uint32_t)-1)
         return -1;
 
-    current->pipe_wr_mask &= ~(1u << (uint32_t)fd);
+    current->pipe_wr_mask &= ~(1ull << (uint64_t)fd);
     fd_release((uint32_t)fd);
     if (global_fd_idx >= MAX_FILE_OPEN)
         return 0;
@@ -440,11 +441,15 @@ int close_file(int fd) {
     if (file->dev_priv)
         pty_chardev_close(file);
 
-    if (file->fd_flag == PIPE_FLAG) {
-        if (file->fd_inode != NULL) {
-            free_kernel_page((uint32_t)file->fd_inode);
+    if (file->fd_flag == PIPE_FLAG || file->fd_flag == PIPE_RD_FLAG) {
+        struct TTY_IOQUEUE *ioq = (struct TTY_IOQUEUE *)file->fd_inode;
+        if (ioq != NULL && ioq->ends != 0) {
+            ioq->ends = ioq->ends - 1;
+            if (ioq->ends == 0)
+                free_kernel_page((uint32_t)ioq);
         }
     } else if (file->fd_inode != NULL) {
+        flock_release_ino(file->fd_inode->i_no);
         inode_close(file->fd_inode);
     }
 
@@ -456,7 +461,7 @@ uint32_t read_file(int fd, void *buf, uint32_t count) {
     if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
         return (uint32_t)-1;
     }
-    uint32_t global_fd_idx = current->fd_table[fd];
+    uint32_t global_fd_idx = fd_local2global((uint32_t)fd);
     if (global_fd_idx == (uint32_t)-1) {
         return (uint32_t)-1;
     }
@@ -471,20 +476,27 @@ uint32_t write_file(int fd, const void *buf, uint32_t count) {
     if (fd < 0 || fd >= MAX_FILES_OPEN_PER_PROC) {
         return (uint32_t)-1;
     }
-    uint32_t global_fd_idx = current->fd_table[fd];
+    uint32_t global_fd_idx = fd_local2global((uint32_t)fd);
     if (global_fd_idx == (uint32_t)-1) {
         return (uint32_t)-1;
     }
     return file_write(file_get(global_fd_idx), buf, count);
 }
 
+#define LSEEK_ESPIPE 29
+#define LSEEK_EBADF 9
+#define LSEEK_EINVAL 22
+
 int32_t sys_lseek(int32_t fd, int32_t offset, uint8_t whence) {
-    if (fd < 3 || fd >= MAX_FILES_OPEN_PER_PROC) {
-        return -1;
+    if (fd < 3) {
+        return -LSEEK_ESPIPE;
     }
-    uint32_t global_fd_idx = current->fd_table[fd];
+    if (fd >= MAX_FILES_OPEN_PER_PROC) {
+        return -LSEEK_EBADF;
+    }
+    uint32_t global_fd_idx = fd_local2global((uint32_t)fd);
     if (global_fd_idx == (uint32_t)-1) {
-        return -1;
+        return -LSEEK_EBADF;
     }
     struct FILE *pf = file_get(global_fd_idx);
     if (pf->proc_id != 0) {
@@ -503,10 +515,10 @@ int32_t sys_lseek(int32_t fd, int32_t offset, uint8_t whence) {
         new_pos = file_size + offset;
         break;
     default:
-        return -1;
+        return -LSEEK_EINVAL;
     }
-    if (new_pos < 0 || new_pos > file_size) {
-        return -1;
+    if (new_pos < 0) {
+        return -LSEEK_EINVAL;
     }
     pf->fd_pos = (uint32_t)new_pos;
     return (int32_t)pf->fd_pos;

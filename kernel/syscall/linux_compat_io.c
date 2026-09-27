@@ -540,7 +540,7 @@ int lc_close_extra(int32_t fd) {
 int io_is_file_fd(int fd) {
     if (fd < 0 || fd >= (int)MAX_FILES_OPEN_PER_PROC)
         return 0;
-    uint32_t g = current->fd_table[fd];
+    uint32_t g = fd_owner_task()->fd_table[fd];
     if (g == (uint32_t)-1)
         return 0;
     if (fd < 3 && g == (uint32_t)fd)
@@ -603,14 +603,18 @@ int io_fd_events(int fd, int want_read, int want_write) {
             struct FILE *f = file_get(fd_local2global((uint32_t)fd));
             if (f != NULL && f->fd_inode != NULL) {
                 uint32_t len = ioq_length((struct TTY_IOQUEUE *)f->fd_inode);
-                if (want_read && len > 0)
-                    rv |= LINUX_POLLIN;
-                if (want_write && len < BUFSIZE)
-                    rv |= LINUX_POLLOUT;
-                if (len == 0 && want_read &&
-                    ((current->pipe_wr_mask >> (uint32_t)fd) & 1u) == 0 &&
-                    !pipe_has_writer(fd_local2global((uint32_t)fd)))
-                    rv |= LINUX_POLLHUP;
+                if (f->fd_flag == PIPE_RD_FLAG) {
+                    if (want_read && len > 0)
+                        rv |= LINUX_POLLIN;
+                    if (want_read && len == 0 &&
+                        !pipe_end_alive(f->proc_aux))
+                        rv |= LINUX_POLLHUP;
+                } else {
+                    if (want_write && len < BUFSIZE - 1)
+                        rv |= LINUX_POLLOUT;
+                    if (!pipe_end_alive(f->proc_aux))
+                        rv |= LINUX_POLLERR;
+                }
             }
             return rv;
         }

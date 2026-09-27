@@ -550,6 +550,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("wm_bar.o", KERNEL_DIR / "gui" / "wm_bar.c"),
         ("guiclients.o", KERNEL_DIR / "gui" / "clients.c"),
         ("guiclients_term.o", KERNEL_DIR / "gui" / "clients_term.c"),
+        ("flanterm.o", KERNEL_DIR / "gui" / "flanterm" / "src" / "flanterm.c"),
+        ("flanterm_fb.o", KERNEL_DIR / "gui" / "flanterm" / "src" / "flanterm_backends" / "fb.c"),
         ("guiclients_monitor.o", KERNEL_DIR / "gui" / "clients_monitor.c"),
         ("guiclients_png.o", KERNEL_DIR / "gui" / "clients_png.c"),
         ("guiclients_files.o", KERNEL_DIR / "gui" / "clients_files.c"),
@@ -598,6 +600,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("kaddr_probe", "kaddr_probe.c", "_start", []),
         ("sock_probe", "sock_probe.c", "_start", []),
         ("init_sh",    "init_sh.c",    "_start", []),
+        ("shell",      "shell.c",      "_start", []),
         ("futex_probe", "futex_probe.c", "_start", []),
         ("eintr_probe", "eintr_probe.c", "_start", []),
         ("sel_probe",  "sel_probe.c",  "_start", []),
@@ -788,6 +791,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "udi_virtio.o", "udi_vmware.o", "font.o",
         "theme.o", "font_kernel.o", "wallpaper_kernel.o", "shm.o", "guiserver.o",
         "wm.o", "wm_anim.o", "wm_bar.o", "guiclients.o", "guiclients_term.o", "guiclients_monitor.o",
+        "flanterm.o", "flanterm_fb.o",
         "guiclients_png.o", "guiclients_files.o", "guiclients_edit.o", "gui.o", "x11.o", "x11_render.o", "x11_window.o", "x11_server.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
@@ -1005,6 +1009,17 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                     env={"CARGO_HOME": "/opt/cargo", "RUSTUP_HOME": "/opt/rustup"},
                     optional=True, group="musl",
                     description="rustc " + stem))
+
+            fish_bin = Path("/root/fish-src/target/"
+                            "x86_64-unknown-linux-musl/release/fish")
+            if fish_bin.exists():
+                tasks.append(Task(
+                    name="musl_fish_stage",
+                    cmd=[sh, "-c", "cp " + shlex.quote(str(fish_bin)) + " " +
+                         shlex.quote(str(BUILD_DIR / "fish.elf"))],
+                    out=BUILD_DIR / "fish.elf",
+                    optional=True, group="musl",
+                    description="stage fish.elf"))
 
         if (PCRE2_SRC / "configure").exists():
             pcre2_script = (

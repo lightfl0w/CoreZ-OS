@@ -16,6 +16,7 @@ int get_cursor_y(void);
 void kprintf(const char *fmt, ...);
 
 void console_putc(char c);
+void console_vt_write(const char *buf, uint32_t n);
 
 void io_clear_screen(void);
 

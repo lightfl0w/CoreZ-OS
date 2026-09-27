@@ -63,11 +63,13 @@ static inline uint64_t pte_wx(uint64_t base, int writable, int executable) {
 }
 
 void page_free_or_decref(uint32_t phy_addr);
+void page_free_or_decref_va(uint32_t phy_addr, uint32_t vaddr);
 
 uint64_t *pte_ptr(uint32_t vaddr);
 uint64_t *pde_ptr(uint32_t vaddr);
 void page_table_dump(uint32_t vaddr);
 void *get_a_page(uint32_t vaddr);
+int ensure_user_page(uint32_t vaddr);
 void *get_kernel_pages(uint32_t pg_cnt);
 uint32_t vaddr_reserve_run(uint32_t pages);
 int vaddr_reserve_at(uint32_t base, uint32_t pages);
@@ -77,6 +79,7 @@ void *map_reserved_page(uint32_t vaddr);
 void *ioremap(uint32_t phy_addr, uint32_t size);
 void free_kernel_page(uint32_t vaddr);
 void free_user_page(uint32_t vaddr);
+uint32_t user_remap_page(uint32_t vaddr);
 uint64_t *phys_to_virt(uint64_t phys);
 
 #endif

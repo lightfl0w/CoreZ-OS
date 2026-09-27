@@ -115,8 +115,7 @@ static uint32_t sys_write(int32_t fd, char *str, uint32_t count) {
     }
     uint32_t gfd = fd_local2global((uint32_t)fd);
     struct FILE *wf = file_get(gfd);
-    if (gfd >= 3 && wf != NULL && wf->fd_inode != NULL &&
-        wf->fd_flag != PIPE_FLAG) {
+    if (gfd >= 3 && wf != NULL && wf->fd_inode != NULL && !is_pipe((uint32_t)fd)) {
         return write_file(fd, str, count);
     }
     TTY.write(str, count);
@@ -200,7 +199,8 @@ uint32_t sys_brk(uint32_t addr) {
     if (new_page > old_page) {
         for (uint32_t page = old_page; page < new_page; page += PAGE_SIZE) {
             if (page_is_mapped(page)) {
-                kprintf("[brk] collision at 0x%x, keep 0x%x\n", page, cur_brk);
+                kprintf("[brk] collision at 0x%x, keep 0x%x pid=%d base=%x\n",
+                        page, cur_brk, (int)cur->pid, base);
                 return cur_brk;
             }
             if (get_a_page(page) == 0) {
@@ -866,9 +866,157 @@ static const nsys_fn nsys_table[] = {
     [SYS_SETFGPID] = nsys_setfgpid,   [SYS_SMASH] = nsys_smash,
 };
 
+volatile uint32_t sc_total;
+uint32_t sc_last_nr[MAX_TASKS];
+uint32_t sc_last_a0[MAX_TASKS];
+uint32_t sc_last_a1[MAX_TASKS];
+uint32_t sc_last_ra[MAX_TASKS];
+uint32_t sc_last_stk[MAX_TASKS][16];
+
+#define SC_TRACE_ENABLE 0
+
+static int sc_trace_interest(uint32_t nr) {
+#if !SC_TRACE_ENABLE
+    (void)nr;
+    return 0;
+#else
+    switch (nr) {
+    case 0: case 1: case 3: case 8: case 9: case 10: case 11: case 12: case 16:
+    case 32: case 33: case 56: case 57: case 58: case 59: case 60: case 61:
+    case 72: case 202: case 231: case 257: case 290: case 293: case 435:
+    case 35: case 230: case 270: case 271: case 322:
+    case 7: case 23: case 232: case 281:
+        return 1;
+    }
+    return 0;
+#endif
+}
+
+static void sc_read_str(uint64_t up, char *buf, uint32_t cap) {
+    uint32_t i;
+    buf[0] = 0;
+    if (up < USER_VADDR_START ||
+        !user_range_readable((uint32_t)up, cap - 1)) {
+        return;
+    }
+    for (i = 0; i < cap - 1; i++) {
+        char ch = ((const char *)(uintptr_t)up)[i];
+        if (ch == 0)
+            break;
+        buf[i] = (ch >= 0x20 && ch < 0x7f) ? ch : '.';
+    }
+    buf[i] = 0;
+}
+
+static void sc_trace_emit(struct X86_REGS *r, uint32_t nr) {
+    char pbuf[40];
+    if (nr == 59 || nr == 257) {
+        sc_read_str(r->rdi, pbuf, sizeof(pbuf));
+        kprintf("[sc] pid=%d nr=%u path=%s\n", current->pid, nr, pbuf);
+        return;
+    }
+    if (nr == 1) {
+        if (r->rdi == 0x800) {
+            sc_read_str(r->rsi, pbuf, sizeof(pbuf));
+            kprintf("[sc] pid=%d nr=1 fd=EV val=%s\n", current->pid, pbuf);
+        } else {
+            sc_read_str(r->rsi, pbuf, sizeof(pbuf));
+            kprintf("[sc] pid=%d nr=1 fd=%d n=%d txt=%s\n", current->pid,
+                    (int)r->rdi, (int)(uint32_t)r->rdx, pbuf);
+        }
+        return;
+    }
+    if (nr == 270 || nr == 271) {
+        uint32_t nfds = (uint32_t)r->rdi;
+        if (nfds > 4)
+            nfds = 4;
+        kprintf("[sc] pid=%d nr=%u nfds=%d fds=", current->pid, nr,
+                (int)(uint32_t)r->rdi);
+        for (uint32_t k = 0; k < nfds; k++) {
+            uint32_t base = (uint32_t)r->rsi + k * 8;
+            int32_t fd = -2;
+            if (base >= USER_VADDR_START &&
+                user_range_readable(base, 8)) {
+                fd = *(const int32_t *)(uintptr_t)base;
+            }
+            kprintf("%d,", (int)fd);
+        }
+        kprintf("\n");
+        return;
+    }
+    if (nr == 0) {
+        kprintf("[sc] pid=%d nr=0 fd=%d n=%d\n", current->pid, (int)r->rdi,
+                (int)(uint32_t)r->rdx);
+        return;
+    }
+    if (nr == 7) {
+        uint32_t nfds = (uint32_t)r->rsi;
+        if (nfds > 6)
+            nfds = 6;
+        kprintf("[sc] pid=%d nr=7 nfds=%d fds=", current->pid,
+                (int)(uint32_t)r->rsi);
+        for (uint32_t k = 0; k < nfds; k++) {
+            uint32_t base = (uint32_t)r->rdi + k * 8;
+            int32_t pfd = -2;
+            int16_t pev = 0;
+            if (base >= USER_VADDR_START &&
+                user_range_readable(base, 8)) {
+                pfd = *(const int32_t *)(uintptr_t)base;
+                pev = *(const int16_t *)(uintptr_t)(base + 4);
+            }
+            kprintf("%d/%x,", pfd, (unsigned)pev);
+        }
+        kprintf(" tmo=%d\n", (int32_t)(uint32_t)r->rdx);
+        return;
+    }
+    if (nr == 202) {
+        kprintf("[sc] pid=%d nr=202 uaddr=%x op=%x val=%x\n", current->pid,
+                (uint32_t)r->rdi, (uint32_t)r->rsi, (uint32_t)r->rdx);
+        return;
+    }
+    kprintf("[sc] pid=%d nr=%u a0=%x a1=%x a2=%x b=%x t=%u\n", current->pid,
+            nr, (uint32_t)r->rdi, (uint32_t)r->rsi, (uint32_t)r->rdx,
+            (uint32_t)current->exe_bias, (unsigned)tick);
+}
+
+static int sc_ret_interest(uint32_t nr) {
+#if !SC_TRACE_ENABLE
+    (void)nr;
+    return 0;
+#else
+    switch (nr) {
+    case 0: case 1: case 8: case 9: case 10: case 11: case 12: case 59: case 257:
+    case 290: case 293: case 32: case 33: case 72: case 202:
+    case 7: case 23: case 232: case 281: case 16:
+        return 1;
+    }
+    return 0;
+#endif
+}
+
 uint64_t syscall_handler(struct X86_REGS *r) {
     uint32_t nr = r->eax;
     uint64_t ret = (uint32_t)-1;
+    sc_total++;
+    {
+        uint32_t sslot = (uint32_t)(current - task_table);
+        uint32_t us = (uint32_t)r->user_rsp;
+        sc_last_nr[sslot] = nr;
+        sc_last_a0[sslot] = (uint32_t)r->rdi;
+        sc_last_a1[sslot] = (uint32_t)r->rsi;
+        sc_last_ra[sslot] = (uint32_t)(r->cs & 3) ? (uint32_t)r->rip : 0;
+        for (uint32_t k = 0; k < 16; k++) {
+            uint32_t ua = us + k * 4;
+            sc_last_stk[sslot][k] =
+                (us >= USER_VADDR_START && ua < 0xc0000000u &&
+                 page_is_mapped(ua))
+                    ? *(const uint32_t *)(uintptr_t)ua
+                    : 0;
+        }
+    }
+    if (r->int_no == 0x81 && sc_trace_interest(nr)) {
+        sc_trace_emit(r, nr);
+    }
     if (r->int_no == 0x81 || current->compat || nr >= COMPAT_SYSCALL_BASE) {
         if (r->int_no == 0x80 && nr < COMPAT_SYSCALL_BASE) {
             r->rdi = r->rbx;
@@ -879,6 +1027,12 @@ uint64_t syscall_handler(struct X86_REGS *r) {
         }
         ret = (uint64_t)linux_compat_handler(r);
         r->rax = ret;
+        if (r->int_no == 0x81 &&
+            (sc_ret_interest(nr) || (sc_trace_interest(nr) &&
+                                     ((int64_t)ret < 0)))) {
+            kprintf("[sc] pid=%d nr=%u ret=%d\n", current->pid, nr,
+                    (int64_t)ret);
+        }
 
         check_pending_signals(r);
         return ret;
@@ -887,6 +1041,12 @@ uint64_t syscall_handler(struct X86_REGS *r) {
         ret = (uint64_t)nsys_table[nr](r);
     }
     r->rax = ret;
+    if (r->int_no == 0x81 &&
+        (sc_ret_interest(nr) ||
+         (sc_trace_interest(nr) && ((int64_t)ret < 0)))) {
+        kprintf("[sc] pid=%d nr=%u ret=%d\n", current->pid, nr,
+                (int64_t)ret);
+    }
     check_pending_signals(r);
     return ret;
 }

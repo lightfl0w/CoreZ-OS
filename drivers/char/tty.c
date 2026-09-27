@@ -33,9 +33,162 @@ static struct LINUX_TERMIOS tty_tios;
 static uint16_t tty_ws[4] = {TTY_WINSZ_ROW, TTY_WINSZ_COL, 0, 0};
 static uint32_t tty_pgrp;
 
+#define TT_NONE 0
+#define TT_ESC 1
+#define TT_CSI 2
+#define TT_OSC 3
+#define TT_DCS 4
+
+#define TT_REPLY_KITTY 1
+#define TT_REPLY_XTVERSION 1
+#define TT_REPLY_OSC11 1
+#define TT_REPLY_TCAP 1
+
+static uint8_t tt_state;
+static uint8_t tt_pending;
+static char tt_seq[64];
+static uint32_t tt_seq_n;
+
+static void tt_reply(const char *s) {
+    while (*s)
+        ioq_putchar(&keyboard_ioq, *s++);
+}
+
+static void tt_csi_dispatch(char final_c) {
+    char params[8];
+    uint32_t np = 0;
+    uint8_t priv = 0;
+    for (uint32_t i = 0; i < tt_seq_n; i++) {
+        char ch = tt_seq[i];
+        if (ch == '?')
+            priv = 1;
+        else if (np < sizeof(params))
+            params[np++] = ch;
+    }
+    if (final_c == 'c') {
+        tt_reply("\x1b[?1;2c");
+        return;
+    }
+    if (final_c == 'n' && !priv && np == 1 && params[0] == '6') {
+        tt_reply("\x1b[1;1R");
+        return;
+    }
+    if (final_c == 'u' && priv) {
+#if TT_REPLY_KITTY
+        tt_reply("\x1b[?0u");
+#endif
+        return;
+    }
+    if (final_c == 'q' && np >= 1 && params[0] == '>') {
+#if TT_REPLY_XTVERSION
+        tt_reply("\x1bP>|corez-os tty\x1b\\");
+#endif
+        return;
+    }
+}
+
+static void tt_osc_dispatch(void) {
+#if TT_REPLY_OSC11
+    if (tt_seq_n >= 4 && tt_seq[0] == '1' && tt_seq[1] == '1' &&
+        tt_seq[2] == ';' && tt_seq[3] == '?')
+        tt_reply("\x1b]11;rgb:0000/0000/0000\x1b\\");
+#endif
+}
+
+static void tt_dcs_dispatch(void) {
+#if TT_REPLY_TCAP
+    if (tt_seq_n >= 3 && tt_seq[0] == '+' && tt_seq[1] == 'q') {
+        tt_reply("\x1bP0+r");
+        for (uint32_t i = 2; i < tt_seq_n; i++)
+            ioq_putchar(&keyboard_ioq, tt_seq[i]);
+        tt_reply("\x1b\\");
+    }
+#endif
+}
+
+static void tt_seq_push(char c) {
+    if (tt_seq_n < sizeof(tt_seq))
+        tt_seq[tt_seq_n++] = c;
+}
+
+static void tt_esc_flush(char c) {
+    if (c == '\\') {
+        if (tt_pending == TT_OSC)
+            tt_osc_dispatch();
+        else if (tt_pending == TT_DCS)
+            tt_dcs_dispatch();
+        tt_state = TT_NONE;
+        tt_pending = TT_NONE;
+        return;
+    }
+    tt_pending = TT_NONE;
+    if (c == '[') {
+        tt_state = TT_CSI;
+        tt_seq_n = 0;
+    } else if (c == ']') {
+        tt_state = TT_OSC;
+        tt_seq_n = 0;
+    } else if (c == 'P') {
+        tt_state = TT_DCS;
+        tt_seq_n = 0;
+    } else {
+        tt_state = TT_NONE;
+    }
+}
+
+static void tty_esc_feed(char c) {
+    switch (tt_state) {
+    case TT_NONE:
+        if (c == 0x1b)
+            tt_state = TT_ESC;
+        return;
+    case TT_ESC:
+        tt_esc_flush(c);
+        return;
+    case TT_CSI:
+        if (c == 0x1b) {
+            tt_state = TT_ESC;
+            return;
+        }
+        if ((c >= '0' && c <= '9') || c == ';' || c == '?' || c == '>' ||
+            c == '=' || c == '$' || c == ' ' || c == '!') {
+            tt_seq_push(c);
+            return;
+        }
+        tt_state = TT_NONE;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+            tt_csi_dispatch(c);
+        return;
+    case TT_OSC:
+        if (c == 0x07) {
+            tt_state = TT_NONE;
+            tt_osc_dispatch();
+            return;
+        }
+        tt_seq_push(c);
+        if (c == 0x1b) {
+            tt_pending = TT_OSC;
+            tt_state = TT_ESC;
+        }
+        return;
+    case TT_DCS:
+        if (c == 0x1b) {
+            tt_pending = TT_DCS;
+            tt_state = TT_ESC;
+            return;
+        }
+        tt_seq_push(c);
+        return;
+    default:
+        tt_state = TT_NONE;
+        return;
+    }
+}
+
 static int tty_write(const char *buf, uint32_t n) {
     for (uint32_t i = 0; i < n; i++)
-        console_putc(buf[i]);
+        tty_esc_feed(buf[i]);
+    console_vt_write(buf, n);
     return (int)n;
 }
 

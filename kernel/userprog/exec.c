@@ -16,10 +16,10 @@
 #include "kernel/userprog/process.h"
 #include "kernel/fs/file.h"
 static const char **exec_env_defaults(void) {
-    static const char *root[4] = {"PATH=/bin:/usr/bin:/", "HOME=/",
-                                  "USER=root", "LOGNAME=root"};
-    static const char *user[4] = {"PATH=/bin:/usr/bin", "HOME=/home/user",
-                                  "USER=user", "LOGNAME=user"};
+    static const char *root[5] = {"PATH=/bin:/usr/bin:/", "HOME=/root",
+                                  "USER=root", "LOGNAME=root", "LANG=C"};
+    static const char *user[5] = {"PATH=/bin:/usr/bin", "HOME=/home/user",
+                                  "USER=user", "LOGNAME=user", "LANG=C"};
     return (current != NULL && current->euid == 0) ? root : user;
 }
 
@@ -504,6 +504,7 @@ static int32_t load64(int32_t fd, struct EXEC_IMAGE *img) {
         goto out;
     }
 
+
     if (has_interp) {
         uint32_t below = (image_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         uint32_t room, gap;
@@ -830,8 +831,8 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         }
         const char **env_def = exec_env_defaults();
         if (envp == NULL) {
-                envc = 4;
-                for (int ed_i = 0; ed_i < 4; ed_i++)
+                envc = 5;
+                for (int ed_i = 0; ed_i < 5; ed_i++)
                     envlens[ed_i] =
                         (uint32_t)strlen(env_def[ed_i]) + 1;
         } else {
@@ -861,6 +862,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
         }
         cur->exe_path[el] = 0;
     }
+    cur->exe_bias = img.base;
     cur->user_brk = 0;
     cur->brk_base = img.brk_base;
     signal_reset_user(cur);

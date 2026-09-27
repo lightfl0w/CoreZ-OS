@@ -53,6 +53,59 @@ static volatile uint8_t frame_owner[FRAME_IDX_MAX];
 uint64_t kernel_pml4;
 uint32_t kernel_kphys;
 
+static int fr_dup_reports;
+static int fr_arm = 1;
+static uint32_t fr_va[FRAME_IDX_MAX];
+static int fr_va_reports;
+
+static void fr_va_bad(const char *tag, uint32_t vaddr, uint32_t prev,
+                      uint32_t phy) {
+    if (fr_va_reports >= 40) {
+        return;
+    }
+    fr_va_reports++;
+    struct TASK *c = current;
+    kprintf("[fr-va] %s va=%x prev=%x phy=%x pid=%d\n", tag, vaddr, prev, phy,
+            c != NULL ? (int)c->pid : -1);
+}
+
+static void fr_va_map(uint32_t vaddr, uint32_t phy, const char *tag) {
+    if (phy < MEMORY_BASE || phy >= MAX_PHYS_MEM) {
+        return;
+    }
+    uint32_t idx = FRAME_IDX(phy);
+    uint32_t prev = fr_va[idx];
+    if (prev != 0 && prev != vaddr && frame_owner[idx] == 0) {
+        fr_va_bad(tag, vaddr, prev, phy);
+    }
+    fr_va[idx] = vaddr;
+}
+
+static void fr_va_unmap(uint32_t vaddr, uint32_t phy) {
+    if (phy < MEMORY_BASE || phy >= MAX_PHYS_MEM) {
+        return;
+    }
+    uint32_t idx = FRAME_IDX(phy);
+    uint32_t prev = fr_va[idx];
+    if (prev != 0 && prev != vaddr && frame_owner[idx] == 0) {
+        fr_va_bad("wrongfree", vaddr, prev, phy);
+        return;
+    }
+    if (prev == vaddr) {
+        fr_va[idx] = 0;
+    }
+}
+
+static void fr_dup_hit(const char *tag, uint32_t phy, int extra) {
+    if (fr_dup_reports >= 32) {
+        return;
+    }
+    fr_dup_reports++;
+    struct TASK *c = current;
+    kprintf("[fr-dup] %s phy=%x pid=%d v=%d\n", tag, phy,
+            c != NULL ? (int)c->pid : -1, extra);
+}
+
 
 static uint32_t e820_mem_upper(void) {
     uint64_t top = mb2_mem_top();
@@ -271,6 +324,9 @@ static void pfree_raw(struct MM_POOL *pool, uint32_t phy_addr) {
     uint32_t idx = (phy_addr - pool->phy_addr_start) / PAGE_SIZE;
     ASSERT(idx < pool->pool_bitmap.btmp_bytes_len * 8);
     ASSERT((phy_addr & 0xfffu) == 0);
+    if (bitmap_scan_test(&pool->pool_bitmap, idx) == 0) {
+        fr_dup_hit("bitmap", phy_addr, (int)idx);
+    }
     bitmap_set(&pool->pool_bitmap, idx, 0);
 }
 
@@ -362,6 +418,11 @@ static uint32_t pcpu_pop(uint32_t c) {
  * 调用者必须已关中断，以保证本 CPU 缓存的独占访问
  */
 static int pcpu_push(uint32_t c, uint32_t phy) {
+    for (uint32_t i = 0; i < pcpu_cache_count[c]; i++) {
+        if (pcpu_page_cache[c][i] == phy) {
+            fr_dup_hit("cache", phy, (int)i);
+        }
+    }
     if (pcpu_cache_count[c] >= PCP_CACHE_MAX) {
         return 0;
     }
@@ -408,12 +469,40 @@ static uint32_t pool_alloc_page(void) {
  * @remarks
  * 优先压回本 CPU 缓存；缓存已满或不可用时归还位图。地址低于池起点时忽略
  */
+static void fr_selftest(int cmode, uint32_t c) {
+    int fi = bitmap_scan(&kernel_pool.pool_bitmap, 1);
+    if (fi == -1) {
+        return;
+    }
+    uint32_t fphy = kernel_pool.phy_addr_start + (uint32_t)fi * PAGE_SIZE;
+    kprintf("[fr-arm] selftest phy=%x\n", fphy);
+    lock_acquire(&pool_lock);
+    pfree_raw(&kernel_pool, fphy);
+    lock_release(&pool_lock);
+    if (cmode) {
+        uint32_t old = asm_save_eflags();
+        asm_cli();
+        uint32_t save = pcpu_cache_count[c];
+        int p1 = pcpu_push(c, fphy);
+        int p2 = pcpu_push(c, fphy);
+        pcpu_cache_count[c] = save;
+        asm_restore_eflags(old);
+        cpu_xadd32(&pool_free_pages, (uint32_t)(0u - (uint32_t)(p1 + p2)));
+    }
+    kprintf("[fr-arm] selftest end\n");
+}
+
 static void pool_free_page(uint32_t phy_addr) {
     if (phy_addr < kernel_pool.phy_addr_start) {
         return;
     }
     uint32_t c;
-    if (pcpu_cache_cpu(&c)) {
+    int cmode = pcpu_cache_cpu(&c);
+    if (fr_arm) {
+        fr_arm = 0;
+        fr_selftest(cmode, c);
+    }
+    if (cmode) {
         uint32_t old = asm_save_eflags();
         asm_cli();
         int ok = pcpu_push(c, phy_addr);
@@ -541,12 +630,16 @@ void page_table_dump(uint32_t vaddr) {
     kprintf("  [pgtbl] nx_usable=%d efer=0x%x\n", g_nx_usable,
             (uint32_t)asm_rdmsr(EFER_MSR));
     kprintf("  [pgtbl] cr3=0x%x vaddr=0x%x\n", (uint32_t)pml4_phys, vaddr);
-    kprintf("  [pgtbl] PML4[%d]=0x%x\n", (int)PML4_INDEX(vaddr), (uint32_t)e0);
-    kprintf("  [pgtbl] PDPT[%d]=0x%x\n", (int)PDPT_INDEX(vaddr), (uint32_t)e1);
-    kprintf("  [pgtbl] PD[%d]=0x%x\n", (int)PD_INDEX(vaddr), (uint32_t)e2);
-    kprintf("  [pgtbl] PT[%d]=0x%x  (P=%d W=%d U=%d PCD=%d PAT=%d G=%d "
+    kprintf("  [pgtbl] PML4[%d]=%x%x\n", (int)PML4_INDEX(vaddr),
+            (uint32_t)(e0 >> 32), (uint32_t)e0);
+    kprintf("  [pgtbl] PDPT[%d]=%x%x\n", (int)PDPT_INDEX(vaddr),
+            (uint32_t)(e1 >> 32), (uint32_t)e1);
+    kprintf("  [pgtbl] PD[%d]=%x%x PS=%d\n", (int)PD_INDEX(vaddr),
+            (uint32_t)(e2 >> 32), (uint32_t)e2, (int)((e2 >> 7) & 1));
+    kprintf("  [pgtbl] PT[%d]=%x%x (P=%d W=%d U=%d PCD=%d PAT=%d G=%d "
             "NX=%d phys=%#x)\n",
-            (int)PT_INDEX(vaddr), (uint32_t)e3, (int)(e3 & 1),
+            (int)PT_INDEX(vaddr), (uint32_t)(e3 >> 32), (uint32_t)e3,
+            (int)(e3 & 1),
             (int)((e3 >> 1) & 1), (int)((e3 >> 2) & 1), (int)((e3 >> 4) & 1),
             (int)((e3 >> 7) & 1),             (int)((e3 >> 8) & 1), (int)((e3 >> 63) & 1),
             (uint32_t)(e3 & 0x000ffffffffff000ull));
@@ -620,9 +713,23 @@ void *get_a_page(uint32_t vaddr) {
     struct TASK *cur = current;
     uint32_t bit_idx = (vaddr - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
     if (bit_idx >= cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8) {
+        if (vaddr >= 0xbf000000u) {
+            kprintf("[oob-map] get_a_page pid=%d va=%x bit=%d/%d\n", cur->pid,
+                    vaddr, (int)bit_idx,
+                    (int)(cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8));
+        }
         return 0;
     }
     lock_acquire(&map_lock);
+    {
+        uint64_t *op = pte_ptr(vaddr);
+        if (op != 0 && (*op & 1)) {
+            kprintf("[clobber-map] get_a_page pid=%d va=%x oldpte=%x bit=%d\n",
+                    cur->pid, vaddr, (uint32_t)*op,
+                    (int)bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap,
+                                          bit_idx));
+        }
+    }
     if (bitmap_scan_test(&cur->userprog_v_addr.vaddr_bitmap, bit_idx) == 1) {
         lock_release(&map_lock);
         return 0;
@@ -644,6 +751,7 @@ void *get_a_page(uint32_t vaddr) {
         return 0;
     }
     memset((void *)vaddr, 0, PAGE_SIZE);
+    fr_va_map(vaddr, phy, "get_a_page");
     lock_release(&map_lock);
     return (void *)vaddr;
 }
@@ -705,6 +813,41 @@ int vaddr_reserve_at(uint32_t base, uint32_t pages) {
     return 0;
 }
 
+int ensure_user_page(uint32_t vaddr) {
+    uint64_t *pte = pte_ptr(vaddr);
+    if (pte != NULL && (*pte & 1))
+        return 0;
+    return get_a_page(vaddr & ~0xfffu) != 0 ? 0 : -1;
+}
+
+uint32_t user_remap_page(uint32_t vaddr) {
+    struct TASK *cur = current;
+    lock_acquire(&map_lock);
+    uint64_t *pte = pte_query(cur_pml4(), (uint64_t)vaddr);
+    if (pte == NULL || !(*pte & 1)) {
+        lock_release(&map_lock);
+        return 0;
+    }
+    uint64_t old = *pte;
+    uint32_t oldphy = (uint32_t)(old & 0xfffff000ull);
+    uint32_t phy = pool_alloc_page();
+    if (phy == 0) {
+        lock_release(&map_lock);
+        return 0;
+    }
+    memcpy((void *)(uintptr_t)VIRT_OF(phy), (void *)(uintptr_t)VIRT_OF(oldphy),
+           PAGE_SIZE);
+    *pte = ((uint64_t)phy) | (old & 0xfffull);
+    __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+    uint32_t bit_idx = (vaddr - cur->userprog_v_addr.vaddr_start) / PAGE_SIZE;
+    if (bit_idx < cur->userprog_v_addr.vaddr_bitmap.btmp_bytes_len * 8) {
+        bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bit_idx, 1);
+    }
+    fr_va_map(vaddr, phy, "remap");
+    lock_release(&map_lock);
+    return phy;
+}
+
 void vaddr_unreserve(uint32_t base, uint32_t pages) {
     struct TASK *cur = current;
     if (base < cur->userprog_v_addr.vaddr_start)
@@ -726,6 +869,13 @@ void *map_reserved_page(uint32_t vaddr) {
         return 0;
     }
     lock_acquire(&map_lock);
+    {
+        uint64_t *op = pte_ptr(vaddr);
+        if (op != 0 && (*op & 1)) {
+            kprintf("[clobber-map] map_reserved pid=%d va=%x oldpte=%x\n",
+                    cur->pid, vaddr, (uint32_t)*op);
+        }
+    }
     uint32_t phy = pool_alloc_page();
     if (phy == 0) {
         lock_release(&map_lock);
@@ -740,6 +890,7 @@ void *map_reserved_page(uint32_t vaddr) {
         return 0;
     }
     memset((void *)vaddr, 0, PAGE_SIZE);
+    fr_va_map(vaddr, phy, "map_res");
     lock_release(&map_lock);
     return (void *)vaddr;
 }
@@ -800,6 +951,13 @@ void free_user_page(uint32_t vaddr) {
     uint64_t *pte = pte_ptr(vaddr);
     if (*pte & 1) {
         uint32_t phy = (uint32_t)(*pte & 0xfffff000ull);
+        if (cur != NULL &&
+            (vaddr >= 0xbf000000u ||
+             (cur->exe_bias != 0 &&
+              ((vaddr - cur->exe_bias) & ~0xfffu) == 0x3a1000))) {
+            kprintf("[watch] free_user_page pid=%d vaddr=%x phy=%x stack=%d\n",
+                    cur->pid, vaddr, phy, (int)(vaddr >= 0xbf000000u));
+        }
         *pte = 0;
         __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
         uint32_t bit_idx =
@@ -808,7 +966,7 @@ void free_user_page(uint32_t vaddr) {
             bitmap_set(&cur->userprog_v_addr.vaddr_bitmap, bit_idx, 0);
         }
         lock_release(&map_lock);
-        page_free_or_decref(phy);
+        page_free_or_decref_va(phy, vaddr);
         return;
     }
     lock_release(&map_lock);
@@ -851,6 +1009,7 @@ int page_cow_resolve(uint32_t vaddr, uint64_t pte_val) {
         frame_owner[idx]--;
         *pte = (uint64_t)new_phy |
                (pte_val & (PTE_P | PTE_U | PTE_NX | 0x0f0)) | PTE_W;
+        fr_va_map(vaddr & ~0xfffu, new_phy, "cow_res");
     } else {
         *pte = (*pte & ~(uint64_t)COW_FLAG) | PTE_W;
     }
@@ -874,4 +1033,9 @@ void page_free_or_decref(uint32_t phy_addr) {
     frame_owner[idx] = 0;
     lock_release(&map_lock);
     pfree(&kernel_pool, phy_addr);
+}
+
+void page_free_or_decref_va(uint32_t phy_addr, uint32_t vaddr) {
+    fr_va_unmap(vaddr, phy_addr);
+    page_free_or_decref(phy_addr);
 }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 fn main() {
     print!("rust: S1 boot ok\n");
-    println!("rust: hello from nitian-os");
+    println!("rust: hello from corez-os");
     print!("rust: S2 argv={} cwd={:?}\n", std::env::args().count(),
            std::env::current_dir().map(|p| p.display().to_string()));
 

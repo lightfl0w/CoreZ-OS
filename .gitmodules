@@ -10,3 +10,6 @@
 [submodule "third_modules/pcre2"]
 	path = third_modules/pcre2
 	url = https://github.com/PCRE2Project/pcre2.git
+[submodule "kernel/gui/flanterm"]
+	path = kernel/gui/flanterm
+	url = https://github.com/mintsuki/flanterm.git

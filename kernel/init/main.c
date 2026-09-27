@@ -148,7 +148,7 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     if (net_enable)
         net_init();
 
-    process_execute("/init_sh.elf", "shell");
+    process_execute("/shell.elf", "shell");
     for (;;) {
         net_check_guards();
         cpu_idle();

@@ -6,7 +6,7 @@
 #include "kernel/sched/sync.h"
 #include <stdint.h>
 
-#define MAX_FILE_OPEN 32
+#define MAX_FILE_OPEN 256
 
 struct FILE {
     uint32_t fd_pos;
