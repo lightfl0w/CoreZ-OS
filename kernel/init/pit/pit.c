@@ -2,7 +2,7 @@
 
 #include "kernel/asm_func.h"
 #include "kernel/sched/thread.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 
 #define PIT_BASE_FREQ 1193182
 

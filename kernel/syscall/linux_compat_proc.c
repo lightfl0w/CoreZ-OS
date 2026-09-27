@@ -1,5 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"

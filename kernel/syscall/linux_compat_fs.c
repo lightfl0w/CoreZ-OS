@@ -1,5 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
@@ -83,7 +83,7 @@ static int at_dir_inode(int32_t fd, uint32_t *out) {
     return 0;
 }
 
-int lc_at_path(struct X86_REGS *r, int32_t dirfd, uint64_t uptr, char *out) {
+int lc_at_path(struct ARCH_REGS *r, int32_t dirfd, uint64_t uptr, char *out) {
     if (!copy_user_str(r, out, uptr))
         return -LINUX_EFAULT;
     if (dirfd == LINUX_AT_FDCWD || out[0] == '/')

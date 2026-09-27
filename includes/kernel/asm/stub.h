@@ -2,6 +2,7 @@
 #define ASM_STUB_H
 
 #include <stdint.h>
+#include "arch/regs.h"
 
 extern void isr0(void);
 extern void isr1(void);
@@ -57,46 +58,5 @@ extern void default_handler(void);
 extern void syscall_0x80(void);
 extern void syscall_entry(void);
 extern void ipi_resched(void);
-
-struct X86_REGS {
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t r11;
-    uint64_t r10;
-    uint64_t r9;
-    uint64_t r8;
-    uint64_t rbp;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rdx;
-    uint64_t rcx;
-    uint64_t rbx;
-    uint64_t rax;
-    uint64_t gs_saved;
-    uint64_t int_no;
-    uint64_t err_code;
-    uint64_t rip;
-    uint64_t cs;
-    uint64_t rflags;
-    uint64_t user_rsp;
-    uint64_t ss;
-};
-
-#define eip rip
-#define eflags rflags
-#define user_esp user_rsp
-#define eax rax
-#define ebx rbx
-#define ecx rcx
-#define edx rdx
-#define esi rsi
-#define edi rdi
-#define ebp rbp
-#define esp user_rsp
-
-void isr_handler(struct X86_REGS *r);
-void irq_handler(struct X86_REGS *r);
 
 #endif

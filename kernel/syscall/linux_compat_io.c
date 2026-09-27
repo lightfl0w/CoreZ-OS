@@ -1,5 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
@@ -151,7 +151,7 @@ int64_t lc_socket(LC_ARGS) {
         return fd;
     }
 }
-int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
+int sockaddr_in_parts(struct ARCH_REGS *r, uint64_t addr,
                              uint64_t addrlen, uint32_t *ip,
                              uint16_t *port) {
     if (addr == 0 || addrlen < 8) {
@@ -169,7 +169,7 @@ int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
           ((uint32_t)tmp[6] << 16) | ((uint32_t)tmp[7] << 24);
     return 0;
 }
-int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr,
+int fill_sockaddr_in(struct ARCH_REGS *r, uint64_t addr,
                             uint64_t addrlen_ptr, uint32_t ip,
                             uint16_t port) {
     if (addr == 0 || addrlen_ptr == 0)
@@ -656,7 +656,7 @@ int io_wait(struct LINUX_POLLFD *fds, uint32_t n, int64_t timeout_ms) {
         mtime_sleep(1);
     }
 }
-int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds,
+int64_t lc_poll_common(struct ARCH_REGS *r, uint64_t ufds, int32_t nfds,
                               int64_t timeout_ms) {
     static struct LINUX_POLLFD pf[LC_POLL_MAX];
     if (nfds < 0 || nfds > LC_POLL_MAX)
@@ -674,7 +674,7 @@ int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds,
     memcpy((void *)(uintptr_t)ufds, pf, bytes);
     return rc;
 }
-int64_t lc_timespec_to_ms(struct X86_REGS *r, uint64_t ptr,
+int64_t lc_timespec_to_ms(struct ARCH_REGS *r, uint64_t ptr,
                                  int64_t *out) {
     if (ptr == 0) {
         *out = -1;
@@ -722,7 +722,7 @@ void lc_fdset_clear_high(uint8_t *set, uint32_t bytes, int nfds) {
     for (uint32_t b = bit / 8; b < bytes; b++)
         set[b] = 0;
 }
-int64_t lc_select_common(struct X86_REGS *r, int32_t nfds, uint64_t rd,
+int64_t lc_select_common(struct ARCH_REGS *r, int32_t nfds, uint64_t rd,
                                 uint64_t wr, uint64_t ex, int64_t timeout_ms) {
     static uint8_t sets[3][LC_SEL_MAX_BYTES];
     static struct LINUX_POLLFD pf[LC_SEL_MAX_FDS];
@@ -867,7 +867,7 @@ int64_t lc_epoll_ctl(LC_ARGS) {
     }
     return -LINUX_EINVAL;
 }
-int64_t lc_epoll_wait_common(struct X86_REGS *r, uint64_t a, uint64_t b,
+int64_t lc_epoll_wait_common(struct ARCH_REGS *r, uint64_t a, uint64_t b,
                                     uint64_t c, int64_t timeout_ms) {
     int ep = ep_slot((int)a);
     if (ep < 0)

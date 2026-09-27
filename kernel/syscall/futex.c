@@ -1,5 +1,5 @@
 #include "kernel/syscall/futex.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/rtc.h"
 #include "kernel/asm_func.h"

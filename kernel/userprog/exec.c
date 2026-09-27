@@ -1,12 +1,13 @@
 #include "kernel/userprog/exec.h"
 #include "arch/cpu.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "kernel/asm/stub.h"
 #include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/auxv.h"
 #include "kernel/fs/fs.h"
+#include "kernel/fs/ext2.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
@@ -155,9 +156,9 @@ static void scan_note_abi(int32_t fd, uint32_t base_off, uint32_t filesz,
     }
 }
 
-static void fill_entry_regs(struct X86_REGS *r, uint32_t entry, int is64,
+static void fill_entry_regs(struct ARCH_REGS *r, uint32_t entry, int is64,
                             uint32_t rsp, uint32_t argc, uint32_t argv_base) {
-    memset(r, 0, sizeof(struct X86_REGS));
+    memset(r, 0, sizeof(struct ARCH_REGS));
     r->rip = entry;
     r->cs = is64 ? SELECTOR_USER64_CODE : SELECTOR_U_CODE;
     r->rflags = EFLAGS_IOPL_0 | EFLAGS_MBS | EFLAGS_IF_1;
@@ -765,7 +766,7 @@ static int copy_strs(const char *const *strs, uint32_t *lens, char *buf,
 }
 
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
-                   struct X86_REGS *regs) {
+                   struct ARCH_REGS *regs) {
     uint32_t argc;
     int32_t entry_point;
     struct TASK *cur;
@@ -778,7 +779,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t argv_user_base;
     int32_t i;
     uint32_t slen;
-    struct X86_REGS *ps;
+    struct ARCH_REGS *ps;
     struct EXEC_IMAGE img;
     int is64 = 0;
     int is_linux = 0;
@@ -856,9 +857,14 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     memcpy(cur->name, path, 15);
     cur->name[15] = 0;
     {
+        char abs[MAX_PATH_LEN];
+        const char *src = path;
+        if (ext2_abs_path(path, abs, sizeof(abs)) == 0) {
+            src = abs;
+        }
         uint32_t el;
-        for (el = 0; el < sizeof(cur->exe_path) - 1 && path[el] != 0; el++) {
-            cur->exe_path[el] = path[el];
+        for (el = 0; el < sizeof(cur->exe_path) - 1 && src[el] != 0; el++) {
+            cur->exe_path[el] = src[el];
         }
         cur->exe_path[el] = 0;
     }
@@ -1052,7 +1058,7 @@ exec_done:
     }
 
     ps =
-        (struct X86_REGS *)(cur->kernel_stack_top - THREAD_STACK_SIZE + 0x100);
+        (struct ARCH_REGS *)(cur->kernel_stack_top - THREAD_STACK_SIZE + 0x100);
     fill_entry_regs(ps, (uint32_t)entry_point, is64, ustack_ptr, argc,
                     argv_user_base);
 
@@ -1064,6 +1070,6 @@ exec_done:
 }
 
 int32_t sys_execv(const char *path, const char *argv[],
-                  struct X86_REGS *regs) {
+                  struct ARCH_REGS *regs) {
     return sys_execve(path, argv, NULL, regs);
 }

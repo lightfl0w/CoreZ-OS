@@ -35,10 +35,13 @@ int main(void) {
             if (conf_path[0]) {
                 execv(conf_path, (const char *[]){conf_path, NULL});
                 printf("shell: exec %s failed\n", conf_path);
-                exit(-1);
             }
+#if CONFIG_FISH
             execv("/fish.elf", (const char *[]){"/fish.elf", NULL});
             printf("shell: exec /fish.elf failed\n");
+#endif
+            execv("/init_sh.elf", (const char *[]){"/init_sh.elf", NULL});
+            printf("shell: exec /init_sh.elf failed\n");
             exit(-1);
         }
         if (pid < 0) {

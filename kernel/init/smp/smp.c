@@ -10,7 +10,7 @@
 #include "kernel/sched/thread.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/apic/apic.h"
-#include "arch/x86/interrupt/idt.h"
+#include "arch/interrupt/idt.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/init/tss/tss.h"
 #include "kernel/init/pit/pit.h"

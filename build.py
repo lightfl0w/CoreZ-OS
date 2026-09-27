@@ -33,18 +33,76 @@ BOOT_DIR   = ROOT / "arch" / "x86" / "boot"
 APPS_DIR   = ROOT / "apps"
 KERNEL_DIR = ROOT / "kernel"
 BUILD_DIR  = ROOT / "build"
-LINKER_DIR = ROOT / "linker"
 SCRIPTS    = ROOT / "scripts"
 MUSL_SRC   = ROOT / "third_modules" / "musl"
-MUSL_ARCH  = "x86_64"
+CONFIG_FILE   = ROOT / ".config"
+CONFIG_SCRIPT = SCRIPTS / "kconfig.py"
+AUTOCONF_H    = BUILD_DIR / "config" / "autoconf.h"
 
-CLANG_TRIPLES = {
-    "x86_64-freestanding": "x86_64-unknown-none",
-    "i386-freestanding":   "i386-unknown-none",
-    "x86_64-linux-musl":   "x86_64-linux-musl",
-    "x86_64-linux-gnu":    "x86_64-unknown-linux-gnu",
+ARCH_PROFILES = {
+    "x86_64": {
+        "musl_arch": "x86_64",
+        "freestanding_key": "x86_64-freestanding",
+        "freestanding_triple": "x86_64-unknown-none",
+        "rust_triple": "x86_64-unknown-linux-musl",
+        "kernel_arch_cflags": ["-mcmodel=large", "-mno-red-zone", "-mstackrealign"],
+        "ld_emulation": "elf_x86_64",
+        "kernel_linker_script": "linker/kernel.ld",
+        "user_linker_script": "linker/user.ld",
+        "user_dyn_linker_script": "linker/user_dyn.ld",
+        "nasm_elf_format": "elf64",
+        "objcopy_tramp_fmt": "elf64-x86-64",
+        "objcopy_tramp_arch": "i386:x86-64",
+        "qemu_system": "qemu-system-x86_64",
+        "clang_musl_target": "x86_64-linux-musl",
+        "musl_loader": "ld-musl-x86_64.so.1",
+        "cargo_cc_var": "CC_x86_64_unknown_linux_musl",
+        "clang_triples": {
+            "x86_64-freestanding": "x86_64-unknown-none",
+            "i386-freestanding":   "i386-unknown-none",
+            "x86_64-linux-musl":   "x86_64-linux-musl",
+            "x86_64-linux-gnu":    "x86_64-unknown-linux-gnu",
+        },
+    },
 }
-CLANG_DEFAULT_TRIPLE = "x86_64-unknown-none"
+DEFAULT_ARCH_KEY = "x86_64"
+ARCH_KEYS = {
+    "CONFIG_ARCH_X86_64": "x86_64",
+}
+
+
+def read_config(path: Path = CONFIG_FILE) -> dict:
+    cfg: dict = {}
+    if not path.exists():
+        return cfg
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        val = val.strip()
+        if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+            val = val[1:-1]
+        cfg[key.strip()] = val
+    return cfg
+
+
+def active_arch(cfg: dict) -> dict:
+    for sym, key in ARCH_KEYS.items():
+        if cfg.get(sym) == "y":
+            return {"key": key, **ARCH_PROFILES[key]}
+    return {"key": DEFAULT_ARCH_KEY, **ARCH_PROFILES[DEFAULT_ARCH_KEY]}
+
+
+CONFIG = read_config()
+ARCH   = active_arch(CONFIG)
+
+MUSL_ARCH  = ARCH["musl_arch"]
+RUST_TRIPLE = ARCH["rust_triple"]
+FREESTANDING_KEY = ARCH["freestanding_key"]
+
+CLANG_TRIPLES = ARCH["clang_triples"]
+CLANG_DEFAULT_TRIPLE = ARCH["freestanding_triple"]
 CLANG_FREESTANDING_FLAGS = ["-nostdlibinc"]
 CC_CLANG_CANDIDATES = ("clang", "clang-22", "clang-21", "clang-20", "clang-19",
                        "clang-18", "clang-17")
@@ -60,12 +118,14 @@ USER_INCS = ["-I", str(ROOT / "includes" / "libc" / "user"),
              "-I", str(ROOT / "includes" / "lib"), *INCS]
 
 KERNEL_CFLAGS = FREE + INCS + [
-    "-mcmodel=large", "-mno-red-zone", "-mstackrealign",
+    *ARCH["kernel_arch_cflags"],
     "-fstack-protector-strong",
     "-Wall", "-Wunused-function", "-Wunused-variable",
-]
-UP_CFLAGS_64 = FREE + ["-fPIE", "-fno-stack-protector", *USER_INCS]
-UP_LDFLAGS_64 = ["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
+] + ["-include", str(AUTOCONF_H)]
+UP_CFLAGS_64 = FREE + ["-fPIE", "-fno-stack-protector", *USER_INCS,
+                       "-include", str(AUTOCONF_H)]
+UP_LDFLAGS_64 = ["-s", "-m", ARCH["ld_emulation"],
+                 "-T", str(ROOT / ARCH["user_linker_script"]),
                  "-e", "_start", "-static", "-pie", "--no-dynamic-linker",
                  "-z", "pack-relative-relocs"]
 MUSL64_BASE = FREE + ["-fPIE"]
@@ -80,9 +140,10 @@ PCRE2_LIB    = PCRE2_PREFIX / "lib"
 FISH_SRC       = ROOT / "third_modules" / "fish"
 FISH_CARGO_TOML = FISH_SRC / "Cargo.toml"
 FISH_TARGET    = BUILD_DIR / "fish-target"
-FISH_BIN       = FISH_TARGET / "x86_64-unknown-linux-musl" / "release" / "fish"
+FISH_BIN       = FISH_TARGET / RUST_TRIPLE / "release" / "fish"
 MUSL_DEMO_CFLAGS = MUSL64_BASE + ["-fstack-protector-strong", "-I", str(MUSL_INC)]
-LC_CFLAGS = MUSL64_BASE + ["-fno-stack-protector", "-I", str(ROOT / "includes")]
+LC_CFLAGS = MUSL64_BASE + ["-fno-stack-protector", "-I", str(ROOT / "includes"),
+                           "-include", str(AUTOCONF_H)]
 class Ansi:
     RESET   = "\x1b[0m"
     BOLD    = "\x1b[1m"
@@ -375,13 +436,14 @@ def task_assemble_elf(name: str, src: Path, out: Path, tools: Tools) -> Task:
     )
 def task_assemble_elf64(name: str, src: Path, out: Path, tools: Tools) -> Task:
     return Task(
-        name=name, cmd=[tools.nasm, "-f", "elf64", str(src), "-o", str(out)],
+        name=name, cmd=[tools.nasm, "-f", ARCH["nasm_elf_format"],
+                        str(src), "-o", str(out)],
         out=out, deps=[], description=str(src.relative_to(ROOT)),
         group="asm",
     )
 COMPILE_COMMANDS = []
 
-def task_cc(name: str, src: Path, out: Path, tools: Tools, flags: List[str], target: str = "x86_64-freestanding", cc: Optional[List[str]] = None, kind: Optional[str] = None) -> Task:
+def task_cc(name: str, src: Path, out: Path, tools: Tools, flags: List[str], target: str = FREESTANDING_KEY, cc: Optional[List[str]] = None, kind: Optional[str] = None) -> Task:
     cc = tools.cc if cc is None else cc
     kind = tools.kind if kind is None else kind
     cmd = [*cc]
@@ -475,7 +537,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "ap_tramp.o", BUILD_DIR / "ap_trampoline.bin",
         BUILD_DIR / "ap_tramp.o", tools,
         "_binary_ap_trampoline_bin_start",
-        out_fmt="elf64-x86-64", out_arch="i386:x86-64"))
+        out_fmt=ARCH["objcopy_tramp_fmt"], out_arch=ARCH["objcopy_tramp_arch"]))
     tasks.append(task_assemble_elf64(
         "up_start.o", APPS_DIR / "start.asm", BUILD_DIR / "up_start.o", tools,
     ))
@@ -673,7 +735,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     lc_elf = task_link("lc_demo.elf", BUILD_DIR / "lc_demo.elf", tools,
                        [BUILD_DIR / "lc_start.o", BUILD_DIR / "lc_demo.o",
                         BUILD_DIR / "lc_libc.o"],
-       flags=["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
+       flags=["-s", "-m", ARCH["ld_emulation"],
+              "-T", str(ROOT / ARCH["user_linker_script"]),
               "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
               "-z", "pack-relative-relocs"])
     tasks.append(lc_elf)
@@ -686,7 +749,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "gui.elf", BUILD_DIR / "gui.elf", tools,
         [BUILD_DIR / "lc_start.o", BUILD_DIR / "gui_launch.o",
          BUILD_DIR / "lc_libc.o"],
-        flags=["-s", "-m", "elf_x86_64", "-T", str(ROOT / "linker" / "user.ld"),
+        flags=["-s", "-m", ARCH["ld_emulation"],
+               "-T", str(ROOT / ARCH["user_linker_script"]),
                "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
                "-z", "pack-relative-relocs"])
     tasks.append(gui_elf)
@@ -699,12 +763,12 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         cpp_elf = BUILD_DIR / "cpp_hello.elf"
         if zig:
             cpp_cmd = [zig, "c++", str(cpp_src),
-                       "-target", "x86_64-linux-musl", "-static", "-pie", "-Os",
+                       "-target", ARCH["clang_musl_target"], "-static", "-pie", "-Os",
                        "-Wno-nullability-completeness", "-o", str(cpp_elf)]
             cpp_desc = "link cpp_hello.elf (zig libc++ for musl, static-pie)"
         else:
             cpp_cmd = [cxx, str(cpp_src),
-                       "--target=x86_64-linux-musl", "-nostdlibinc",
+                       "--target=" + ARCH["clang_musl_target"], "-nostdlibinc",
                        "-I", str(MUSL_INC), "-L", str(MUSL_LIB),
                        "-fPIE", "-static", "-pie", "-Os",
                        "-Wno-nullability-completeness", "-o", str(cpp_elf)]
@@ -804,7 +868,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     kernel_elf = BUILD_DIR / "kernel.elf"
     tasks.append(task_link(
         "kernel.elf", kernel_elf, tools, kernel_link_objs,
-        script=LINKER_DIR / "kernel.ld",
+        script=ROOT / ARCH["kernel_linker_script"],
     ))
     kernel_bin = BUILD_DIR / "kernel.bin"
     tasks.append(Task(
@@ -940,7 +1004,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             crtn = MUSL_LIB / "crtn.o"
             cmd = [ld, "-nostdlib", "-static", "-pie", "--no-dynamic-linker",
                    "-z", "pack-relative-relocs",
-                   "-T", str(ROOT / "linker" / "user.ld"), "-e", "_start",
+                   "-T", str(ROOT / ARCH["user_linker_script"]), "-e", "_start",
                    str(crt1), str(crti), *map(str, objs), str(crtn),
                    "-L", str(MUSL_LIB), "--start-group", "-lc", "--end-group",
                    "-o", str(elf)]
@@ -1006,7 +1070,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                 rs = APPS_DIR / (stem + ".rs")
                 tasks.append(Task(
                     name="musl_rust_" + stem,
-                    cmd=[str(rustc), "--target", "x86_64-unknown-linux-musl",
+                    cmd=[str(rustc), "--target", RUST_TRIPLE,
                          "-O", "-C", "panic=abort", "-C", "debuginfo=0",
                          "-o", str(BUILD_DIR / (stem + ".elf")), str(rs)],
                     out=BUILD_DIR / (stem + ".elf"),
@@ -1014,13 +1078,14 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                     optional=True, group="musl",
                     description="rustc " + stem))
 
-            cargo = Path("cargo")
-            if FISH_CARGO_TOML.exists() and cargo.exists():
+            cargo = Path("/opt/cargo/bin/cargo")
+            if (FISH_CARGO_TOML.exists() and cargo.exists()
+                    and CONFIG.get("CONFIG_FISH") == "y"):
                 fish_script = (
                     "set -e; "
                     f"cd {shlex.quote(str(FISH_SRC))}; "
                     f"{shlex.quote(str(cargo))} build --release "
-                    "--target x86_64-unknown-linux-musl --no-default-features; "
+                    f"--target {RUST_TRIPLE} --no-default-features; "
                     f"cp {shlex.quote(str(FISH_BIN))} "
                     f"{shlex.quote(str(BUILD_DIR / 'fish.elf'))}"
                 )
@@ -1031,7 +1096,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                     deps=[FISH_CARGO_TOML],
                     env={"CARGO_HOME": "/opt/cargo", "RUSTUP_HOME": "/opt/rustup",
                          "CARGO_TARGET_DIR": str(FISH_TARGET),
-                         "CC_x86_64_unknown_linux_musl": str(_musl_clang)},
+                         ARCH["cargo_cc_var"]: str(_musl_clang)},
                     optional=True, group="musl",
                     description="cargo build fish.elf"))
 
@@ -1070,7 +1135,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                 name="musl_pcre2_demo.elf",
                 cmd=[ld, "-nostdlib", "-static", "-pie", "--no-dynamic-linker",
                      "-z", "pack-relative-relocs",
-                     "-T", str(ROOT / "linker" / "user.ld"), "-e", "_start",
+                     "-T", str(ROOT / ARCH["user_linker_script"]), "-e", "_start",
                      str(MUSL_LIB / "crt1.o"), str(MUSL_LIB / "crti.o"),
                      str(p2_obj), str(MUSL_LIB / "crtn.o"),
                      "-L", str(MUSL_LIB), "-L", str(PCRE2_LIB),
@@ -1082,7 +1147,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                 description="link pcre2_demo.elf (musl + libpcre2-8)")
             tasks.append(p2_elf)
 
-        for dst_name in ("libc.so", "ld-musl-x86_64.so.1"):
+        for dst_name in ("libc.so", ARCH["musl_loader"]):
             tasks.append(Task(
                 name=f"musl-dyn-{dst_name}",
                 cmd=[sh, "-c",
@@ -1103,8 +1168,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         dyn_lib_so = Task(
             name="libdyndemo.so",
             cmd=[tools.ld,
-                 "-m", "elf_x86_64", "-shared", "-nostdlib", "-e", "0",
-                 "-T", str(ROOT / "linker" / "user_dyn.ld"),
+                 "-m", ARCH["ld_emulation"], "-shared", "-nostdlib", "-e", "0",
+                 "-T", str(ROOT / ARCH["user_dyn_linker_script"]),
                  str(BUILD_DIR / "dyn_lib.o"),
                  "-L", str(MUSL_LIB), "-lc",
                  "-o", str(BUILD_DIR / "libdyndemo.so")],
@@ -1124,9 +1189,9 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         def link_musl_dynamic(name, elf, objs, needed_dir):
             ld = tools.ld
 
-            cmd = [ld, "-m", "elf_x86_64", "-nostdlib", "-pie",
-                   "--dynamic-linker", "/lib/ld-musl-x86_64.so.1",
-                   "-T", str(ROOT / "linker" / "user_dyn.ld"), "-e", "_start",
+            cmd = [ld, "-m", ARCH["ld_emulation"], "-nostdlib", "-pie",
+                   "--dynamic-linker", "/lib/" + ARCH["musl_loader"],
+                   "-T", str(ROOT / ARCH["user_dyn_linker_script"]), "-e", "_start",
                    str(MUSL_LIB / "Scrt1.o"), str(MUSL_LIB / "crti.o"),
                    *map(str, objs), str(MUSL_LIB / "crtn.o"),
                    "-L", str(MUSL_LIB), "-L", str(needed_dir),
@@ -1143,6 +1208,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         dyn_demo_elf.deps = [BUILD_DIR / "dyn_demo.o",
                              BUILD_DIR / "libdyndemo.so"]
         tasks.append(dyn_demo_elf)
+    tasks.append(task_config())
     return BuildPlan(tasks=tasks, user_elves=user_elves,
                      musl_enabled=plan_musl_enabled)
 @dataclass
@@ -1198,8 +1264,13 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         return f"({seconds/60:.1f}min)"
     def c_dim(s: str) -> str:
         return f"{console._c(Ansi.DIM)}{console._c(Ansi.GRAY)}{s}{console._c(Ansi.RESET)}"
-    total_steps = 11
+    total_steps = 13
     s = 1
+    console.step_header(s, total_steps, "Resolving Kconfig")
+    for t in (t for t in plan.tasks if t.name == "kconfig"):
+        run_task(t)
+        console.ok(f"{t.description}  {c_dim(fmt_dur(stats.timings[t.name][0]))}")
+    s += 1
     console.step_header(s, total_steps, "Assembling boot sectors")
     for t in plan.tasks[:3]:
         run_task(t)
@@ -1342,6 +1413,21 @@ def show_failure_hint(console: Console, missing: List[str]) -> None:
     console.writeln()
     console.info("Compiler priority: clang > zig cc > gcc")
     console.writeln()
+def ensure_config() -> None:
+    if CONFIG_FILE.exists():
+        return
+    res = run([sys.executable, str(CONFIG_SCRIPT), "defconfig",
+               f"{DEFAULT_ARCH_KEY}_defconfig"])
+    if not res.ok:
+        sys.stderr.write((res.stderr or res.stdout or "kconfig defconfig failed") + "\n")
+        raise SystemExit(res.returncode)
+def task_config() -> Task:
+    return Task(
+        name="kconfig",
+        cmd=[sys.executable, str(CONFIG_SCRIPT), "syncconfig"],
+        out=AUTOCONF_H, deps=[CONFIG_FILE], group="config",
+        description="resolve Kconfig → build/config/autoconf.h",
+    )
 def do_clean(console: Console) -> None:
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
@@ -1385,9 +1471,9 @@ def restamp_build_env(tools: Tools, console: Console) -> None:
 def do_run(console: Console, stats: BuildStats,
            smp: int, gdb: bool, no_net: bool, boot_floppy: bool,
            kvm: bool) -> None:
-    qemu = shutil.which("qemu-system-x86_64")
+    qemu = shutil.which(ARCH["qemu_system"])
     if qemu is None:
-        console.warn("qemu-system-x86_64 not found on PATH; build is up-to-date.")
+        console.warn(f"{ARCH['qemu_system']} not found on PATH; build is up-to-date.")
         return
 
     if kvm and not os.path.exists("/dev/kvm"):
@@ -1439,8 +1525,11 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--jobs", "-j", type=int, default=1,
                         help="parallel compile jobs (default: 1)")
     parser.add_argument("--version", action="version", version="corez-build 1.0")
-    parser.add_argument("--sm", type=int, default=1, metavar="N",
-                        help="SMP CPU 数(qemu -smp N, 多核启动验证; 默认 1)")
+    parser.add_argument("--sm", type=int,
+                        default=4 if CONFIG.get("CONFIG_SMP") == "y" else 1,
+                        metavar="N",
+                        help="SMP CPU 数(qemu -smp N, 多核启动验证; "
+                             "默认取自 CONFIG_SMP)")
     parser.add_argument("--gdb", action="store_true",
                         help="QEMU GDB stub(-s -S, 等待 gdb 连接 kernel.elf)")
     parser.add_argument("--no-net", action="store_true",
@@ -1452,7 +1541,7 @@ def main(argv: Sequence[str]) -> int:
                              "需在 ring0 执行的 MWAIT 等真实 CPU 特性(需 Linux/WSL2)")
     parser.add_argument("--with-musl-lib", action="store_true",
                         help="编完整原生 musl libc.a 并链接 musl_demo.elf/libc_testsuite.elf "
-                             "(默认关闭; 日常构建只兼容 musl 头子集, 不 make 完整 libc)")
+                             "(默认由 CONFIG_MUSL_LIB 决定)")
     args = parser.parse_args(argv)
     _enable_vt_on_windows()
     console = Console(use_color=color_enabled(args.no_color))
@@ -1460,19 +1549,22 @@ def main(argv: Sequence[str]) -> int:
     if args.target == "clean":
         do_clean(console)
         return 0
+    ensure_config()
     try:
         tools = detect_tools()
     except FileNotFoundError as exc:
         show_failure_hint(console, [str(exc)])
         return 2
+    console.info(f"arch    = {ARCH['key']}  (CONFIG_ARCH)")
     console.info(f"cc      = {' '.join(tools.cc)}  ({tools.kind})")
-    console.info(f"target  = {CLANG_DEFAULT_TRIPLE if tools.kind == 'clang' else 'x86_64-freestanding'}")
+    console.info(f"target  = {CLANG_DEFAULT_TRIPLE if tools.kind == 'clang' else FREESTANDING_KEY}")
     console.info(f"ld      = {tools.ld}")
     console.info(f"nasm    = {tools.nasm}")
     console.info(f"objcopy = {tools.objcopy}")
     console.writeln()
     restamp_build_env(tools, console)
-    plan = make_plan(tools, with_musl_lib=True)
+    plan = make_plan(tools, with_musl_lib=(
+        args.with_musl_lib or CONFIG.get("CONFIG_MUSL_LIB") == "y"))
     try:
         stats = execute_plan(plan, tools, console, jobs=args.jobs)
     except SystemExit as exc:
@@ -1511,7 +1603,7 @@ def main(argv: Sequence[str]) -> int:
                     f"✔  build complete{console._c(Ansi.RESET)}")
     console.writeln()
     if args.target == "run":
-        do_run(console, stats, 4, args.gdb, args.no_net, args.boot_floppy, args.kvm)
+        do_run(console, stats, args.sm, args.gdb, args.no_net, args.boot_floppy, args.kvm)
     return 0
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

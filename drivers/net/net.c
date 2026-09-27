@@ -1,6 +1,6 @@
 #include "drivers/net/net.h"
 
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "arch/cpu.h"
 #include "kernel/init/pit/pit.h"

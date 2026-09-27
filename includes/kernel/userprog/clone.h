@@ -16,8 +16,8 @@
 #define CLONE_CHILD_SETTID 0x01000000
 #define CLONE_SYSVSEM 0x00040000
 
-pid_t sys_clone(struct X86_REGS *r);
+pid_t sys_clone(struct ARCH_REGS *r);
 pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
-                   struct X86_REGS *r);
+                   struct ARCH_REGS *r);
 
 #endif

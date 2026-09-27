@@ -13,12 +13,12 @@
 extern void intr_exit(void);
 
 static void build_clone_stack(struct TASK *child,
-                              struct X86_REGS *parent_frame,
+                              struct ARCH_REGS *parent_frame,
                               uint32_t user_stack) {
     uint32_t stack_top = (uint32_t)child->kernel_stack_top;
-    struct X86_REGS *child_frame =
-        (struct X86_REGS *)(stack_top - sizeof(struct X86_REGS));
-    memcpy(child_frame, parent_frame, sizeof(struct X86_REGS));
+    struct ARCH_REGS *child_frame =
+        (struct ARCH_REGS *)(stack_top - sizeof(struct ARCH_REGS));
+    memcpy(child_frame, parent_frame, sizeof(struct ARCH_REGS));
     child_frame->eax = 0;
     child_frame->user_esp = user_stack;
     struct TASK_STACK *ts =
@@ -31,13 +31,13 @@ static void build_clone_stack(struct TASK *child,
 }
 
 pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
-                   struct X86_REGS *r);
-pid_t sys_clone(struct X86_REGS *r) {
+                   struct ARCH_REGS *r);
+pid_t sys_clone(struct ARCH_REGS *r) {
     return sys_clone_ex((uint32_t)r->ebx, (uint32_t)r->ecx, (uint32_t)r->ebp, r);
 }
 
 pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
-                   struct X86_REGS *r) {
+                   struct ARCH_REGS *r) {
     struct TASK *parent = current;
     struct TASK *child =
         thread_alloc_slot(parent->name, parent->priority);
@@ -50,7 +50,7 @@ pid_t sys_clone_ex(uint32_t flags, uint32_t child_user_stack, uint32_t tls,
     child->exe_bias = parent->exe_bias;
     child->user_brk = parent->user_brk;
     child->brk_base = parent->brk_base;
-    child->stack_bottom = parent->stack_bottom;
+    child->stack_bottom = (flags & CLONE_THREAD) ? 0 : parent->stack_bottom;
     child->fd_owner_pid = (flags & CLONE_FILES)
                               ? parent->fd_owner_pid
                               : (int32_t)child->pid;

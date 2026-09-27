@@ -12,21 +12,21 @@
 #include "libc/user/syscall.h"
 
 #define LC_ARGS                                                              \
-    struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
+    struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
         uint64_t e, uint64_t f
 
 int32_t sys_sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old);
 int32_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int32_t sys_wait(int32_t *status);
 uint32_t sys_brk(uint32_t addr);
-uint64_t sys_sigreturn(struct X86_REGS *r);
+uint64_t sys_sigreturn(struct ARCH_REGS *r);
 
-static inline int user_ptr_ok(struct X86_REGS *r, uint64_t ptr, uint32_t len,
+static inline int user_ptr_ok(struct ARCH_REGS *r, uint64_t ptr, uint32_t len,
                               int wr) {
     return (r->cs & 3) != 3 || access_ok((const void *)(uintptr_t)ptr, len, wr);
 }
 
-static inline int copy_user_str(struct X86_REGS *r, char *dst, uint64_t ptr) {
+static inline int copy_user_str(struct ARCH_REGS *r, char *dst, uint64_t ptr) {
     return (r->cs & 3) != 3 ||
            copy_str_from_user(dst, (const char *)(uintptr_t)ptr,
                               MAX_PATH_LEN) == 0;
@@ -37,14 +37,14 @@ int compat_fd_is_tty(int32_t fd);
 int compat_fd_isdir(int32_t fd);
 int ep_slot(int fd);
 int evfd_slot(int fd);
-int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr, uint64_t addrlen_ptr, uint32_t ip, uint16_t port);
+int fill_sockaddr_in(struct ARCH_REGS *r, uint64_t addr, uint64_t addrlen_ptr, uint32_t ip, uint16_t port);
 int io_fd_events(int fd, int want_read, int want_write);
 int io_is_file_fd(int fd);
 int io_wait(struct LINUX_POLLFD *fds, uint32_t n, int64_t timeout_ms);
 int lc_close_extra(int32_t fd);
 int lc_fdset_test(const uint8_t *set, int fd);
-int lc_at_path(struct X86_REGS *r, int32_t dirfd, uint64_t uptr, char *out);
-int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr, uint64_t addrlen, uint32_t *ip, uint16_t *port);
+int lc_at_path(struct ARCH_REGS *r, int32_t dirfd, uint64_t uptr, char *out);
+int sockaddr_in_parts(struct ARCH_REGS *r, uint64_t addr, uint64_t addrlen, uint32_t *ip, uint16_t *port);
 int tfd_expired(int i);
 int tfd_slot(int fd);
 int unix_alloc_slot(void);
@@ -98,7 +98,7 @@ int64_t lc_epoll_create1(LC_ARGS);
 int64_t lc_epoll_ctl(LC_ARGS);
 int64_t lc_epoll_pwait(LC_ARGS);
 int64_t lc_epoll_wait(LC_ARGS);
-int64_t lc_epoll_wait_common(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, int64_t timeout_ms);
+int64_t lc_epoll_wait_common(struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, int64_t timeout_ms);
 int64_t lc_eventfd(LC_ARGS);
 int64_t lc_eventfd2(LC_ARGS);
 int64_t lc_eventfd_read(int i, void *buf, uint32_t count);
@@ -162,7 +162,7 @@ int64_t lc_openat(LC_ARGS);
 int64_t lc_pipe(LC_ARGS);
 int64_t lc_pipe2(LC_ARGS);
 int64_t lc_poll(LC_ARGS);
-int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds, int64_t timeout_ms);
+int64_t lc_poll_common(struct ARCH_REGS *r, uint64_t ufds, int32_t nfds, int64_t timeout_ms);
 int64_t lc_ppoll(LC_ARGS);
 int64_t lc_pread64(LC_ARGS);
 int64_t lc_prlimit64(LC_ARGS);
@@ -182,7 +182,7 @@ int64_t lc_rt_sigprocmask(LC_ARGS);
 int64_t lc_rt_sigreturn(LC_ARGS);
 int64_t lc_sched_yield(LC_ARGS);
 int64_t lc_select(LC_ARGS);
-int64_t lc_select_common(struct X86_REGS *r, int32_t nfds, uint64_t rd, uint64_t wr, uint64_t ex, int64_t timeout_ms);
+int64_t lc_select_common(struct ARCH_REGS *r, int32_t nfds, uint64_t rd, uint64_t wr, uint64_t ex, int64_t timeout_ms);
 int64_t lc_sendmsg(LC_ARGS);
 int64_t lc_sendto(LC_ARGS);
 int64_t lc_set_thread_area(LC_ARGS);
@@ -218,7 +218,7 @@ int64_t lc_timerfd_read(int i, void *buf, uint32_t count);
 int64_t lc_timerfd_settime(LC_ARGS);
 int64_t lc_timerfd_tick(int i);
 int64_t lc_times(LC_ARGS);
-int64_t lc_timespec_to_ms(struct X86_REGS *r, uint64_t ptr, int64_t *out);
+int64_t lc_timespec_to_ms(struct ARCH_REGS *r, uint64_t ptr, int64_t *out);
 int64_t lc_tkill(LC_ARGS);
 int64_t lc_truncate(LC_ARGS);
 int64_t lc_umask(LC_ARGS);

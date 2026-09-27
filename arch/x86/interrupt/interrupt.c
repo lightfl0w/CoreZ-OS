@@ -90,7 +90,7 @@ static int handle_stack_grow(uint32_t fa, uint32_t err_code, uint32_t rsp) {
     return 1;
 }
 
-void isr_handler(struct X86_REGS *r) {
+void isr_handler(struct ARCH_REGS *r) {
     uint32_t n = r->int_no;
     if (n == 14) {
         uint64_t cr2;
@@ -366,7 +366,7 @@ static void irq_eoi(uint32_t irq) {
 
 static volatile uint32_t cpu_ipi_ticks[NR_CPU];
 
-void irq_handler(struct X86_REGS *r) {
+void irq_handler(struct ARCH_REGS *r) {
     if (r->int_no == IPI_VECTOR_RESCHED) {
         uint32_t c = cpu_id();
         if (c < NR_CPU)
@@ -479,10 +479,10 @@ void irq_handler(struct X86_REGS *r) {
                                     (unsigned)(q * 8), (uint32_t)ks[q]);
                     }
                     if (t->kernel_stack_top != 0 && t->pid >= 6) {
-                        struct X86_REGS *fr =
-                            (struct X86_REGS *)(uintptr_t)(
+                        struct ARCH_REGS *fr =
+                            (struct ARCH_REGS *)(uintptr_t)(
                                 t->kernel_stack_top -
-                                sizeof(struct X86_REGS));
+                                sizeof(struct ARCH_REGS));
                         kprintf("[uregs] pid=%d rip=%x ursp=%x cs=%x fl=%x "
                                 "int=%x err=%x rax=%x rdi=%x rsi=%x rdx=%x "
                                 "cr2=%x\n",

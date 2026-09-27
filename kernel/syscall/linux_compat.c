@@ -1,6 +1,6 @@
 #include "kernel/syscall/linux_compat.h"
 #include "drivers/char/console/io.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
 #include "drivers/char/rtc.h"
@@ -46,7 +46,7 @@
 
 
 #define LC_ARGS                                                              \
-    struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
+    struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
         uint64_t e, uint64_t f
 
 
@@ -115,7 +115,7 @@ void lc_seterrno(struct TASK *cur, int32_t val) {
     }
 }
 
-typedef int64_t (*LcFn)(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+typedef int64_t (*LcFn)(struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f);
 
 
@@ -123,7 +123,7 @@ typedef int64_t (*LcFn)(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 
 
-__attribute__((noreturn)) int64_t lc_exit_group(struct X86_REGS *r,
+__attribute__((noreturn)) int64_t lc_exit_group(struct ARCH_REGS *r,
                                                        uint64_t a, uint64_t b,
                                                        uint64_t c, uint64_t d,
                                                        uint64_t e, uint64_t f) {
@@ -382,7 +382,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_truncate] = lc_truncate,
 };
 
-int64_t linux_compat_handler(struct X86_REGS *r) {
+int64_t linux_compat_handler(struct ARCH_REGS *r) {
     struct TASK *cur = current;
     uint32_t nr = r->eax;
     int64_t ret = -LINUX_ENOSYS;

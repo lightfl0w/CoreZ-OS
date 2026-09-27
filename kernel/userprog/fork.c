@@ -126,11 +126,11 @@ int copy_user_space(struct TASK *parent, struct TASK *child) {
 }
 
 static void build_child_stack(struct TASK *child,
-                              struct X86_REGS *parent_frame) {
+                              struct ARCH_REGS *parent_frame) {
     uint32_t stack_top = (uint32_t)child->kernel_stack_top;
-    struct X86_REGS *child_frame =
-        (struct X86_REGS *)(stack_top - sizeof(struct X86_REGS));
-    memcpy(child_frame, parent_frame, sizeof(struct X86_REGS));
+    struct ARCH_REGS *child_frame =
+        (struct ARCH_REGS *)(stack_top - sizeof(struct ARCH_REGS));
+    memcpy(child_frame, parent_frame, sizeof(struct ARCH_REGS));
     child_frame->eax = 0;
     struct TASK_STACK *ts =
         (struct TASK_STACK *)((uint8_t *)child_frame -
@@ -141,7 +141,7 @@ static void build_child_stack(struct TASK *child,
     child->self_kstack = (uint64_t *)ts;
 }
 
-pid_t sys_fork(struct X86_REGS *r) {
+pid_t sys_fork(struct ARCH_REGS *r) {
     struct TASK *parent = current;
     if (parent->pml4_phys == 0) {
         return -1;

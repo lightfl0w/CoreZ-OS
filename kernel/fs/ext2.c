@@ -463,6 +463,9 @@ static uint32_t ext2_walk(uint32_t root, uint32_t fblk, uint32_t span,
 static int ext2_block_of(struct FS_INODE *ino, uint32_t fblk, int alloc,
                          uint32_t *out) {
     uint32_t addrs = bs / 4u;
+    if (fblk >= 12 + addrs + addrs * addrs) {
+        return -1;
+    }
     if (fblk < 12) {
         uint32_t b = ino->i_block[fblk];
         if (b == 0 && alloc) {

@@ -10,7 +10,7 @@
 #include "kernel/sched/thread.h"
 #include "kernel/userprog/process.h"
 #include "kernel/userprog/wait_exit.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "kernel/sched/thread.h"
 static const uint8_t sig_default[NSIG] = {
     [SIGHUP] = SIG_ACT_TERM,  [SIGINT] = SIG_ACT_TERM,
@@ -161,7 +161,7 @@ static int sigframe_valid(uint64_t cs, uint64_t rip, uint64_t rsp,
     return 1;
 }
 
-static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
+static void deliver_signal64(struct TASK *cur, struct ARCH_REGS *r,
                              int sig, struct SYS_SIGACTION *sa) {
     struct SYS_SIGFRAME64 frame;
     frame.restorer = (uint64_t)sa->sa_restorer;
@@ -232,9 +232,8 @@ static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
     sp -= sizeof(struct SYS_SIGFRAME64);
     sp &= ~0xfULL;
     sp -= 8;
-    uint32_t stack_low =
-        (cur->stack_bottom != 0) ? cur->stack_bottom : USER_STACK_BOTTOM;
-    if (sp < stack_low) {
+    uint32_t stack_low = cur->stack_bottom;
+    if (cur->stack_bottom != 0 && sp < stack_low) {
         signal_terminate(cur, sig);
         return;
     }
@@ -260,7 +259,7 @@ static void deliver_signal64(struct TASK *cur, struct X86_REGS *r,
     r->rax = 0;
 }
 
-static void deliver_signal(struct TASK *cur, struct X86_REGS *r,
+static void deliver_signal(struct TASK *cur, struct ARCH_REGS *r,
                            int sig, struct SYS_SIGACTION *sa) {
     if (r->cs == SELECTOR_USER64_CODE) {
         deliver_signal64(cur, r, sig, sa);
@@ -284,10 +283,10 @@ static void deliver_signal(struct TASK *cur, struct X86_REGS *r,
     frame.old_mask = cur->signal_mask;
     uint32_t frame_size = sizeof(struct SYS_SIGFRAME);
     uint32_t new_esp = (r->user_esp - frame_size) & ~3u;
-    uint32_t stack_low =
-        (cur->stack_bottom != 0) ? cur->stack_bottom : USER_STACK_BOTTOM;
-    if (new_esp < stack_low) {
+    uint32_t stack_low = cur->stack_bottom;
+    if (cur->stack_bottom != 0 && new_esp < stack_low) {
         signal_terminate(cur, sig);
+        return;
     }
     for (uint32_t fp = new_esp & ~0xfffu; fp < new_esp + frame_size;
          fp += PAGE_SIZE)
@@ -303,7 +302,7 @@ static void deliver_signal(struct TASK *cur, struct X86_REGS *r,
     r->eax = (uint32_t)sig;
 }
 
-void check_pending_signals(struct X86_REGS *r) {
+void check_pending_signals(struct ARCH_REGS *r) {
     struct TASK *cur = current;
     if (cur == NULL) {
         return;
@@ -476,7 +475,7 @@ int sys_kill(int pid, int sig) {
     return signal_send_task(t, sig);
 }
 
-uint64_t sys_sigreturn(struct X86_REGS *r) {
+uint64_t sys_sigreturn(struct ARCH_REGS *r) {
     struct TASK *cur = current;
     if (r->cs == SELECTOR_USER64_CODE) {
         uint64_t faddr = r->user_rsp - 8;

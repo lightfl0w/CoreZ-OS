@@ -1,0 +1,11 @@
+config SMP
+	bool "Symmetric multi-processing"
+	default y
+
+config MUSL_LIB
+	bool "Build native musl libc"
+	default y
+
+config FISH
+	bool "Fish shell"
+	default y
