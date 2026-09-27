@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-struct X86_REGS;
+struct ARCH_REGS;
 
 #define EXEC_WX_MAX 32
 
@@ -27,7 +27,7 @@ struct EXEC_IMAGE {
 };
 
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
-                   struct X86_REGS *regs);
-int32_t sys_execv(const char *path, const char *argv[], struct X86_REGS *regs);
+                   struct ARCH_REGS *regs);
+int32_t sys_execv(const char *path, const char *argv[], struct ARCH_REGS *regs);
 
 #endif

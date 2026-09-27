@@ -8,8 +8,8 @@
 #include "kernel/init/apic/apic.h"
 #include "drivers/driver_ops.h"
 #include "kernel/init/gdt/gdt.h"
-#include "arch/x86/interrupt/idt.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/idt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "kernel/init/pic/pic.h"
 #include "kernel/init/pit/pit.h"
@@ -148,7 +148,7 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
     if (net_enable)
         net_init();
 
-    process_execute("/init_sh.elf", "shell");
+    process_execute("/shell.elf", "shell");
     for (;;) {
         net_check_guards();
         cpu_idle();

@@ -1,6 +1,6 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
 #include "drivers/char/rtc.h"
@@ -46,7 +46,7 @@
 
 
 #define LC_ARGS                                                              \
-    struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
+    struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
         uint64_t e, uint64_t f
 
 
@@ -115,7 +115,7 @@ void lc_seterrno(struct TASK *cur, int32_t val) {
     }
 }
 
-typedef int64_t (*LcFn)(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
+typedef int64_t (*LcFn)(struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f);
 
 
@@ -123,7 +123,7 @@ typedef int64_t (*LcFn)(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c,
 
 
 
-__attribute__((noreturn)) int64_t lc_exit_group(struct X86_REGS *r,
+__attribute__((noreturn)) int64_t lc_exit_group(struct ARCH_REGS *r,
                                                        uint64_t a, uint64_t b,
                                                        uint64_t c, uint64_t d,
                                                        uint64_t e, uint64_t f) {
@@ -230,7 +230,7 @@ __attribute__((noreturn)) int64_t lc_exit_group(struct X86_REGS *r,
 
 
 
-#define LC_TABLE_SIZE 320
+#define LC_TABLE_SIZE 327
 
 static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_read] = lc_read,
@@ -245,14 +245,16 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_munmap] = lc_munmap,
     [SYS_LINUX_set_thread_area] = lc_set_thread_area,
     [SYS_LINUX_set_tid_address] = lc_set_tid_address,
+    [SYS_LINUX_gettid] = lc_gettid,
     [SYS_LINUX_writev] = lc_writev,
     [SYS_LINUX_getpid] = lc_getpid,
     [SYS_LINUX_getppid] = lc_getppid,
     [SYS_LINUX_fstat] = lc_fstat,
     [SYS_LINUX_stat] = lc_stat,
-    [SYS_LINUX_lstat] = lc_stat,
+    [SYS_LINUX_lstat] = lc_lstat,
     [SYS_LINUX_lseek] = lc_lseek,
     [SYS_LINUX_fcntl] = lc_fcntl,
+    [SYS_LINUX_flock] = lc_flock,
     [SYS_LINUX_readlink] = lc_readlink,
     [SYS_LINUX_chdir] = lc_chdir,
     [SYS_LINUX_getcwd] = lc_getcwd,
@@ -290,6 +292,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_futex] = lc_futex,
     [SYS_LINUX_gettimeofday] = lc_gettimeofday,
     [SYS_LINUX_nanosleep] = lc_nanosleep,
+    [SYS_LINUX_clock_nanosleep] = lc_clock_nanosleep,
     [SYS_LINUX_clock_gettime] = lc_clock_gettime,
     [SYS_LINUX_clock_getres] = lc_clock_getres,
     [SYS_LINUX_mprotect] = lc_mprotect,
@@ -348,12 +351,14 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_openat] = lc_openat,
     [SYS_LINUX_newfstatat] = lc_newfstatat,
     [SYS_LINUX_unlinkat] = lc_unlinkat,
+    [SYS_LINUX_utimensat] = lc_utimensat,
     [SYS_LINUX_mkdirat] = lc_mkdirat,
     [SYS_LINUX_renameat] = lc_renameat,
     [SYS_LINUX_renameat2] = lc_renameat2,
     [SYS_LINUX_readlinkat] = lc_readlinkat,
     [SYS_LINUX_faccessat] = lc_faccessat,
     [SYS_LINUX_getrandom] = lc_getrandom,
+    [SYS_LINUX_copy_file_range] = lc_copy_file_range,
     [SYS_LINUX_poll] = lc_poll,
     [SYS_LINUX_ppoll] = lc_ppoll,
     [SYS_LINUX_select] = lc_select,
@@ -377,7 +382,7 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_truncate] = lc_truncate,
 };
 
-int64_t linux_compat_handler(struct X86_REGS *r) {
+int64_t linux_compat_handler(struct ARCH_REGS *r) {
     struct TASK *cur = current;
     uint32_t nr = r->eax;
     int64_t ret = -LINUX_ENOSYS;

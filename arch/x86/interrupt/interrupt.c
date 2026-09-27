@@ -1,8 +1,11 @@
 #include "arch/x86/interrupt/interrupt.h"
 #include "drivers/block/ide.h"
 #include "drivers/char/console/io.h"
+#include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
 #include "drivers/char/mouse.h"
+#include "kernel/fs/file.h"
+#include "kernel/shell/pipe.h"
 #include "kernel/asm/stub.h"
 #include "kernel/asm_func.h"
 #include "kernel/init/apic/apic.h"
@@ -48,6 +51,8 @@ static const char *exc_names[32] = {"Divide Error",
                                     "(Reserved)",
                                     "(Reserved)",
                                     "(Reserved)"};
+static uint32_t tlb_retry_rip;
+static uint32_t tlb_retry_pid;
 static int handle_cow_fault(uint32_t fault_addr, uint32_t error_code) {
     if (fault_addr < USER_VADDR_START || fault_addr >= 0xc0000000) {
         return 0;
@@ -65,7 +70,27 @@ static int handle_cow_fault(uint32_t fault_addr, uint32_t error_code) {
     return page_cow_resolve(fault_addr, *pte);
 }
 
-void isr_handler(struct X86_REGS *r) {
+static int handle_stack_grow(uint32_t fa, uint32_t err_code, uint32_t rsp) {
+    struct TASK *cur = current;
+    if (cur == NULL || cur->pml4_phys == 0 || (err_code & 1))
+        return 0;
+    if (fa >= USER_STACK_TOP || fa < USER_STACK_TOP - 0x800000u)
+        return 0;
+    if (rsp >= USER_STACK_TOP || rsp < USER_STACK_TOP - 0x800000u)
+        return 0;
+    if (fa < rsp && rsp - fa > 0x10000u)
+        return 0;
+    if (page_is_mapped(fa))
+        return 0;
+    uint32_t page = fa & ~0xfffu;
+    if (get_a_page(page) == 0)
+        return 0;
+    if (page < cur->stack_bottom || cur->stack_bottom == 0)
+        cur->stack_bottom = page;
+    return 1;
+}
+
+void isr_handler(struct ARCH_REGS *r) {
     uint32_t n = r->int_no;
     if (n == 14) {
         uint64_t cr2;
@@ -73,19 +98,167 @@ void isr_handler(struct X86_REGS *r) {
         if (handle_cow_fault((uint32_t)cr2, r->err_code)) {
             return;
         }
+        if ((r->cs & 3) == 3 &&
+            handle_stack_grow((uint32_t)cr2, (uint32_t)r->err_code,
+                              (uint32_t)r->user_rsp)) {
+            return;
+        }
     }
     if ((r->cs & 3) == 3) {
         int sig = exception_to_signal((int)n);
         if (sig > 0) {
+            uint64_t cr2f = 0;
             if (sig == SIGSEGV) {
-                uint64_t cr2u;
-                __asm__ volatile("mov %%cr2, %0" : "=r"(cr2u));
-                kprintf("[user-segv] pid=%d vec=%d rip=%x cr2=%x err=%x gs=%x "
-                        "name=%s\n",
-                        current->pid, (int)n, (uint32_t)r->rip, (uint32_t)cr2u,
-                        (uint32_t)r->err_code, (uint32_t)r->gs_saved,
-                        current->name);
+                __asm__ volatile("mov %%cr2, %0" : "=r"(cr2f));
+                kprintf("[user-segv] pid=%d vec=%d err=%x rip=%x bias=%x "
+                        "off=%x cr2=%x%08x rsi=%x rdi=%x rax=%x rsp=%x\n",
+                        current->pid, (int)n, (uint32_t)r->err_code,
+                        (uint32_t)r->eip, current->exe_bias,
+                        (uint32_t)r->eip - current->exe_bias,
+                        (uint32_t)(cr2f >> 32), (uint32_t)cr2f,
+                        (uint32_t)r->rsi, (uint32_t)r->rdi, (uint32_t)r->rax,
+                        (uint32_t)r->user_rsp);
+                kprintf("[segv-reg] r12=%x r13=%x r14=%x r15=%x rbx=%x "
+                        "rbp=%x rdx=%x\n",
+                        (uint32_t)r->r12, (uint32_t)r->r13, (uint32_t)r->r14,
+                        (uint32_t)r->r15, (uint32_t)r->rbx, (uint32_t)r->rbp,
+                        (uint32_t)r->rdx);
+                {
+                    uint32_t self = (uint32_t)r->r12;
+                    if (self >= USER_VADDR_START &&
+                        user_range_readable(self + 0x40, 0x90)) {
+                        kprintf("[segv-self] start=%x count=%x la0=%x %x %x %x "
+                                "la1=%x %x %x %x\n",
+                                *(const uint32_t *)(uintptr_t)(self + 0xb8),
+                                *(const uint32_t *)(uintptr_t)(self + 0xc0),
+                                *(const uint32_t *)(uintptr_t)(self + 0x48),
+                                *(const uint32_t *)(uintptr_t)(self + 0x4c),
+                                *(const uint32_t *)(uintptr_t)(self + 0x50),
+                                *(const uint32_t *)(uintptr_t)(self + 0x54),
+                                *(const uint32_t *)(uintptr_t)(self + 0x58),
+                                *(const uint32_t *)(uintptr_t)(self + 0x5c),
+                                *(const uint32_t *)(uintptr_t)(self + 0x60),
+                                *(const uint32_t *)(uintptr_t)(self + 0x64));
+                    }
+                }
+                {
+                    extern int page_is_mapped(uint32_t v);
+                    uint32_t tpage = ((uint32_t)r->user_rsp + 0x70) & ~0xfffu;
+                    uint32_t rpage = (uint32_t)r->user_rsp & ~0xfffu;
+                    uint32_t nz = 0;
+                    uint32_t nzr = 0;
+                    if (tpage >= USER_VADDR_START &&
+                        user_range_readable(tpage, 0x1000)) {
+                        for (uint32_t w = 0; w < 0x1000; w += 4) {
+                            if (*(const uint32_t *)(uintptr_t)(tpage + w) != 0)
+                                nz++;
+                        }
+                    }
+                    if (rpage >= USER_VADDR_START && tpage != rpage &&
+                        user_range_readable(rpage, 0x1000)) {
+                        for (uint32_t w = 0; w < 0x1000; w += 4) {
+                            if (*(const uint32_t *)(uintptr_t)(rpage + w) != 0)
+                                nzr++;
+                        }
+                    }
+                    kprintf("[segv-pg] tokpg=%x nz=%u/%u mapped=%d rsp=%x "
+                            "pg=%x nz=%u\n",
+                            tpage, nz, 1024u, page_is_mapped(tpage),
+                            (uint32_t)r->user_rsp, rpage, nzr);
+                }
+                {
+                    uint32_t tk = (uint32_t)r->r12 + 0x68;
+                    if (tk >= USER_VADDR_START &&
+                        user_range_readable(tk, 0x40)) {
+                        uint32_t tp = *(const uint32_t *)(uintptr_t)(tk + 0x10);
+                        uint32_t tl = *(const uint32_t *)(uintptr_t)(tk + 0x18);
+                        uint32_t tc = *(const uint32_t *)(uintptr_t)(tk + 0x30);
+                        uint32_t hn = *(const uint32_t *)(uintptr_t)(tk + 0x38);
+                        kprintf("[segv-tokr] tp=%x tl=%u tc=%x hn=%x\n", tp, tl,
+                                tc, hn);
+                        if (tp >= USER_VADDR_START && tl > 0 && tl < 512 &&
+                            user_range_readable(tp, 4 * tl)) {
+                            kprintf("[segv-src]");
+                            for (uint32_t j = 0; j < tl && j < 40; j++) {
+                                kprintf(" %x",
+                                        *(const uint32_t *)(uintptr_t)(tp +
+                                                                       4 * j));
+                            }
+                            kprintf("\n");
+                        }
+                    }
+                }
+                {
+                    uint32_t s2 = (uint32_t)r->r12 + 0x30;
+                    if (s2 >= USER_VADDR_START &&
+                        user_range_readable(s2, 0x80)) {
+                        for (uint32_t k = 0; k < 0x80; k += 32) {
+                            kprintf("[segv-pop] +%x: %x %x %x %x %x %x %x %x\n",
+                                    (uint32_t)(k + 0x30),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 4),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 8),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 12),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 16),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 20),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 24),
+                                    *(const uint32_t *)(uintptr_t)(s2 + k + 28));
+                        }
+                    }
+                }
+                {
+                    uint32_t cr0 = (uint32_t)r->user_rsp + 0x70;
+                    if (cr0 >= USER_VADDR_START &&
+                        user_range_readable(cr0, 0x108)) {
+                        for (uint32_t k = 0; k < 0x100; k += 32) {
+                            kprintf("[segv-fr] +%x: %x %x %x %x %x %x %x %x\n",
+                                    k,
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 4),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 8),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 12),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 16),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 20),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 24),
+                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 28));
+                        }
+                        kprintf("[segv-tok2] %x %x %x %x\n",
+                                *(const uint32_t *)(uintptr_t)(cr0 + 0x90),
+                                *(const uint32_t *)(uintptr_t)(cr0 + 0x94),
+                                *(const uint32_t *)(uintptr_t)(cr0 + 0x98),
+                                *(const uint32_t *)(uintptr_t)(cr0 + 0x9c));
+                    }
+                }
+                if (cr2f < 0xc0000000ull) {
+                    page_table_dump((uint32_t)cr2f);
+                }
+                if ((current->signal_pending | current->signal_mask) &
+                    (1u << SIGSEGV)) {
+                    signal_terminate(current, SIGSEGV);
+                    return;
+                }
+                if (cr2f < 0xc0000000ull && !(r->err_code & 1) &&
+                    !(r->err_code & 0x2)) {
+                    uint64_t *rpte = pte_ptr((uint32_t)cr2f);
+                    if ((*rpte & 1) && (*rpte & 4) &&
+                        (tlb_retry_rip != (uint32_t)r->eip ||
+                         tlb_retry_pid != current->pid)) {
+                        tlb_retry_rip = (uint32_t)r->eip;
+                        tlb_retry_pid = current->pid;
+                        uint32_t nphy = user_remap_page(cr2f & ~0xfffu);
+                        kprintf("[tlb-fix] pid=%d rip=%x cr2=%x remap=%x\n",
+                                current->pid, (uint32_t)r->eip,
+                                (uint32_t)cr2f, nphy);
+                        if (nphy != 0) {
+                            uint64_t cr3v = current->pml4_phys;
+                            __asm__ volatile("mov %0, %%cr3"
+                                             : : "r"(cr3v) : "memory");
+                            return;
+                        }
+                    }
+                }
             }
+            current->sig_fault_addr = (uint32_t)cr2f;
             current->signal_pending |= (1u << sig);
             check_pending_signals(r);
             return;
@@ -193,7 +366,7 @@ static void irq_eoi(uint32_t irq) {
 
 static volatile uint32_t cpu_ipi_ticks[NR_CPU];
 
-void irq_handler(struct X86_REGS *r) {
+void irq_handler(struct ARCH_REGS *r) {
     if (r->int_no == IPI_VECTOR_RESCHED) {
         uint32_t c = cpu_id();
         if (c < NR_CPU)
@@ -210,6 +383,131 @@ void irq_handler(struct X86_REGS *r) {
         itimer_tick();
         scheduler_tick();
         thread_timer_wake();
+#define SCHED_PROBE_ENABLE 0
+#if SCHED_PROBE_ENABLE
+        if ((tick % 300) == 0) {
+            extern volatile uint32_t sc_total;
+            extern uint32_t sc_last_nr[MAX_TASKS];
+            extern uint32_t sc_last_a0[MAX_TASKS];
+            extern uint32_t sc_last_a1[MAX_TASKS];
+            extern uint32_t sc_last_ra[MAX_TASKS];
+            extern uint32_t sc_last_stk[MAX_TASKS][16];
+            static uint32_t frz_sc;
+            static int frz_n;
+            kprintf("[rip] t=%u cur_pid=%d cs=%d rip=%x off=%x sc=%u\n",
+                    (unsigned)tick, current != 0 ? (int)current->pid : -1,
+                    (int)(r->cs & 3), (uint32_t)r->eip,
+                    current != 0
+                        ? (uint32_t)(r->eip - current->exe_bias)
+                        : (uint32_t)r->eip,
+                    (unsigned)sc_total);
+            if (sc_total == frz_sc)
+                frz_n++;
+            else
+                frz_n = 0;
+            frz_sc = sc_total;
+            if (frz_n == 2) {
+                uint32_t lf = thread_all_lock();
+                struct LIST_ELEM *le = thread_all_list.head.next;
+                while (le != &thread_all_list.tail) {
+                    struct TASK *t =
+                        list_entry(le, struct TASK, all_list_tag);
+                    uint32_t sl = (uint32_t)(t - task_table);
+                    if (t->status != TASK_DIED)
+                        kprintf("[task] pid=%d st=%x nm=%s pp=%d nr=%u "
+                                "a0=%x a1=%x fu=%x/%x ft=%u si=%u ex=%d "
+                                "pml4=%x path=%s\n",
+                                (int)t->pid, (unsigned)t->status, t->name,
+                                (int)t->parent_pid,
+                                (unsigned)sc_last_nr[sl],
+                                (unsigned)sc_last_a0[sl],
+                                (unsigned)sc_last_a1[sl],
+                                (unsigned)t->futex_uaddr,
+                                (unsigned)t->futex_pml4,
+                                (unsigned)t->futex_timed,
+                                (unsigned)t->sleep_intr,
+                                (int)t->exit_status,
+                                (unsigned)t->pml4_phys, t->exe_path);
+                    if (t->pid >= 6)
+                        sched_dbg_task(t);
+                    if (t->pid >= 6) {
+                        for (uint32_t fdl = 3; fdl < MAX_FILES_OPEN_PER_PROC;
+                             fdl++) {
+                            uint32_t g = t->fd_table[fdl];
+                            uint32_t rc = 0, nb = 0, ln = 0, hd = 0, tl = 0;
+                            uint32_t pr = 0, co = 0, ispipe = 0, raw = 0;
+                            uint32_t peer = 0, palive = 0, isrd = 0;
+                            struct FILE *fl;
+                            if (g == (uint32_t)-1)
+                                continue;
+                            fl = file_get(g);
+                            if (fl != NULL) {
+                                rc = fl->ref_cnt;
+                                nb = fl->fd_nonblock;
+                                raw = fl->fd_flag;
+                                if ((fl->fd_flag == PIPE_FLAG ||
+                                     fl->fd_flag == PIPE_RD_FLAG) &&
+                                    fl->fd_inode != NULL) {
+                                    struct TTY_IOQUEUE *q =
+                                        (struct TTY_IOQUEUE *)fl->fd_inode;
+                                    ispipe = 1;
+                                    isrd = (fl->fd_flag == PIPE_RD_FLAG);
+                                    peer = fl->proc_aux;
+                                    palive = (uint32_t)pipe_end_alive(peer);
+                                    ln = ioq_length(q);
+                                    hd = (uint32_t)q->head;
+                                    tl = (uint32_t)q->tail;
+                                    pr = (uint32_t)(uintptr_t)q->producer;
+                                    co = (uint32_t)(uintptr_t)q->consumer;
+                                }
+                            }
+                            kprintf("[fd] pid=%d l=%u g=%u fl=%x rc=%u nb=%u "
+                                    "pipe=%u ln=%u h=%u t=%u pr=%x co=%x "
+                                    "rd=%u peer=%u palive=%u\n",
+                                    (int)t->pid, (unsigned)fdl, (unsigned)g,
+                                    (unsigned)raw, (unsigned)rc, (unsigned)nb,
+                                    (unsigned)ispipe, (unsigned)ln,
+                                    (unsigned)hd, (unsigned)tl, (unsigned)pr,
+                                    (unsigned)co, (unsigned)isrd,
+                                    (unsigned)peer, (unsigned)palive);
+                        }
+                    }
+                    if (t->self_kstack != 0 && t->pid >= 6) {
+                        uint64_t *ks = t->self_kstack;
+                        for (uint32_t q = 0; q < 40; q++)
+                            kprintf("[kstk] pid=%d +%x=%x\n", (int)t->pid,
+                                    (unsigned)(q * 8), (uint32_t)ks[q]);
+                    }
+                    if (t->kernel_stack_top != 0 && t->pid >= 6) {
+                        struct ARCH_REGS *fr =
+                            (struct ARCH_REGS *)(uintptr_t)(
+                                t->kernel_stack_top -
+                                sizeof(struct ARCH_REGS));
+                        kprintf("[uregs] pid=%d rip=%x ursp=%x cs=%x fl=%x "
+                                "int=%x err=%x rax=%x rdi=%x rsi=%x rdx=%x "
+                                "cr2=%x\n",
+                                (int)t->pid, (uint32_t)fr->rip,
+                                (uint32_t)fr->user_rsp, (uint32_t)fr->cs,
+                                (uint32_t)fr->rflags, (uint32_t)fr->int_no,
+                                (uint32_t)fr->err_code, (uint32_t)fr->rax,
+                                (uint32_t)fr->rdi, (uint32_t)fr->rsi,
+                                (uint32_t)fr->rdx,
+                                (uint32_t)asm_read_cr2());
+                    }
+                    if (t->pid >= 6) {
+                        kprintf("[bias] pid=%d exe=%x\n", (int)t->pid,
+                                (unsigned)t->exe_bias);
+                        for (uint32_t k = 0; k < 8; k++)
+                            kprintf("[ustk] pid=%d +%x=%x\n", (int)t->pid,
+                                    (unsigned)(k * 4),
+                                    (unsigned)sc_last_stk[sl][k]);
+                    }
+                    le = le->next;
+                }
+                thread_all_unlock(lf);
+            }
+        }
+#endif
         // if (cpu_ipi_ticks[1] != 0 && (tick % 500) == 0) {
         //     kprintf("[smp] ipi1=%u ipi2=%u ipi3=%u | wrk0=%u wrk1=%u wrk2=%u "
         //             "wrk3=%u\n",

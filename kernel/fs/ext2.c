@@ -8,6 +8,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/dir.h"
+#include "drivers/char/rtc.h"
 
 /**
  * ext2 元数据读写锁。
@@ -257,6 +258,9 @@ static int ext2_read_inode_impl(uint32_t ino, struct FS_INODE *out) {
     out->i_uid = *(uint16_t *)(p + 2);
     out->i_size = *(uint32_t *)(p + 4);
     out->i_gid = *(uint16_t *)(p + 24);
+    out->i_atime = *(uint32_t *)(p + 8);
+    out->i_ctime = *(uint32_t *)(p + 12);
+    out->i_mtime = *(uint32_t *)(p + 16);
     uint32_t bi = 0;
     for (bi = 0; bi < 15; bi++) {
         out->i_block[bi] = *(uint32_t *)(p + 40 + 4 * bi);
@@ -403,6 +407,9 @@ static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in) {
     *(uint16_t *)(p + 2) = (uint16_t)in->i_uid;
     *(uint16_t *)(p + 24) = (uint16_t)in->i_gid;
     *(uint32_t *)(p + 4) = in->i_size;
+    *(uint32_t *)(p + 8) = in->i_atime;
+    *(uint32_t *)(p + 12) = in->i_ctime;
+    *(uint32_t *)(p + 16) = in->i_mtime;
     for (uint32_t bi = 0; bi < 15; bi++) {
         *(uint32_t *)(p + 40 + 4 * bi) = in->i_block[bi];
     }
@@ -456,6 +463,9 @@ static uint32_t ext2_walk(uint32_t root, uint32_t fblk, uint32_t span,
 static int ext2_block_of(struct FS_INODE *ino, uint32_t fblk, int alloc,
                          uint32_t *out) {
     uint32_t addrs = bs / 4u;
+    if (fblk >= 12 + addrs + addrs * addrs) {
+        return -1;
+    }
     if (fblk < 12) {
         uint32_t b = ino->i_block[fblk];
         if (b == 0 && alloc) {
@@ -557,6 +567,9 @@ static int ext2_write_to_inode_impl(struct FS_INODE *ino, uint32_t off,
         ino->i_size = off + done;
     }
     if (done > 0) {
+        uint32_t now = (uint32_t)rtc_unix_time();
+        ino->i_mtime = now;
+        ino->i_ctime = now;
         ext2_write_inode_impl(ino->i_no, (struct FS_INODE *)ino);
     }
     return (int)done;
@@ -632,6 +645,9 @@ static uint32_t ext2_new_inode_impl(uint32_t mode, struct FS_INODE *out) {
     out->i_no = ino;
     out->i_mode = mode;
     out->i_size = 0;
+    out->i_atime = (uint32_t)rtc_unix_time();
+    out->i_ctime = out->i_atime;
+    out->i_mtime = out->i_atime;
     memset(out->i_block, 0, sizeof(out->i_block));
     if (ext2_write_inode_impl(ino, out)) {
         ext2_free_inode_impl(ino);
@@ -686,10 +702,27 @@ static int ext2_add_entry_impl(struct FS_INODE *dino, uint32_t ino,
                 }
                 break;
             }
-            if (de->inode == 0 && rl >= need) {
-                target = off;
-                slot_rec = rl;
-                break;
+            if (de->inode == 0) {
+                if (rl >= need) {
+                    target = off;
+                    slot_rec = rl;
+                    break;
+                }
+            } else {
+                uint32_t used = (8u + (uint32_t)de->name_len + 3u) & ~3u;
+                if (used < rl && rl - used >= need) {
+                    de->rec_len = (uint16_t)used;
+                    struct EXT2_DIRENT *nd =
+                        (struct EXT2_DIRENT *)(blk + off + used);
+                    nd->inode = ino;
+                    nd->rec_len = (uint16_t)(rl - used);
+                    nd->name_len = (uint8_t)nl;
+                    nd->file_type = dtype;
+                    memcpy(nd->name, name, nl);
+                    ext2_write_block(addr, blk);
+                    free_kernel_page((uint32_t)blk);
+                    return 0;
+                }
             }
             off += rl;
         }
@@ -937,7 +970,7 @@ static int ext2_read_target(uint32_t ino, char *buf, uint32_t cap) {
     return (int)len;
 }
 
-static int ext2_abs_path(const char *path, char *out, uint32_t cap) {
+int ext2_abs_path(const char *path, char *out, uint32_t cap) {
     if (path == NULL || path[0] == 0) {
         return -1;
     }

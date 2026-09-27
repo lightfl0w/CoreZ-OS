@@ -2,7 +2,7 @@
 #define GUI_CLIENTS_INTERNAL_H
 
 #include "drivers/char/keyboard.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "lib/str/str.h"
 #include "kernel/sched/thread.h"

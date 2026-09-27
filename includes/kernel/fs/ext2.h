@@ -44,6 +44,7 @@ int ext2_init(void);
 struct DISK_PARTITION *ext2_partition(void);
 int ext2_lookup(const char *path, uint32_t *ino, int *is_dir);
 int ext2_lookup_ftype(const char *path, uint32_t *ino, int *ftype, int follow);
+int ext2_abs_path(const char *path, char *out, uint32_t cap);
 int ext2_read_link_target(uint32_t ino, char *buf, uint32_t cap);
 int ext2_read_inode(uint32_t ino, struct FS_INODE *out);
 int ext2_read_from_inode(const struct FS_INODE *ino, uint32_t off, void *buf,

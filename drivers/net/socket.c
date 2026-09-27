@@ -161,7 +161,13 @@ void sock_poll(void) {
 }
 
 int net_socket(int domain, int type, int proto) {
-    if (domain != AF_INET || (type != SOCK_STREAM && type != SOCK_DGRAM))
+    if (domain != AF_INET)
+        return -1;
+    int flags = type & ~0xf;
+    type &= 0xf;
+    if (type != SOCK_STREAM && type != SOCK_DGRAM)
+        return -1;
+    if (flags & ~0x80800u)
         return -1;
     (void)proto;
     lock_acquire(&net_lock);

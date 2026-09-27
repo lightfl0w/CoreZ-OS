@@ -18,12 +18,15 @@ static void release_prog_resource(struct TASK *release_thread) {
         if (access_ok((const void *)(uintptr_t)addr, 4, 1)) {
             *(volatile int32_t *)(uintptr_t)addr = 0;
             if (release_thread == current) {
-                sys_futex(addr, FUTEX_WAKE, 0x7FFFFFFF, 0);
+                sys_futex(addr, FUTEX_WAKE, 0x7FFFFFFF, 0, 0, 0);
             }
         }
     }
     task_release_space(release_thread);
-    for (uint32_t fd_idx = 3; fd_idx < MAX_FILES_OPEN_PER_PROC; fd_idx++) {
+    for (uint32_t fd_idx = 3;
+         release_thread->fd_owner_pid == (int32_t)release_thread->pid &&
+         fd_idx < MAX_FILES_OPEN_PER_PROC;
+         fd_idx++) {
         if (release_thread->fd_table[fd_idx] != (uint32_t)-1) {
             close_file((int)fd_idx);
         }
@@ -96,6 +99,7 @@ void proc_exit(struct TASK *cur, int status) {
     if (parent && parent->status == TASK_WAITING) {
         thread_unblock(parent);
     }
+    signal_notify_child_exit(parent);
     if (cur->parent_pid < 0) {
         thread_exit_current();
         return;

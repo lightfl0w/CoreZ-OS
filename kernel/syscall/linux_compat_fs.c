@@ -1,5 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
@@ -30,8 +30,6 @@
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 #include "libc/user/syscall.h"
-#include "kernel/syscall/lc_internal.h"
-
 #include "kernel/syscall/lc_internal.h"
 
 int32_t compat_read(int32_t fd, void *buf, uint32_t count);
@@ -74,6 +72,39 @@ int compat_fd_isdir(int32_t fd) {
     struct FILE *pf = file_get(gfd);
     return pf != NULL && pf->fd_flag == DIRF_FLAG;
 }
+
+static int at_dir_inode(int32_t fd, uint32_t *out) {
+    if (!compat_fd_isdir(fd))
+        return -LINUX_EBADF;
+    struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
+    if (pf == NULL || pf->fd_inode == NULL)
+        return -LINUX_EBADF;
+    *out = pf->fd_inode->i_no;
+    return 0;
+}
+
+int lc_at_path(struct ARCH_REGS *r, int32_t dirfd, uint64_t uptr, char *out) {
+    if (!copy_user_str(r, out, uptr))
+        return -LINUX_EFAULT;
+    if (dirfd == LINUX_AT_FDCWD || out[0] == '/')
+        return 0;
+    uint32_t ino = 0;
+    int rc = at_dir_inode(dirfd, &ino);
+    if (rc != 0)
+        return rc;
+    char base[MAX_PATH_LEN];
+    if (fs_inode_abs_path(ino, base, sizeof(base)) != 0)
+        return -LINUX_ENOTDIR;
+    uint32_t blen = (uint32_t)strlen(base);
+    uint32_t rlen = (uint32_t)strlen(out);
+    if (blen + rlen + 2 > (uint32_t)sizeof(base))
+        return -LINUX_ENAMETOOLONG;
+    if (blen > 1)
+        base[blen++] = '/';
+    memcpy(base + blen, out, rlen + 1);
+    strcpy(out, base);
+    return 0;
+}
 int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
     if (dirp == NULL || fd < 0 || fd >= (int32_t)MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EBADF;
@@ -81,7 +112,11 @@ int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
         return -LINUX_ENOTDIR;
     uint32_t gfd = fd_local2global((uint32_t)fd);
     struct FILE *pf = file_get(gfd);
-    if (pf == NULL || pf->fd_inode == NULL)
+    if (pf == NULL)
+        return -LINUX_EBADF;
+    if (pf->proc_id != 0)
+        return proc_getdents64(pf, dirp, count);
+    if (pf->fd_inode == NULL)
         return -LINUX_EBADF;
     uint32_t pos = pf->fd_pos;
     uint32_t emitted = pos;
@@ -133,6 +168,15 @@ int32_t compat_tcsets(uint32_t cmd, uint64_t arg) {
     return 0;
 }
 int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
+    if (cmd == LINUX_FIONBIO) {
+        int32_t nb = 0;
+        int32_t rc;
+        if (arg == 0 || !access_ok((const void *)(uintptr_t)arg, 4, 0))
+            return -LINUX_EFAULT;
+        memcpy(&nb, (const void *)(uintptr_t)arg, 4);
+        rc = sys_fcntl(fd, LINUX_F_SETFL, nb ? LINUX_O_NONBLOCK : 0);
+        return rc == 0 ? 0 : -LINUX_EBADF;
+    }
     if (fd >= 0 && fd < MAX_FILES_OPEN_PER_PROC) {
         struct FILE *pf = file_get(fd_local2global((uint32_t)fd));
         if (pf != NULL && pf->dev_priv != NULL)
@@ -244,10 +288,10 @@ int64_t lc_fchown(LC_ARGS) {
     return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchownat(LC_ARGS) {
-    (void)a;
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
     return sys_chown(kpath, (uint32_t)c, (uint32_t)d);
 }
 int64_t lc_fchmod(LC_ARGS) {
@@ -265,10 +309,11 @@ int64_t lc_fchmod(LC_ARGS) {
     return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchmodat(LC_ARGS) {
-    (void)a; (void)d;
+    (void)d;
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
     return sys_chmod(kpath, (uint32_t)c);
 }
 int64_t lc_close(LC_ARGS) {
@@ -309,7 +354,7 @@ int32_t compat_ftruncate(int32_t fd, int32_t length) {
         return -LINUX_EINVAL;
     uint32_t gfd = fd_local2global((uint32_t)fd);
     struct FILE *pf = file_get(gfd);
-    if (pf == NULL || pf->fd_inode == NULL || pf->fd_flag == PIPE_FLAG)
+    if (pf == NULL || pf->fd_inode == NULL || is_pipe((uint32_t)fd))
         return -LINUX_EINVAL;
     ext2_truncate_inode(pf->fd_inode);
     ext2_write_inode(pf->fd_inode->i_no, pf->fd_inode);
@@ -337,15 +382,31 @@ void compat_stat_fill(struct LINUX_STAT *ls, uint32_t ino, int64_t size,
     ls->st_mtim = ls->st_atim;
     ls->st_ctim = ls->st_atim;
 }
-int32_t compat_stat_linux(const char *path, uint64_t ub) {
+static void stat_fill_inode(struct LINUX_STAT *ls, uint32_t ino,
+                            uint32_t mode) {
+    struct FS_INODE obj;
+    uint32_t now = (uint32_t)rtc_unix_time();
+    ls->st_nlink = (mode & 0xF000u) == 0x4000u ? fs_dir_nlink(ino) : 1;
+    if (ext2_read_inode(ino, &obj) != 0) {
+        ls->st_atim.tv_sec = now;
+        ls->st_mtim.tv_sec = now;
+        ls->st_ctim.tv_sec = now;
+        return;
+    }
+    ls->st_atim.tv_sec = obj.i_atime ? (int64_t)obj.i_atime : (int64_t)now;
+    ls->st_mtim.tv_sec = obj.i_mtime ? (int64_t)obj.i_mtime : (int64_t)now;
+    ls->st_ctim.tv_sec = obj.i_ctime ? (int64_t)obj.i_ctime : (int64_t)now;
+}
+int32_t compat_stat_linux(const char *path, uint64_t ub, int follow) {
     struct LINUX_STAT ls;
     uint32_t ino = 0, size = 0, mode = 0, uid = 0, gid = 0;
     if (proc_match(path)) {
         compat_stat_fill(&ls, 2, 0, LINUX_S_IFREG | 0444u, 0, 0);
-    } else if (fs_stat_full(path, &ino, &size, &mode, &uid, &gid) != 0) {
+    } else if (fs_stat_full(path, &ino, &size, &mode, &uid, &gid, follow) != 0) {
         return -LINUX_ENOENT;
     } else {
         compat_stat_fill(&ls, ino, (int64_t)size, mode, uid, gid);
+        stat_fill_inode(&ls, ino, mode);
     }
     memcpy((void *)(uintptr_t)ub, &ls, sizeof(ls));
     return 0;
@@ -360,6 +421,7 @@ int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, pf->fd_inode->i_no, (int64_t)pf->fd_inode->i_size,
                          pf->fd_inode->i_mode, pf->fd_inode->i_uid,
                          pf->fd_inode->i_gid);
+        stat_fill_inode(&ls, pf->fd_inode->i_no, pf->fd_inode->i_mode);
     } else if (is_pipe(fd)) {
         compat_stat_fill(&ls, 0, 0, LINUX_S_IFIFO | 0600u, 0, 0);
     } else {
@@ -370,12 +432,13 @@ int32_t compat_fstat_linux(int32_t fd, uint64_t ub) {
         compat_stat_fill(&ls, pf->fd_inode->i_no,
                          (int64_t)pf->fd_inode->i_size, pf->fd_inode->i_mode,
                          pf->fd_inode->i_uid, pf->fd_inode->i_gid);
+        stat_fill_inode(&ls, pf->fd_inode->i_no, pf->fd_inode->i_mode);
     }
     memcpy((void *)(uintptr_t)ub, &ls, sizeof(ls));
     return 0;
 }
-int32_t compat_openat(int32_t dirfd, const char *kpath,
-                             uint32_t lflags) {
+int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags,
+                      uint32_t mode) {
     if (dirfd != LINUX_AT_FDCWD)
         return -LINUX_EINVAL;
     struct FS_STAT pst;
@@ -396,7 +459,9 @@ int32_t compat_openat(int32_t dirfd, const char *kpath,
         if (sys_stat(kpath, &pst) == 0)
             return -LINUX_EEXIST;
     }
-    int32_t fd = open_file(kpath, (uint8_t)compat_flags_linux2native(lflags));
+    int32_t fd = open_file_mode(kpath,
+                                (uint8_t)compat_flags_linux2native(lflags),
+                                mode & 0o7777u & ~current->umask);
     if (fd < 0)
         return -(current->errno > 0 ? current->errno : LINUX_ENOENT);
     if (lflags & LINUX_O_TRUNC)
@@ -431,18 +496,21 @@ int32_t compat_write(int32_t fd, const void *buf, uint32_t count) {
     if (io_is_file_fd(fd)) {
         if (is_pipe(fd)) {
             struct FILE *pf2 = file_get(fd_local2global((uint32_t)fd));
+            uint32_t n;
             if (pf2 == NULL || pf2->fd_inode == NULL)
                 return -LINUX_EBADF;
-            uint32_t len = ioq_length((struct TTY_IOQUEUE *)pf2->fd_inode);
-            if (len >= BUFSIZE) {
-                if (pf2->fd_nonblock)
-                    return -LINUX_EAGAIN;
-                while (len >= BUFSIZE) {
-                    mtime_sleep(1);
-                    len = ioq_length((struct TTY_IOQUEUE *)pf2->fd_inode);
-                }
-            }
-            return (int32_t)pipe_write(fd, buf, count);
+            if (pf2->fd_flag != PIPE_FLAG)
+                return -LINUX_EBADF;
+            if (!pipe_end_alive(pf2->proc_aux))
+                return -LINUX_EPIPE;
+            if (pf2->fd_nonblock &&
+                ioq_length((struct TTY_IOQUEUE *)pf2->fd_inode) >=
+                    BUFSIZE - 1)
+                return -LINUX_EAGAIN;
+            n = pipe_write(fd, buf, count);
+            if (n == (uint32_t)-1)
+                return -LINUX_EPIPE;
+            return (int32_t)n;
         }
         return (int32_t)write_file(fd, buf, count);
     }
@@ -480,16 +548,21 @@ int32_t compat_read(int32_t fd, void *buf, uint32_t count) {
             return -LINUX_EISDIR;
         if (is_pipe(fd)) {
             struct FILE *pf3 = file_get(fd_local2global((uint32_t)fd));
+            uint32_t len;
             if (pf3 == NULL || pf3->fd_inode == NULL)
                 return -LINUX_EBADF;
-            uint32_t len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
+            if (pf3->fd_flag != PIPE_RD_FLAG)
+                return -LINUX_EBADF;
+            len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
             if (len == 0) {
+                if (!pipe_end_alive(pf3->proc_aux))
+                    return 0;
                 if (pf3->fd_nonblock)
                     return -LINUX_EAGAIN;
                 if (count == 0)
                     return 0;
                 while (len == 0) {
-                    if (!pipe_has_writer(fd_local2global((uint32_t)fd)))
+                    if (!pipe_end_alive(pf3->proc_aux))
                         return 0;
                     mtime_sleep(1);
                     len = ioq_length((struct TTY_IOQUEUE *)pf3->fd_inode);
@@ -556,6 +629,100 @@ int64_t lc_pread64(LC_ARGS) {
     return n;
 }
 
+int64_t lc_copy_file_range(LC_ARGS) {
+    int32_t fd_in = (int32_t)a;
+    int32_t fd_out = (int32_t)c;
+    uint64_t remaining = e;
+    int32_t saved_in = -1;
+    int32_t saved_out = -1;
+    int64_t off_in = 0;
+    int64_t off_out = 0;
+    int64_t copied = 0;
+    uint8_t *buf;
+
+    if (f != 0)
+        return -LINUX_EINVAL;
+    if (!io_is_file_fd(fd_in) || !io_is_file_fd(fd_out) ||
+        compat_fd_isdir(fd_in) || compat_fd_isdir(fd_out))
+        return -LINUX_EBADF;
+    if (b != 0) {
+        if (!user_ptr_ok(r, b, sizeof(off_in), 1))
+            return -LINUX_EFAULT;
+        memcpy(&off_in, (const void *)(uintptr_t)b, sizeof(off_in));
+        if (off_in < 0 || off_in > 0x7fffffffll)
+            return -LINUX_EINVAL;
+        saved_in = sys_lseek(fd_in, 0, SEEK_CUR);
+        if (saved_in < 0 || sys_lseek(fd_in, (int32_t)off_in, SEEK_SET) < 0)
+            return -LINUX_EINVAL;
+    }
+    if (d != 0) {
+        if (!user_ptr_ok(r, d, sizeof(off_out), 1)) {
+            if (saved_in >= 0)
+                sys_lseek(fd_in, saved_in, SEEK_SET);
+            return -LINUX_EFAULT;
+        }
+        memcpy(&off_out, (const void *)(uintptr_t)d, sizeof(off_out));
+        if (off_out < 0 || off_out > 0x7fffffffll) {
+            if (saved_in >= 0)
+                sys_lseek(fd_in, saved_in, SEEK_SET);
+            return -LINUX_EINVAL;
+        }
+        saved_out = sys_lseek(fd_out, 0, SEEK_CUR);
+        if (saved_out < 0 ||
+            sys_lseek(fd_out, (int32_t)off_out, SEEK_SET) < 0) {
+            if (saved_in >= 0)
+                sys_lseek(fd_in, saved_in, SEEK_SET);
+            return -LINUX_EINVAL;
+        }
+    }
+
+    buf = (uint8_t *)get_kernel_pages(1);
+    if (buf == NULL) {
+        if (saved_in >= 0)
+            sys_lseek(fd_in, saved_in, SEEK_SET);
+        if (saved_out >= 0)
+            sys_lseek(fd_out, saved_out, SEEK_SET);
+        return -LINUX_ENOMEM;
+    }
+    while (remaining != 0) {
+        uint32_t want = remaining > PAGE_SIZE ? PAGE_SIZE : (uint32_t)remaining;
+        int32_t nr = compat_read(fd_in, buf, want);
+        if (nr <= 0) {
+            if (nr < 0 && copied == 0)
+                copied = nr;
+            break;
+        }
+        uint32_t done = 0;
+        while (done < (uint32_t)nr) {
+            int32_t nw = compat_write(fd_out, buf + done, (uint32_t)nr - done);
+            if (nw <= 0) {
+                if (copied == 0)
+                    copied = nw < 0 ? nw : -LINUX_EIO;
+                remaining = 0;
+                break;
+            }
+            done += (uint32_t)nw;
+            copied += nw;
+            remaining -= (uint32_t)nw;
+        }
+        if (done < (uint32_t)nr)
+            break;
+    }
+    free_kernel_page((uint32_t)(uintptr_t)buf);
+
+    if (b != 0) {
+        off_in += copied > 0 ? copied : 0;
+        memcpy((void *)(uintptr_t)b, &off_in, sizeof(off_in));
+        sys_lseek(fd_in, saved_in, SEEK_SET);
+    }
+    if (d != 0) {
+        off_out += copied > 0 ? copied : 0;
+        memcpy((void *)(uintptr_t)d, &off_out, sizeof(off_out));
+        sys_lseek(fd_out, saved_out, SEEK_SET);
+    }
+    return copied;
+}
+
 int64_t lc_writev(LC_ARGS) {
     (void)d;
     (void)e;
@@ -597,7 +764,14 @@ int64_t lc_stat(LC_ARGS) {
     if (!copy_user_str(r, kpath, a) ||
         !user_ptr_ok(r, b, sizeof(struct LINUX_STAT), 1))
         return -LINUX_EFAULT;
-    return compat_stat_linux(kpath, b);
+    return compat_stat_linux(kpath, b, 1);
+}
+int64_t lc_lstat(LC_ARGS) {
+    char kpath[MAX_PATH_LEN];
+    if (!copy_user_str(r, kpath, a) ||
+        !user_ptr_ok(r, b, sizeof(struct LINUX_STAT), 1))
+        return -LINUX_EFAULT;
+    return compat_stat_linux(kpath, b, 0);
 }
 int64_t lc_lseek(LC_ARGS) {
     (void)r;
@@ -606,6 +780,87 @@ int64_t lc_lseek(LC_ARGS) {
 int64_t lc_fcntl(LC_ARGS) {
     (void)r;
     return sys_fcntl((int32_t)a, (int32_t)b, c);
+}
+#define FLOCK_TAB_N 16
+static struct {
+    uint32_t ino;
+    uint32_t mode;
+    int32_t pid;
+} flock_tab[FLOCK_TAB_N];
+static int flock_conflict(uint32_t ino, uint32_t want, int32_t pid) {
+    for (uint32_t i = 0; i < FLOCK_TAB_N; i++) {
+        if (flock_tab[i].mode != 0 && flock_tab[i].ino == ino &&
+            flock_tab[i].pid != pid &&
+            (flock_tab[i].mode == 2u || want == 2u))
+            return 1;
+    }
+    return 0;
+}
+
+void flock_release_ino(uint32_t ino) {
+    uint32_t fl = asm_save_eflags();
+    asm_cli();
+    for (uint32_t i = 0; i < FLOCK_TAB_N; i++) {
+        if (flock_tab[i].mode != 0 && flock_tab[i].ino == ino)
+            flock_tab[i].mode = 0;
+    }
+    asm_restore_eflags(fl);
+}
+int64_t lc_flock(LC_ARGS) {
+    (void)r;
+    (void)c;
+    (void)d;
+    (void)e;
+    (void)f;
+    uint32_t gfd = fd_local2global((uint32_t)a);
+    struct FILE *pf = file_get(gfd);
+    if (pf == NULL || pf->fd_inode == NULL)
+        return -LINUX_EBADF;
+    uint32_t ino = pf->fd_inode->i_no;
+    int32_t pid = (int32_t)current->fd_owner_pid;
+    uint32_t op = (uint32_t)b & 0xfu;
+    if (op == 8u) {
+        uint32_t fl = asm_save_eflags();
+        asm_cli();
+        for (uint32_t i = 0; i < FLOCK_TAB_N; i++) {
+            if (flock_tab[i].mode != 0 && flock_tab[i].ino == ino &&
+                flock_tab[i].pid == pid)
+                flock_tab[i].mode = 0;
+        }
+        asm_restore_eflags(fl);
+        return 0;
+    }
+    if (op != 1u && op != 2u)
+        return -LINUX_EINVAL;
+    for (;;) {
+        uint32_t fl = asm_save_eflags();
+        asm_cli();
+        if (!flock_conflict(ino, op, pid)) {
+            for (uint32_t i = 0; i < FLOCK_TAB_N; i++) {
+                if (flock_tab[i].mode != 0 && flock_tab[i].ino == ino &&
+                    flock_tab[i].pid == pid) {
+                    flock_tab[i].mode = op;
+                    asm_restore_eflags(fl);
+                    return 0;
+                }
+            }
+            for (uint32_t i = 0; i < FLOCK_TAB_N; i++) {
+                if (flock_tab[i].mode == 0) {
+                    flock_tab[i].ino = ino;
+                    flock_tab[i].mode = op;
+                    flock_tab[i].pid = pid;
+                    asm_restore_eflags(fl);
+                    return 0;
+                }
+            }
+            asm_restore_eflags(fl);
+            return -LINUX_ENOLCK;
+        }
+        asm_restore_eflags(fl);
+        if (b & 4u)
+            return -LINUX_EWOULDBLOCK;
+        thread_yield();
+    }
 }
 int64_t lc_readlink(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
@@ -624,11 +879,42 @@ int64_t lc_getcwd(LC_ARGS) {
         return -LINUX_EFAULT;
     return sys_getcwd((char *)a, (uint32_t)b) ? (int64_t)a : -LINUX_ENOENT;
 }
+static void lc_parent_of(const char *path, char *out) {
+    uint32_t n = (uint32_t)strlen(path);
+    while (n > 1 && path[n - 1] == '/')
+        n--;
+    while (n > 1 && path[n - 1] != '/')
+        n--;
+    while (n > 1 && path[n - 1] == '/')
+        n--;
+    if (n <= 1) {
+        out[0] = '/';
+        out[1] = '\0';
+        return;
+    }
+    memcpy(out, path, n);
+    out[n] = '\0';
+}
+
+static int64_t lc_mkdir_apply(const char *kpath) {
+    if (sys_mkdir(kpath) == 0)
+        return 0;
+    uint32_t ino = 0;
+    int is_dir = 0;
+    if (ext2_lookup(kpath, &ino, &is_dir) == 0)
+        return -LINUX_EEXIST;
+    char parent[MAX_PATH_LEN];
+    lc_parent_of(kpath, parent);
+    if (ext2_lookup(parent, &ino, &is_dir) != 0 || !is_dir)
+        return -LINUX_ENOENT;
+    return -LINUX_EPERM;
+}
+
 int64_t lc_mkdir(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    return sys_mkdir(kpath);
+    return lc_mkdir_apply(kpath);
 }
 int64_t lc_rmdir(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
@@ -669,18 +955,20 @@ int64_t lc_symlink(LC_ARGS) {
     return sys_symlink(ktarget, kpath);
 }
 int64_t lc_symlinkat(LC_ARGS) {
-    (void)a;
     char ktarget[MAX_PATH_LEN];
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, ktarget, b) || !copy_user_str(r, kpath, c))
+    if (!copy_user_str(r, ktarget, a))
         return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)b, c, kpath);
+    if (rc != 0)
+        return rc;
     return sys_symlink(ktarget, kpath);
 }
 int64_t lc_mknodat(LC_ARGS) {
-    (void)a;
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
     return sys_mknod(kpath, (uint32_t)c, (uint32_t)d);
 }
 int64_t lc_access(LC_ARGS) {
@@ -755,21 +1043,31 @@ int64_t lc_dup2(LC_ARGS) {
     return sys_dup2((int32_t)a, (int32_t)b);
 }
 int64_t lc_dup3(LC_ARGS) {
-    if ((int32_t)a == (int32_t)b || d != 0)
+    struct TASK *fd_task = fd_owner_task();
+    if ((int32_t)a == (int32_t)b ||
+        (c & ~(uint64_t)LINUX_O_CLOEXEC) != 0)
         return -LINUX_EINVAL;
-    return sys_dup2((int32_t)a, (int32_t)b);
+    int32_t newfd = sys_dup2((int32_t)a, (int32_t)b);
+    if (newfd < 0)
+        return -LINUX_EBADF;
+    if ((c & LINUX_O_CLOEXEC) != 0)
+        fd_task->fd_cloexec |= 1ull << (uint32_t)newfd;
+    else
+        fd_task->fd_cloexec &= ~(1ull << (uint32_t)newfd);
+    return newfd;
 }
 int64_t lc_open(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)b);
+    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)b, (uint32_t)c);
 }
 int64_t lc_openat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
-    return compat_openat((int32_t)a, kpath, (uint32_t)c);
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
+    return compat_openat(LINUX_AT_FDCWD, kpath, (uint32_t)c, (uint32_t)d);
 }
 int64_t lc_newfstatat(LC_ARGS) {
     if (!user_ptr_ok(r, c, sizeof(struct LINUX_STAT), 1))
@@ -778,45 +1076,101 @@ int64_t lc_newfstatat(LC_ARGS) {
         (d & LINUX_AT_EMPTY_PATH))
         return compat_fstat_linux((int32_t)a, c);
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
-    return compat_stat_linux(kpath, c);
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
+    return compat_stat_linux(kpath, c,
+                             (d & LINUX_AT_SYMLINK_NOFOLLOW) ? 0 : 1);
 }
 int64_t lc_unlinkat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
     return (d & LINUX_AT_REMOVEDIR) ? sys_rmdir(kpath) : sys_unlink(kpath);
 }
 int64_t lc_mkdirat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
-    return sys_mkdir(kpath);
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
+    return lc_mkdir_apply(kpath);
 }
 int64_t lc_renameat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     char kpath2[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b) || !copy_user_str(r, kpath2, d))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc == 0)
+        rc = lc_at_path(r, (int32_t)c, d, kpath2);
+    if (rc != 0)
+        return rc;
     return sys_rename(kpath, kpath2);
 }
 int64_t lc_renameat2(LC_ARGS) {
     if (e != 0)
         return -LINUX_EINVAL;
-    return lc_renameat(r, b, d, 0, 0, 0, 0);
+    return lc_renameat(r, a, b, c, d, 0, 0);
 }
 int64_t lc_readlinkat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b) || !user_ptr_ok(r, c, (uint32_t)d, 1))
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
+    if (!user_ptr_ok(r, c, (uint32_t)d, 1))
         return -LINUX_EFAULT;
     return sys_readlink(kpath, (char *)(uintptr_t)c, d);
 }
 int64_t lc_faccessat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
-    if (!copy_user_str(r, kpath, b))
-        return -LINUX_EFAULT;
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
     return sys_access(kpath, (int32_t)c);
+}
+int64_t lc_utimensat(LC_ARGS) {
+    uint32_t now = (uint32_t)rtc_unix_time();
+    uint32_t at = now;
+    uint32_t mt = now;
+    if (c != 0) {
+        struct LINUX_TIMESPEC ts[2];
+        if (!user_ptr_ok(r, c, sizeof(ts), 1))
+            return -LINUX_EFAULT;
+        memcpy(ts, (const void *)(uintptr_t)c, sizeof(ts));
+        if (ts[0].tv_nsec != LINUX_UTIME_OMIT)
+            at = ts[0].tv_nsec == LINUX_UTIME_NOW ? now
+                                                  : (uint32_t)ts[0].tv_sec;
+        if (ts[1].tv_nsec != LINUX_UTIME_OMIT)
+            mt = ts[1].tv_nsec == LINUX_UTIME_NOW ? now
+                                                  : (uint32_t)ts[1].tv_sec;
+    }
+    uint32_t ino = 0;
+    if (b == 0 || *(const char *)(uintptr_t)b == 0) {
+        if (a < 0 || a >= MAX_FILES_OPEN_PER_PROC)
+            return -LINUX_EBADF;
+        struct FILE *pf = file_get(fd_local2global((uint32_t)a));
+        if (pf == NULL || pf->fd_inode == NULL)
+            return -LINUX_EBADF;
+        ino = pf->fd_inode->i_no;
+    } else {
+        char kpath[MAX_PATH_LEN];
+        int rc = lc_at_path(r, (int32_t)a, b, kpath);
+        if (rc != 0)
+            return rc;
+        int ft = 0;
+        if (ext2_lookup_ftype(kpath, &ino, &ft, 1) != 0)
+            return -LINUX_ENOENT;
+    }
+    struct FS_INODE obj;
+    if (ext2_read_inode(ino, &obj))
+        return -LINUX_EIO;
+    if (current->euid != 0 && current->euid != obj.i_uid &&
+        fs_check_perm(&obj, 2u)) {
+        return -LINUX_EACCES;
+    }
+    obj.i_atime = at;
+    obj.i_mtime = mt;
+    obj.i_ctime = now;
+    return ext2_write_inode(ino, &obj) ? -LINUX_EIO : 0;
 }
 
 int64_t lc0_open(LC_ARGS) {

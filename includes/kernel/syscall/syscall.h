@@ -9,6 +9,6 @@
 
 void syscall_init(void);
 
-uint64_t syscall_handler(struct X86_REGS *r);
+uint64_t syscall_handler(struct ARCH_REGS *r);
 
 #endif

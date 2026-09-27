@@ -15,11 +15,14 @@ INODES_PER_GROUP = 1024
 INODE_SIZE = 128
 FIRST_DATA_BLOCK = 1
 
+TOTAL_BLOCKS = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
+
 SUPER_BLK = 1
 GDT_BLK = FIRST_DATA_BLOCK + 1
 BLOCK_BITMAP_BLK = 3
-INODE_BITMAP_BLK = 4
-ITABLE_BLK = 5
+BLOCK_BITMAP_BLOCKS = (TOTAL_BLOCKS + 8 * BLOCK - 1) // (8 * BLOCK)
+INODE_BITMAP_BLK = BLOCK_BITMAP_BLK + BLOCK_BITMAP_BLOCKS
+ITABLE_BLK = INODE_BITMAP_BLK + 1
 ITABLE_BLOCKS = (INODES_PER_GROUP * INODE_SIZE + BLOCK - 1) // BLOCK
 DATA_START = ITABLE_BLK + ITABLE_BLOCKS
 
@@ -35,7 +38,10 @@ FILES = [
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
-    "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf",
+    "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
+    "futex_bs_probe.elf",
+    "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
+    "t.fish", "shell.elf",
     "wallpaper.png", "pic1.png", "pic2.png"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
@@ -88,7 +94,7 @@ DEV_NODES = [("null", 1, 3), ("zero", 1, 5), ("tty", 5, 0),
              ("pty6", 137, 6), ("pty7", 137, 7)]
 
 EXTRA_DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
-              ("tmp", 0x41ED | 0o777), ("lib", 0o40755)]
+              ("tmp", 0x41ED | 0o777), ("lib", 0o40755), ("root", 0o40755)]
 
 BIN_LINKS = ["sh", "su", "login", "id", "ls", "cat", "echo", "ps", "passwd",
              "adduser", "groups", "chmod", "chown", "mkdir", "rm", "cp",
@@ -124,6 +130,8 @@ SYMLINKS = [("catlink", "/cat.elf"),
 # 调试某个程序（默认这份是回归用的完整序列）
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"toybox ls -l /lib\n"
+                  b"at_probe.elf\nfutex_bs_probe.elf\n"
+                  b"rust_hello.elf\nrust_probe.elf\n"
                   b"musl_abi_test.elf\n"
                   b"dyn_demo.elf\n"
                   b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
@@ -223,6 +231,8 @@ def build(build_dir, out, smoke=False, autoexec=None):
     if smoke:
         pre["autoexec"] = SMOKE_AUTOEXEC if autoexec is None else autoexec
         names.append("autoexec")
+        pre["shell.conf"] = b"/init_sh.elf\n"
+        names.append("shell.conf")
     else:
         pre["autoexec"] = b"toybox login\n"
         names.append("autoexec")
@@ -362,13 +372,11 @@ def build(build_dir, out, smoke=False, autoexec=None):
     total_blocks = (TOTAL_SECTORS - P2_START) // SECT_PER_BLOCK
     free_blocks = total_blocks - len(used_blocks)
 
-    bm_len = (total_blocks + 7) // 8
-    block_bitmap = bytearray(bm_len)
+    block_bitmap = bytearray(BLOCK_BITMAP_BLOCKS * BLOCK)
     for b in used_blocks:
         block_bitmap[b >> 3] |= 0x80 >> (b & 7)
 
-    im_len = (used_inodes + 7) // 8
-    inode_bitmap = bytearray(im_len)
+    inode_bitmap = bytearray(BLOCK)
     for i in range(1, used_inodes + 1):
         inode_bitmap[(i - 1) >> 3] |= 0x80 >> ((i - 1) & 7)
 
@@ -414,7 +422,7 @@ def build(build_dir, out, smoke=False, autoexec=None):
         for name, _ in EXTRA_DIRS:
             ino = dir_inos[name]
             f.seek(base * SECTOR + dir_blk_list[name] * BLOCK)
-            f.write(build_dirent_blocks([(ino, 2, "."), (ino, 2, "..")]))
+            f.write(build_dirent_blocks([(ino, 2, "."), (2, 2, "..")]))
         for dirname, entries in subdir_entries.items():
             f.seek(base * SECTOR + subdir_dir_blocks[dirname] * BLOCK)
             f.write(build_dirent_blocks(entries))

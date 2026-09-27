@@ -126,11 +126,11 @@ int copy_user_space(struct TASK *parent, struct TASK *child) {
 }
 
 static void build_child_stack(struct TASK *child,
-                              struct X86_REGS *parent_frame) {
+                              struct ARCH_REGS *parent_frame) {
     uint32_t stack_top = (uint32_t)child->kernel_stack_top;
-    struct X86_REGS *child_frame =
-        (struct X86_REGS *)(stack_top - sizeof(struct X86_REGS));
-    memcpy(child_frame, parent_frame, sizeof(struct X86_REGS));
+    struct ARCH_REGS *child_frame =
+        (struct ARCH_REGS *)(stack_top - sizeof(struct ARCH_REGS));
+    memcpy(child_frame, parent_frame, sizeof(struct ARCH_REGS));
     child_frame->eax = 0;
     struct TASK_STACK *ts =
         (struct TASK_STACK *)((uint8_t *)child_frame -
@@ -141,7 +141,7 @@ static void build_child_stack(struct TASK *child,
     child->self_kstack = (uint64_t *)ts;
 }
 
-pid_t sys_fork(struct X86_REGS *r) {
+pid_t sys_fork(struct ARCH_REGS *r) {
     struct TASK *parent = current;
     if (parent->pml4_phys == 0) {
         return -1;
@@ -153,9 +153,11 @@ pid_t sys_fork(struct X86_REGS *r) {
     }
     child->parent_pid = (int32_t)parent->pid;
     child->cwd_inode_nr = parent->cwd_inode_nr;
+    memcpy(child->exe_path, parent->exe_path, sizeof(child->exe_path));
     child->user_brk = parent->user_brk;
     child->brk_base = parent->brk_base;
     child->stack_bottom = parent->stack_bottom;
+    child->fd_owner_pid = (int32_t)child->pid;
     for (uint32_t i = 0; i < MAX_FILES_OPEN_PER_PROC; i++) {
         child->fd_table[i] = parent->fd_table[i];
         if (child->fd_table[i] != (uint32_t)-1 &&

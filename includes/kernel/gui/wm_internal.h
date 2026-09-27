@@ -3,7 +3,7 @@
 
 #include "kernel/gui/wm.h"
 
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "kernel/gui/font.h"
 #include "kernel/init/pit/pit.h"
 #include "lib/str/str.h"

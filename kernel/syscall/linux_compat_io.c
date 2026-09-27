@@ -1,5 +1,5 @@
 #include "kernel/syscall/linux_compat.h"
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
 #include "drivers/char/keyboard.h"
@@ -144,9 +144,14 @@ int64_t lc_socket(LC_ARGS) {
     }
     if (domain != 2)
         return -LINUX_EAFNOSUPPORT;
-    return net_socket(domain, type, (int)c);
+    {
+        int fd = net_socket(domain, type, (int)c);
+        if (fd < 0)
+            return -LINUX_ENFILE;
+        return fd;
+    }
 }
-int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
+int sockaddr_in_parts(struct ARCH_REGS *r, uint64_t addr,
                              uint64_t addrlen, uint32_t *ip,
                              uint16_t *port) {
     if (addr == 0 || addrlen < 8) {
@@ -164,7 +169,7 @@ int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr,
           ((uint32_t)tmp[6] << 16) | ((uint32_t)tmp[7] << 24);
     return 0;
 }
-int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr,
+int fill_sockaddr_in(struct ARCH_REGS *r, uint64_t addr,
                             uint64_t addrlen_ptr, uint32_t ip,
                             uint16_t port) {
     if (addr == 0 || addrlen_ptr == 0)
@@ -535,7 +540,7 @@ int lc_close_extra(int32_t fd) {
 int io_is_file_fd(int fd) {
     if (fd < 0 || fd >= (int)MAX_FILES_OPEN_PER_PROC)
         return 0;
-    uint32_t g = current->fd_table[fd];
+    uint32_t g = fd_owner_task()->fd_table[fd];
     if (g == (uint32_t)-1)
         return 0;
     if (fd < 3 && g == (uint32_t)fd)
@@ -598,14 +603,18 @@ int io_fd_events(int fd, int want_read, int want_write) {
             struct FILE *f = file_get(fd_local2global((uint32_t)fd));
             if (f != NULL && f->fd_inode != NULL) {
                 uint32_t len = ioq_length((struct TTY_IOQUEUE *)f->fd_inode);
-                if (want_read && len > 0)
-                    rv |= LINUX_POLLIN;
-                if (want_write && len < BUFSIZE)
-                    rv |= LINUX_POLLOUT;
-                if (len == 0 && want_read &&
-                    ((current->pipe_wr_mask >> (uint32_t)fd) & 1u) == 0 &&
-                    !pipe_has_writer(fd_local2global((uint32_t)fd)))
-                    rv |= LINUX_POLLHUP;
+                if (f->fd_flag == PIPE_RD_FLAG) {
+                    if (want_read && len > 0)
+                        rv |= LINUX_POLLIN;
+                    if (want_read && len == 0 &&
+                        !pipe_end_alive(f->proc_aux))
+                        rv |= LINUX_POLLHUP;
+                } else {
+                    if (want_write && len < BUFSIZE - 1)
+                        rv |= LINUX_POLLOUT;
+                    if (!pipe_end_alive(f->proc_aux))
+                        rv |= LINUX_POLLERR;
+                }
             }
             return rv;
         }
@@ -647,7 +656,7 @@ int io_wait(struct LINUX_POLLFD *fds, uint32_t n, int64_t timeout_ms) {
         mtime_sleep(1);
     }
 }
-int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds,
+int64_t lc_poll_common(struct ARCH_REGS *r, uint64_t ufds, int32_t nfds,
                               int64_t timeout_ms) {
     static struct LINUX_POLLFD pf[LC_POLL_MAX];
     if (nfds < 0 || nfds > LC_POLL_MAX)
@@ -665,7 +674,7 @@ int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds,
     memcpy((void *)(uintptr_t)ufds, pf, bytes);
     return rc;
 }
-int64_t lc_timespec_to_ms(struct X86_REGS *r, uint64_t ptr,
+int64_t lc_timespec_to_ms(struct ARCH_REGS *r, uint64_t ptr,
                                  int64_t *out) {
     if (ptr == 0) {
         *out = -1;
@@ -713,7 +722,7 @@ void lc_fdset_clear_high(uint8_t *set, uint32_t bytes, int nfds) {
     for (uint32_t b = bit / 8; b < bytes; b++)
         set[b] = 0;
 }
-int64_t lc_select_common(struct X86_REGS *r, int32_t nfds, uint64_t rd,
+int64_t lc_select_common(struct ARCH_REGS *r, int32_t nfds, uint64_t rd,
                                 uint64_t wr, uint64_t ex, int64_t timeout_ms) {
     static uint8_t sets[3][LC_SEL_MAX_BYTES];
     static struct LINUX_POLLFD pf[LC_SEL_MAX_FDS];
@@ -858,7 +867,7 @@ int64_t lc_epoll_ctl(LC_ARGS) {
     }
     return -LINUX_EINVAL;
 }
-int64_t lc_epoll_wait_common(struct X86_REGS *r, uint64_t a, uint64_t b,
+int64_t lc_epoll_wait_common(struct ARCH_REGS *r, uint64_t a, uint64_t b,
                                     uint64_t c, int64_t timeout_ms) {
     int ep = ep_slot((int)a);
     if (ep < 0)

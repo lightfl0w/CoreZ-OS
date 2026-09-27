@@ -147,11 +147,11 @@ int client_begin(struct COMP_DEMO_CLIENT *dc,
 typedef void (*client_thread_fn)(void *);
 
 static client_thread_fn types[] = {
-    clients_term_thread, clients_clock_thread, clients_sysmon_thread,
-    clients_png_thread,  clients_plasma_thread, clients_files_thread,
+    clients_clock_thread, clients_sysmon_thread, clients_png_thread,
+    clients_term_thread,  clients_plasma_thread, clients_files_thread,
     clients_edit_thread};
-static const char *type_names[] = {"gc_term", "gc_clock", "gc_sysmon",
-                                   "gc_pngview", "gc_plasma", "gc_files",
+static const char *type_names[] = {"gc_clock", "gc_sysmon", "gc_pngview",
+                                   "gc_term", "gc_plasma", "gc_files",
                                    "gc_edit"};
 #define CLIENT_TYPES ((int)(sizeof(types) / sizeof(types[0])))
 static int next_type = 0;
@@ -163,9 +163,10 @@ void clients_spawn_next(void) {
 }
 
 void clients_spawn_initial(void) {
-    next_type = 0;
-    for (int i = 0; i < 4; i++)
-        clients_spawn_next();
+    next_type = 3;
+    clients_spawn_next();
+    next_type = 3;
+    clients_spawn_next();
 }
 
 void clients_broadcast_close(void) {

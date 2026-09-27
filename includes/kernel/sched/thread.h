@@ -13,7 +13,7 @@
 #define FPU_SAVE_SIZE 512
 
 #define RFLAGS_INIT 0x202u
-#define MAX_FILES_OPEN_PER_PROC 32
+#define MAX_FILES_OPEN_PER_PROC 64
 typedef int32_t pid_t;
 enum TASK_STATUS {
     TASK_RUNNING = 1u << 0,
@@ -44,11 +44,9 @@ struct TASK {
     uint32_t pid;
     char name[16];
     uint8_t priority;
-    uint8_t ticks;
     uint32_t elapsed_ticks;
     uint64_t vruntime;
     uint64_t deadline;
-    int64_t vlag;
     uint32_t weight;
     uint32_t slice;
     struct LIST_ELEM all_list_tag;
@@ -57,6 +55,8 @@ struct TASK {
     uint32_t futex_ready;
     uint32_t futex_uaddr;
     uint32_t futex_pml4;
+    uint32_t futex_bitset;
+    uint32_t futex_timed;
     uint32_t sleep_intr;
     uint32_t sleep_eintr;
     uint32_t sleep_left;
@@ -73,7 +73,7 @@ struct TASK {
     struct SYS_SIGACTION sigactions[NSIG];
     uint32_t cwd_inode_nr;
     uint32_t fd_table[MAX_FILES_OPEN_PER_PROC];
-    uint32_t pipe_wr_mask;
+    uint64_t pipe_wr_mask;
     uint32_t tls_base;
     uint32_t tls_selector;
     uint8_t tls_msr;
@@ -94,8 +94,12 @@ struct TASK {
     uint32_t sigalt_flags;
     uint32_t compat;
     uint32_t clear_child_tid;
+    char exe_path[256];
+uint32_t exe_bias;
+    uint32_t sig_fault_addr;
     uint32_t stack_magic;
     uint64_t fd_cloexec;
+    int32_t fd_owner_pid;
     uint8_t slot_used;
     uint8_t cpu_aff;
     uint32_t on_cpu;
@@ -125,8 +129,13 @@ void thread_block(void);
 void thread_unblock(struct TASK *t);
 int32_t thread_sleep_ticks(uint32_t ticks);
 void thread_timer_wake(void);
+void sched_dbg_task(struct TASK *t);
+struct TASK *fd_owner_task(void);
 void thread_yield(void);
 void thread_block_with_status(enum TASK_STATUS status);
+uint32_t thread_block_prepare_timed(enum TASK_STATUS status, uint32_t ticks);
+void thread_timer_cancel(void);
+void thread_timer_disarm(struct TASK *t);
 uint32_t thread_block_prepare(enum TASK_STATUS status);
 void thread_block_commit(uint32_t flags);
 struct TASK *pid2thread(int32_t pid);

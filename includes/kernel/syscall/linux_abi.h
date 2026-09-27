@@ -128,6 +128,7 @@
 #define SYS_LINUX_getrandom 318
 
 #define SYS_LINUX_madvise 28
+#define SYS_LINUX_flock 73
 #define SYS_LINUX_fsync 74
 #define SYS_LINUX_fdatasync 75
 #define SYS_LINUX_truncate 76
@@ -153,6 +154,7 @@
 #define SYS_LINUX_membarrier 324
 #define SYS_LINUX_rseq 334
 #define SYS_LINUX_getrandom 318
+#define SYS_LINUX_copy_file_range 326
 
 #define LINUX_O_RDONLY 0
 #define LINUX_O_WRONLY 1
@@ -231,6 +233,7 @@
 #define LINUX_TIOCGWINSZ 0x5413
 #define LINUX_TIOCSWINSZ 0x5414
 #define LINUX_FIONREAD 0x541b
+#define LINUX_FIONBIO 0x5421
 
 #define LINUX_NCCS 32
 #define LINUX_VTIME 5
@@ -248,6 +251,8 @@
 #define LINUX_ESRCH 3
 #define LINUX_EINTR 4
 #define LINUX_EIO 5
+#define LINUX_E2BIG 7
+#define LINUX_ENOEXEC 8
 #define LINUX_EBADF 9
 #define LINUX_EAGAIN 11
 #define LINUX_ENOMEM 12
@@ -258,6 +263,7 @@
 #define LINUX_ENOTDIR 20
 #define LINUX_EISDIR 21
 #define LINUX_EINVAL 22
+#define LINUX_ENOLCK 37
 #define LINUX_ENFILE 23
 #define LINUX_EMFILE 24
 #define LINUX_ENOSPC 28
@@ -265,6 +271,10 @@
 #define LINUX_EPIPE 32
 #define LINUX_EAFNOSUPPORT 97
 #define LINUX_ERANGE 34
+#define LINUX_ENAMETOOLONG 36
+#define LINUX_UTIME_NOW 0x3FFFFFFEu
+#define LINUX_UTIME_OMIT 0x3FFFFFFDu
+#define SYS_LINUX_utimensat 280
 #define LINUX_ENOSYS 38
 #define LINUX_ENOTTY 25
 #define LINUX_ECHILD 10
@@ -397,6 +407,7 @@ struct LINUX_TIMEVAL {
 #define LINUX_ITIMER_REAL 0
 #define LINUX_ITIMER_VIRTUAL 1
 #define LINUX_ITIMER_PROF 2
+#define LINUX_TIMER_ABSTIME 1
 
 #define LINUX_RUSAGE_SELF 0
 #define LINUX_RUSAGE_CHILDREN -1

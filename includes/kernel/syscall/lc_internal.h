@@ -12,21 +12,21 @@
 #include "libc/user/syscall.h"
 
 #define LC_ARGS                                                              \
-    struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
+    struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, uint64_t d,      \
         uint64_t e, uint64_t f
 
 int32_t sys_sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old);
 int32_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int32_t sys_wait(int32_t *status);
 uint32_t sys_brk(uint32_t addr);
-uint64_t sys_sigreturn(struct X86_REGS *r);
+uint64_t sys_sigreturn(struct ARCH_REGS *r);
 
-static inline int user_ptr_ok(struct X86_REGS *r, uint64_t ptr, uint32_t len,
+static inline int user_ptr_ok(struct ARCH_REGS *r, uint64_t ptr, uint32_t len,
                               int wr) {
     return (r->cs & 3) != 3 || access_ok((const void *)(uintptr_t)ptr, len, wr);
 }
 
-static inline int copy_user_str(struct X86_REGS *r, char *dst, uint64_t ptr) {
+static inline int copy_user_str(struct ARCH_REGS *r, char *dst, uint64_t ptr) {
     return (r->cs & 3) != 3 ||
            copy_str_from_user(dst, (const char *)(uintptr_t)ptr,
                               MAX_PATH_LEN) == 0;
@@ -37,13 +37,14 @@ int compat_fd_is_tty(int32_t fd);
 int compat_fd_isdir(int32_t fd);
 int ep_slot(int fd);
 int evfd_slot(int fd);
-int fill_sockaddr_in(struct X86_REGS *r, uint64_t addr, uint64_t addrlen_ptr, uint32_t ip, uint16_t port);
+int fill_sockaddr_in(struct ARCH_REGS *r, uint64_t addr, uint64_t addrlen_ptr, uint32_t ip, uint16_t port);
 int io_fd_events(int fd, int want_read, int want_write);
 int io_is_file_fd(int fd);
 int io_wait(struct LINUX_POLLFD *fds, uint32_t n, int64_t timeout_ms);
 int lc_close_extra(int32_t fd);
 int lc_fdset_test(const uint8_t *set, int fd);
-int sockaddr_in_parts(struct X86_REGS *r, uint64_t addr, uint64_t addrlen, uint32_t *ip, uint16_t *port);
+int lc_at_path(struct ARCH_REGS *r, int32_t dirfd, uint64_t uptr, char *out);
+int sockaddr_in_parts(struct ARCH_REGS *r, uint64_t addr, uint64_t addrlen, uint32_t *ip, uint16_t *port);
 int tfd_expired(int i);
 int tfd_slot(int fd);
 int unix_alloc_slot(void);
@@ -57,13 +58,14 @@ int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count);
 int32_t compat_getitimer(uint32_t which, uint64_t cur_val);
 int32_t compat_getpgid(uint32_t pid);
 int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg);
-int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags);
+int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags,
+                      uint32_t mode);
 int32_t compat_read(int32_t fd, void *buf, uint32_t count);
 int32_t compat_readv(int32_t fd, struct LINUX_IOVEC *iov, int32_t iovcnt);
 int32_t compat_set_thread_area(uint32_t base);
 int32_t compat_setitimer(uint32_t which, uint64_t new_val, uint64_t old_val);
 int32_t compat_setpgid(uint32_t pid, uint32_t pgid);
-int32_t compat_stat_linux(const char *path, uint64_t ub);
+int32_t compat_stat_linux(const char *path, uint64_t ub, int follow);
 int32_t compat_statfs_fill(uint64_t buf);
 int32_t compat_sysinfo(void *buf);
 int32_t compat_tcsets(uint32_t cmd, uint64_t arg);
@@ -96,7 +98,7 @@ int64_t lc_epoll_create1(LC_ARGS);
 int64_t lc_epoll_ctl(LC_ARGS);
 int64_t lc_epoll_pwait(LC_ARGS);
 int64_t lc_epoll_wait(LC_ARGS);
-int64_t lc_epoll_wait_common(struct X86_REGS *r, uint64_t a, uint64_t b, uint64_t c, int64_t timeout_ms);
+int64_t lc_epoll_wait_common(struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c, int64_t timeout_ms);
 int64_t lc_eventfd(LC_ARGS);
 int64_t lc_eventfd2(LC_ARGS);
 int64_t lc_eventfd_read(int i, void *buf, uint32_t count);
@@ -109,6 +111,7 @@ int64_t lc_fchmodat(LC_ARGS);
 int64_t lc_fchown(LC_ARGS);
 int64_t lc_fchownat(LC_ARGS);
 int64_t lc_fcntl(LC_ARGS);
+int64_t lc_flock(LC_ARGS);
 int64_t lc_fork(LC_ARGS);
 int64_t lc_fstat(LC_ARGS);
 int64_t lc_fstatfs(LC_ARGS);
@@ -127,6 +130,8 @@ int64_t lc_getpgid(LC_ARGS);
 int64_t lc_getpid(LC_ARGS);
 int64_t lc_getppid(LC_ARGS);
 int64_t lc_getrandom(LC_ARGS);
+void flock_release_ino(uint32_t ino);
+int64_t lc_copy_file_range(LC_ARGS);
 int64_t lc_getresgid(LC_ARGS);
 int64_t lc_getresuid(LC_ARGS);
 int64_t lc_getrlimit(LC_ARGS);
@@ -150,13 +155,14 @@ int64_t lc_mmap(LC_ARGS);
 int64_t lc_mprotect(LC_ARGS);
 int64_t lc_munmap(LC_ARGS);
 int64_t lc_nanosleep(LC_ARGS);
+int64_t lc_clock_nanosleep(LC_ARGS);
 int64_t lc_newfstatat(LC_ARGS);
 int64_t lc_open(LC_ARGS);
 int64_t lc_openat(LC_ARGS);
 int64_t lc_pipe(LC_ARGS);
 int64_t lc_pipe2(LC_ARGS);
 int64_t lc_poll(LC_ARGS);
-int64_t lc_poll_common(struct X86_REGS *r, uint64_t ufds, int32_t nfds, int64_t timeout_ms);
+int64_t lc_poll_common(struct ARCH_REGS *r, uint64_t ufds, int32_t nfds, int64_t timeout_ms);
 int64_t lc_ppoll(LC_ARGS);
 int64_t lc_pread64(LC_ARGS);
 int64_t lc_prlimit64(LC_ARGS);
@@ -176,11 +182,12 @@ int64_t lc_rt_sigprocmask(LC_ARGS);
 int64_t lc_rt_sigreturn(LC_ARGS);
 int64_t lc_sched_yield(LC_ARGS);
 int64_t lc_select(LC_ARGS);
-int64_t lc_select_common(struct X86_REGS *r, int32_t nfds, uint64_t rd, uint64_t wr, uint64_t ex, int64_t timeout_ms);
+int64_t lc_select_common(struct ARCH_REGS *r, int32_t nfds, uint64_t rd, uint64_t wr, uint64_t ex, int64_t timeout_ms);
 int64_t lc_sendmsg(LC_ARGS);
 int64_t lc_sendto(LC_ARGS);
 int64_t lc_set_thread_area(LC_ARGS);
 int64_t lc_set_tid_address(LC_ARGS);
+int64_t lc_gettid(LC_ARGS);
 int64_t lc_setgid(LC_ARGS);
 int64_t lc_setgroups(LC_ARGS);
 int64_t lc_setitimer(LC_ARGS);
@@ -199,6 +206,7 @@ int64_t lc_sigsuspend(LC_ARGS);
 int64_t lc_socket(LC_ARGS);
 int64_t lc_socketpair(LC_ARGS);
 int64_t lc_stat(LC_ARGS);
+int64_t lc_lstat(LC_ARGS);
 int64_t lc_statfs(LC_ARGS);
 int64_t lc_symlink(LC_ARGS);
 int64_t lc_symlinkat(LC_ARGS);
@@ -210,13 +218,14 @@ int64_t lc_timerfd_read(int i, void *buf, uint32_t count);
 int64_t lc_timerfd_settime(LC_ARGS);
 int64_t lc_timerfd_tick(int i);
 int64_t lc_times(LC_ARGS);
-int64_t lc_timespec_to_ms(struct X86_REGS *r, uint64_t ptr, int64_t *out);
+int64_t lc_timespec_to_ms(struct ARCH_REGS *r, uint64_t ptr, int64_t *out);
 int64_t lc_tkill(LC_ARGS);
 int64_t lc_truncate(LC_ARGS);
 int64_t lc_umask(LC_ARGS);
 int64_t lc_uname(LC_ARGS);
 int64_t lc_unlink(LC_ARGS);
 int64_t lc_unlinkat(LC_ARGS);
+int64_t lc_utimensat(LC_ARGS);
 int64_t lc_wait4(LC_ARGS);
 int64_t lc_waitid(LC_ARGS);
 int64_t lc_write(LC_ARGS);

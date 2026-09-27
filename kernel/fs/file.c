@@ -11,10 +11,12 @@
 #include "lib/str/str.h"
 struct FILE file_table[MAX_FILE_OPEN];
 
-static volatile uint32_t file_slot_used;
+static volatile uint32_t file_slot_used[MAX_FILE_OPEN / 32];
 
 void file_table_init(void) {
-    file_slot_used = 0x7u;
+    for (uint32_t w = 0; w < MAX_FILE_OPEN / 32; w++)
+        file_slot_used[w] = 0;
+    file_slot_used[0] = 0x7u;
     for (uint32_t i = 0; i < 3; i++) {
         file_table[i].fd_inode = FILE_SLOT_RESERVED;
         file_table[i].ref_cnt = 1;
@@ -23,27 +25,34 @@ void file_table_init(void) {
 
 int file_table_alloc_slot(void) {
     for (;;) {
-        uint32_t b = cpu_atomic_load32(&file_slot_used);
-        uint32_t free_bits = ~b;
-#if MAX_FILE_OPEN < 32
-        free_bits &= (1u << MAX_FILE_OPEN) - 1u;
-#endif
-        if (free_bits == 0) {
+        int w = -1;
+        uint32_t b = 0;
+        for (uint32_t k = 0; k < MAX_FILE_OPEN / 32; k++) {
+            uint32_t cur = cpu_atomic_load32(&file_slot_used[k]);
+            if (~cur != 0) {
+                w = (int)k;
+                b = cur;
+                break;
+            }
+        }
+        if (w < 0) {
             return -1;
         }
+        uint32_t free_bits = ~b;
         uint32_t i = (uint32_t)__builtin_ctz(free_bits);
-        if (cpu_cmpxchg32(&file_slot_used, b, b | (1u << i)) != b) {
+        if (cpu_cmpxchg32(&file_slot_used[w], b, b | (1u << i)) != b) {
             continue;
         }
-        file_table[i].fd_pos = 0;
-        file_table[i].fd_flag = 0;
-        file_table[i].fd_nonblock = 0;
-        file_table[i].fd_inode = FILE_SLOT_RESERVED;
-        file_table[i].proc_id = 0;
-        file_table[i].proc_aux = 0;
-        file_table[i].ref_cnt = 0;
-        file_table[i].dev_priv = 0;
-        return (int)i;
+        int idx = w * 32 + (int)i;
+        file_table[idx].fd_pos = 0;
+        file_table[idx].fd_flag = 0;
+        file_table[idx].fd_nonblock = 0;
+        file_table[idx].fd_inode = FILE_SLOT_RESERVED;
+        file_table[idx].proc_id = 0;
+        file_table[idx].proc_aux = 0;
+        file_table[idx].ref_cnt = 0;
+        file_table[idx].dev_priv = 0;
+        return idx;
     }
 }
 
@@ -57,12 +66,14 @@ void file_table_free_slot(int idx) {
     file_table[idx].proc_id = 0;
     file_table[idx].proc_aux = 0;
     file_table[idx].ref_cnt = 0;
+    uint32_t w = (uint32_t)idx / 32;
+    uint32_t mask = 1u << (idx % 32);
     for (;;) {
-        uint32_t b = cpu_atomic_load32(&file_slot_used);
-        if (!(b & (1u << idx))) {
+        uint32_t b = cpu_atomic_load32(&file_slot_used[w]);
+        if (!(b & mask)) {
             break;
         }
-        if (cpu_cmpxchg32(&file_slot_used, b, b & ~(1u << idx)) == b) {
+        if (cpu_cmpxchg32(&file_slot_used[w], b, b & ~mask) == b) {
             break;
         }
     }
@@ -98,11 +109,27 @@ int fd_install(int32_t global_fd_idx) {
     return fd_install_from(global_fd_idx, 3);
 }
 
+struct TASK *fd_owner_task(void) {
+    int32_t owner_pid = current->fd_owner_pid;
+    if (owner_pid <= 0 || owner_pid == (int32_t)current->pid)
+        return current;
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        struct TASK *t = &task_table[i];
+        if (t->slot_used && t->status != TASK_DIED &&
+            (int32_t)t->pid == owner_pid)
+            return t;
+    }
+    return current;
+}
+
 int fd_install_from(int32_t global_fd_idx, uint32_t min_local) {
+    struct TASK *owner = fd_owner_task();
     uint32_t local_fd = min_local < 3 ? 3 : min_local;
     while (local_fd < MAX_FILES_OPEN_PER_PROC) {
-        if (current->fd_table[local_fd] == (uint32_t)-1) {
-            current->fd_table[local_fd] = (uint32_t)global_fd_idx;
+        if (owner->fd_table[local_fd] == (uint32_t)-1) {
+            owner->fd_table[local_fd] = (uint32_t)global_fd_idx;
+            owner->pipe_wr_mask &= ~(1ull << local_fd);
+            owner->fd_cloexec &= ~(1ull << local_fd);
             return (int)local_fd;
         }
         local_fd++;
@@ -114,7 +141,10 @@ int fd_release(uint32_t local_fd) {
     if (local_fd >= MAX_FILES_OPEN_PER_PROC) {
         return -1;
     }
-    current->fd_table[local_fd] = (uint32_t)-1;
+    struct TASK *owner = fd_owner_task();
+    owner->fd_table[local_fd] = (uint32_t)-1;
+    owner->pipe_wr_mask &= ~(1ull << local_fd);
+    owner->fd_cloexec &= ~(1ull << local_fd);
     return 0;
 }
 
@@ -122,7 +152,7 @@ uint32_t fd_local2global(uint32_t local_fd) {
     if (local_fd >= MAX_FILES_OPEN_PER_PROC) {
         return (uint32_t)-1;
     }
-    return current->fd_table[local_fd];
+    return fd_owner_task()->fd_table[local_fd];
 }
 
 static uint32_t chardev_read(struct FILE *file, void *buf, uint32_t count) {

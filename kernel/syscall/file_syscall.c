@@ -22,11 +22,12 @@ struct LINUX_DIRENT {
 #define F_SETFD 2
 #define F_GETFL 3
 #define F_SETFL 4
+#define F_DUPFD_CLOEXEC 1030
 static struct FILE *fd_lookup(int32_t fd) {
     if (fd < 0 || fd >= (int32_t)MAX_FILES_OPEN_PER_PROC) {
         return NULL;
     }
-    uint32_t global_fd = current->fd_table[fd];
+    uint32_t global_fd = fd_owner_task()->fd_table[fd];
     if (global_fd == (uint32_t)-1 || global_fd >= MAX_FILE_OPEN) {
         return NULL;
     }
@@ -99,14 +100,11 @@ int32_t sys_dup2(int32_t oldfd, int32_t newfd) {
     uint32_t global_fd = (uint32_t)(pf - file_table);
 
     file_table_ref(global_fd);
-    if (current->fd_table[newfd] != (uint32_t)-1) {
+    struct TASK *dup_owner = fd_owner_task();
+    if (dup_owner->fd_table[newfd] != (uint32_t)-1) {
         close_file(newfd);
     }
-    if ((current->pipe_wr_mask >> (uint32_t)oldfd) & 1u)
-        current->pipe_wr_mask |= 1u << (uint32_t)newfd;
-    else
-        current->pipe_wr_mask &= ~(1u << (uint32_t)newfd);
-    current->fd_table[newfd] = global_fd;
+    dup_owner->fd_table[newfd] = global_fd;
     return newfd;
 }
 
@@ -117,26 +115,34 @@ int32_t sys_fcntl(int32_t fd, int32_t cmd, uint32_t arg) {
     if (pf == NULL) {
         return -1;
     }
+    struct TASK *fd_task = fd_owner_task();
     switch (cmd) {
     case F_DUPFD:
         return sys_dup_from(fd, (uint32_t)arg);
     case F_GETFD:
-        return (int32_t)((current->fd_cloexec >> fd) & 1);
+        return (int32_t)((fd_task->fd_cloexec >> fd) & 1);
     case F_SETFD:
         if (arg & 1)
-            current->fd_cloexec |= (1ull << fd);
+            fd_task->fd_cloexec |= (1ull << fd);
         else
-            current->fd_cloexec &= ~(1ull << fd);
+            fd_task->fd_cloexec &= ~(1ull << fd);
         return 0;
     case F_GETFL:
-        if (pf->fd_flag == PIPE_FLAG)
+        if (is_pipe((uint32_t)fd))
             return pf->fd_nonblock ? O_NONBLOCK : 0;
         return (int32_t)(pf->fd_flag | (pf->fd_nonblock ? O_NONBLOCK : 0));
     case F_SETFL:
         pf->fd_nonblock = (arg & O_NONBLOCK) ? 1 : 0;
-        if (pf->fd_flag != PIPE_FLAG)
+        if (!is_pipe((uint32_t)fd))
             pf->fd_flag = (pf->fd_flag & 3u) | (arg & ~3u);
         return 0;
+    case F_DUPFD_CLOEXEC: {
+        int32_t nfd = sys_dup_from(fd, arg);
+        if (nfd < 0)
+            return nfd;
+        fd_task->fd_cloexec |= (1ull << nfd);
+        return nfd;
+    }
     default:
         return -1;
     }
@@ -173,6 +179,9 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
 int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     if (path == NULL || buf == NULL || bufsiz == 0) {
         return -1;
+    }
+    if (proc_match(path)) {
+        return proc_readlink(path, buf, bufsiz);
     }
     uint32_t ino = 0;
     int ft = 0;

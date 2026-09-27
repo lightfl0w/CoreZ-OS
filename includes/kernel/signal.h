@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 struct TASK;
-struct X86_REGS;
+struct ARCH_REGS;
 
 #define NSIG 32
 #define EINTR 4
@@ -77,12 +77,13 @@ void signal_reset_user(struct TASK *t);
 int sys_sigaction(int sig, const struct SYS_SIGACTION *act, struct SYS_SIGACTION *old);
 int sys_kill(int pid, int sig);
 int sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-uint64_t sys_sigreturn(struct X86_REGS *r);
+uint64_t sys_sigreturn(struct ARCH_REGS *r);
 
-void check_pending_signals(struct X86_REGS *r);
+void check_pending_signals(struct ARCH_REGS *r);
 void itimer_tick(void);
 
 void signal_terminate(struct TASK *t, int sig);
+void signal_notify_child_exit(struct TASK *parent);
 
 int exception_to_signal(int int_no);
 

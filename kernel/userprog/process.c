@@ -234,7 +234,8 @@ static void space_release_ex(uint32_t pml4_phys, struct TASK *owner,
                             pt_remaining++;
                             continue;
                         }
-                        page_free_or_decref((uint32_t)PTE_PHYS(pt[pte_idx]));
+                        page_free_or_decref_va(
+                            (uint32_t)PTE_PHYS(pt[pte_idx]), (uint32_t)vaddr);
                         pt[pte_idx] = 0;
                     }
                     if (pt_remaining == 0) {
@@ -293,7 +294,8 @@ void space_detach_others(struct TASK *owner) {
         list_unlink(&t->wait_tag);
         for (uint32_t fd_idx = 3; fd_idx < MAX_FILES_OPEN_PER_PROC; fd_idx++) {
             uint32_t g = t->fd_table[fd_idx];
-            if (g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
+            if (t->fd_owner_pid == (int32_t)t->pid &&
+                g != (uint32_t)-1 && g < MAX_FILE_OPEN) {
                 if (file_table[g].ref_cnt > 0) {
                     file_table_unref(g);
                 }

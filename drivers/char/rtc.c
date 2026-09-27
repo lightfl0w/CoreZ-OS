@@ -1,6 +1,6 @@
 #include "drivers/char/rtc.h"
 
-#include "arch/x86/interrupt/interrupt.h"
+#include "arch/interrupt/interrupt.h"
 #include "kernel/asm_func.h"
 #include "kernel/init/pit/pit.h"
 
