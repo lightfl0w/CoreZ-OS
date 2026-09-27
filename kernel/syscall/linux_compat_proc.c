@@ -41,21 +41,21 @@
 
 #include "kernel/syscall/lc_internal.h"
 int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
-    if (pid >= MAX_TASKS || pgid >= MAX_TASKS)
+    int32_t spid = (int32_t)pid;
+    int32_t spgid = (int32_t)pgid;
+    if (spid < 0 || spgid < 0)
         return -LINUX_EINVAL;
-    struct TASK *t = pid ? pid2thread((int32_t)pid) : current;
+    struct TASK *t = spid ? pid2thread(spid) : current;
     if (t == NULL || t->status == TASK_DIED)
         return -LINUX_ESRCH;
-    uint32_t want = pgid ? pgid : (pid ? pid : (uint32_t)t->pid);
-    if (want >= MAX_TASKS)
-        return -LINUX_EINVAL;
-    t->pgid = want;
+    t->pgid = spgid ? (uint32_t)spgid : t->pid;
     return 0;
 }
 int32_t compat_getpgid(uint32_t pid) {
-    if (pid >= MAX_TASKS)
+    int32_t spid = (int32_t)pid;
+    if (spid < 0)
         return -LINUX_EINVAL;
-    struct TASK *t = pid ? pid2thread((int32_t)pid) : current;
+    struct TASK *t = spid ? pid2thread(spid) : current;
     if (t == NULL)
         return -LINUX_ESRCH;
     return (int32_t)(t->pgid ? t->pgid : t->pid);

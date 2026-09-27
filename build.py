@@ -77,6 +77,10 @@ PCRE2_SRC    = ROOT / "third_modules" / "pcre2"
 PCRE2_PREFIX = BUILD_DIR / "pcre2"
 PCRE2_INC    = PCRE2_PREFIX / "include"
 PCRE2_LIB    = PCRE2_PREFIX / "lib"
+FISH_SRC       = ROOT / "third_modules" / "fish"
+FISH_CARGO_TOML = FISH_SRC / "Cargo.toml"
+FISH_TARGET    = BUILD_DIR / "fish-target"
+FISH_BIN       = FISH_TARGET / "x86_64-unknown-linux-musl" / "release" / "fish"
 MUSL_DEMO_CFLAGS = MUSL64_BASE + ["-fstack-protector-strong", "-I", str(MUSL_INC)]
 LC_CFLAGS = MUSL64_BASE + ["-fno-stack-protector", "-I", str(ROOT / "includes")]
 class Ansi:
@@ -1010,16 +1014,26 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                     optional=True, group="musl",
                     description="rustc " + stem))
 
-            fish_bin = Path("/root/fish-src/target/"
-                            "x86_64-unknown-linux-musl/release/fish")
-            if fish_bin.exists():
+            cargo = Path("cargo")
+            if FISH_CARGO_TOML.exists() and cargo.exists():
+                fish_script = (
+                    "set -e; "
+                    f"cd {shlex.quote(str(FISH_SRC))}; "
+                    f"{shlex.quote(str(cargo))} build --release "
+                    "--target x86_64-unknown-linux-musl --no-default-features; "
+                    f"cp {shlex.quote(str(FISH_BIN))} "
+                    f"{shlex.quote(str(BUILD_DIR / 'fish.elf'))}"
+                )
                 tasks.append(Task(
-                    name="musl_fish_stage",
-                    cmd=[sh, "-c", "cp " + shlex.quote(str(fish_bin)) + " " +
-                         shlex.quote(str(BUILD_DIR / "fish.elf"))],
+                    name="musl_fish",
+                    cmd=[sh, "-c", fish_script],
                     out=BUILD_DIR / "fish.elf",
+                    deps=[FISH_CARGO_TOML],
+                    env={"CARGO_HOME": "/opt/cargo", "RUSTUP_HOME": "/opt/rustup",
+                         "CARGO_TARGET_DIR": str(FISH_TARGET),
+                         "CC_x86_64_unknown_linux_musl": str(_musl_clang)},
                     optional=True, group="musl",
-                    description="stage fish.elf"))
+                    description="cargo build fish.elf"))
 
         if (PCRE2_SRC / "configure").exists():
             pcre2_script = (
