@@ -623,6 +623,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("tss.o",        KERNEL_DIR / "init" / "tss" / "tss.c"),
         ("process.o",    KERNEL_DIR / "userprog" / "process.c"),
         ("exec.o",       KERNEL_DIR / "userprog" / "exec.c"),
+        ("pe.o",         KERNEL_DIR / "userprog" / "pe.c"),
         ("pipe.o",       KERNEL_DIR / "shell" / "pipe.c"),
         ("ksyscall.o",   KERNEL_DIR / "syscall" / "syscall.c"),
         ("signal.o",     KERNEL_DIR / "syscall" / "signal.c"),
@@ -633,6 +634,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("linux_compat_io.o", KERNEL_DIR / "syscall" / "linux_compat_io.c"),
         ("linux_compat_fs.o", KERNEL_DIR / "syscall" / "linux_compat_fs.c"),
         ("linux_compat_proc.o", KERNEL_DIR / "syscall" / "linux_compat_proc.c"),
+        ("win32.o",      KERNEL_DIR / "syscall" / "win32.c"),
         ("usyscall.o",   ROOT / "libc" / "user" / "syscall.c"),
         ("ustdio.o",     ROOT / "libc" / "user" / "stdio.c"),
         ("wait_exit.o",  KERNEL_DIR / "userprog" / "wait_exit.c"),
@@ -795,6 +797,23 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     tasks.append(gui_elf)
     user_elves.append(gui_elf)
 
+    mingw = shutil.which("x86_64-w64-mingw32-gcc")
+    if mingw:
+        win_src = APPS_DIR / "win_hello.c"
+        win_exe = BUILD_DIR / "hello.exe"
+        win_task = Task(
+            name="hello.exe",
+            cmd=[mingw, str(win_src), "-nostdlib", "-nostartfiles",
+                 "-e", "entry", "-Os",
+                 "-Wl,--image-base,0x10000000",
+                 "-o", str(win_exe), "-lkernel32"],
+            out=win_exe, deps=[win_src],
+            optional=True, group="link",
+            description="link hello.exe (mingw PE32+ win32 hello)",
+        )
+        tasks.append(win_task)
+        user_elves.append(win_task)
+
     zig = shutil.which("zig")
     cxx = shutil.which("clang++")
     if zig or cxx:
@@ -889,9 +908,9 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
-        "gdt.o", "tss.o", "process.o", "exec.o",
+        "gdt.o", "tss.o", "process.o", "exec.o", "pe.o",
         "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
-        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "signal.o", "file_syscall.o",
+        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "win32.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
         "lc_clone.o",
         "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",

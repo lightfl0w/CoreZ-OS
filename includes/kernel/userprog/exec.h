@@ -17,6 +17,7 @@ struct EXEC_IMAGE {
     int32_t app_entry;
     int is64;
     int is_linux;
+    int is_pe;
     int has_interp;
     uint32_t phdr_vaddr;
     uint32_t phentsize;

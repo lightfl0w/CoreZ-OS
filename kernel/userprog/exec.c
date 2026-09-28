@@ -14,6 +14,7 @@
 #include "kernel/sched/thread.h"
 #include "kernel/syscall/linux_abi.h"
 #include "kernel/userprog/elf.h"
+#include "kernel/userprog/pe.h"
 #include "kernel/userprog/process.h"
 #include "kernel/fs/file.h"
 static const char **exec_env_defaults(void) {
@@ -688,6 +689,14 @@ static int32_t load(const char *pathname, struct EXEC_IMAGE *img) {
         current->errno = LINUX_ENOEXEC;
         goto fail;
     }
+    if (ident[0] == 'M' && ident[1] == 'Z') {
+        if (pe_load(fd, img) != 0) {
+            current->errno = LINUX_ENOEXEC;
+            goto fail;
+        }
+        close_file(fd);
+        return img->entry;
+    }
     if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' ||
         ident[3] != 'F' || (ident[4] != 1 && ident[4] != 2)) {
         current->errno = LINUX_ENOEXEC;
@@ -1022,6 +1031,8 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
 #undef PVAL
 #undef PSTACK
     }
+    if (img.is_pe && (ustack_ptr & 0xfu) == 0)
+        ustack_ptr -= 8;
     goto exec_done;
 exec_fail:
     if (strbuf != NULL) {

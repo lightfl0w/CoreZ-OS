@@ -32,7 +32,9 @@ typedef 仅允许两种：函数指针类型（小写下划线，如 `thread_fun
 | `WL_` / `GFX_` / `COMP_` / `GUI_` / `VGPU_` | kernel/gui | `WL_SURFACE`、`GFX_RGB`、`COMP_BAR_H` |
 | `SYS_` | kernel/syscall 原生 ABI | `SYS_BRK` |
 | `EXEC_` | kernel/userprog 程序加载 | `EXEC_IMAGE` |
+| `PE_` | kernel/userprog PE/COFF 镜像加载 | `PE_SECTION` |
 | `LINUX_` | musl/Linux ABI 兼容层，只用于 ABI 镜像类型 | `LINUX_STAT` |
+| `WIN_` | Win32 ABI 兼容层 | `WIN_FMT` |
 | `X86_` / `IDT_` / `GDT_` / `MB2_` / `BOOT_` / `SMP_` | arch、引导与 SMP 启动 | `IDT_ENTRY` |
 | `TTY_` / `KB_` / `MOUSE_` | drivers/char | `TTY_ICANON` |
 | `RB_` / `LIST_` / `STR_` / `RAND_` | lib | `RB_NODE` |

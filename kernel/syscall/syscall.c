@@ -23,6 +23,7 @@
 #include "kernel/syscall/futex.h"
 #include "kernel/syscall/linux_compat.h"
 #include "kernel/syscall/mmap.h"
+#include "kernel/syscall/win32.h"
 #include "kernel/userprog/clone.h"
 #include "kernel/userprog/exec.h"
 #include "kernel/userprog/fork.h"
@@ -1016,6 +1017,12 @@ uint64_t syscall_handler(struct ARCH_REGS *r) {
     }
     if (r->int_no == 0x81 && sc_trace_interest(nr)) {
         sc_trace_emit(r, nr);
+    }
+    if (nr >= WIN32_SYSCALL_BASE) {
+        ret = (uint64_t)win32_handler(r);
+        r->rax = ret;
+        check_pending_signals(r);
+        return ret;
     }
     if (r->int_no == 0x81 || current->compat || nr >= COMPAT_SYSCALL_BASE) {
         if (r->int_no == 0x80 && nr < COMPAT_SYSCALL_BASE) {
