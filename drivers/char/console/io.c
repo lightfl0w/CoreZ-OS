@@ -4,8 +4,10 @@
 
 #include "kernel/asm_func.h"
 #include "kernel/sched/sync.h"
+#include "lib/ttf/ttf.h"
 
-extern const unsigned char _binary_font8x16_bin_start[];
+extern const unsigned char _binary_font_kernel_ttf_start[];
+extern const unsigned char _binary_font_kernel_ttf_end[];
 
 static uint8_t *vram = (uint8_t *)0;
 static int scrnx = 0;
@@ -105,6 +107,10 @@ void io_init(uint8_t *vram_base, int width, int height, uint32_t bytes,
     cursor_y = 0;
     text_color = ansi16[7];
     vt_reset_attrs();
+    if (!ttf_ready())
+        ttf_console_init(_binary_font_kernel_ttf_start,
+                         (uint32_t)(_binary_font_kernel_ttf_end -
+                                    _binary_font_kernel_ttf_start));
 }
 
 void set_text_color(int color) {
@@ -384,26 +390,70 @@ static inline void store_px(uint8_t *p, uint32_t color) {
     }
 }
 
+static uint32_t load_px(const uint8_t *p) {
+    if (bpp_bytes == 4)
+        return *(const uint32_t *)p;
+    if (bpp_bytes == 2)
+        return *(const uint16_t *)p;
+    if (bpp_bytes == 3)
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+    return *p;
+}
+
 void show_char(uint8_t *vram_ptr, int p, int x, int y, int sw, int sh, char c,
                uint32_t color, int bg) {
+    const uint8_t *cov;
+    int fr;
+    int fg;
+    int fb;
+    int br = 0;
+    int bgc = 0;
+    int bb = 0;
     if (!vram_ptr)
         return;
-    const uint8_t *font = _binary_font8x16_bin_start + ((uint8_t)c) * 16;
-    uint32_t bgc = (bg < 0) ? 0 : (uint32_t)bg;
+    cov = ttf_mask((uint8_t)c);
+    fr = (int)((color >> 16) & 0xFFu);
+    fg = (int)((color >> 8) & 0xFFu);
+    fb = (int)(color & 0xFFu);
+    if (bg >= 0) {
+        br = (bg >> 16) & 0xFF;
+        bgc = (bg >> 8) & 0xFF;
+        bb = bg & 0xFF;
+    }
 
-    for (int row = 0; row < 16; row++) {
-        uint8_t bits = font[row];
-        for (int col = 0; col < 8; col++) {
+    for (int row = 0; row < TTF_BOX_H; row++) {
+        int py = y + row;
+        if (py < 0 || py >= sh)
+            continue;
+        for (int col = 0; col < TTF_BOX_W; col++) {
             int px = x + col;
-            int py = y + row;
-            if (px < 0 || px >= sw || py < 0 || py >= sh)
+            int a = cov[row * TTF_BOX_W + col];
+            uint8_t *dst;
+            if (px < 0 || px >= sw)
                 continue;
-            uint8_t *dst = vram_ptr + (size_t)py * (size_t)p +
-                           (size_t)px * (size_t)bpp_bytes;
-            if (bits & (0x80 >> col))
+            dst = vram_ptr + (size_t)py * (size_t)p +
+                  (size_t)px * (size_t)bpp_bytes;
+            if (bg >= 0) {
+                int r = br + (((fr - br) * a) >> 8);
+                int g = bgc + (((fg - bgc) * a) >> 8);
+                int b = bb + (((fb - bb) * a) >> 8);
+                store_px(dst, (uint32_t)((r << 16) | (g << 8) | b));
+            } else if (a >= 255) {
                 store_px(dst, color);
-            else if (bg >= 0)
-                store_px(dst, bgc);
+            } else if (a > 0) {
+                if (bpp_bytes == 4) {
+                    uint32_t o = load_px(dst);
+                    int r = (int)((o >> 16) & 0xFFu);
+                    int g = (int)((o >> 8) & 0xFFu);
+                    int b = (int)(o & 0xFFu);
+                    r += ((fr - r) * a) >> 8;
+                    g += ((fg - g) * a) >> 8;
+                    b += ((fb - b) * a) >> 8;
+                    store_px(dst, (uint32_t)((r << 16) | (g << 8) | b));
+                } else if (a >= 128) {
+                    store_px(dst, color);
+                }
+            }
         }
     }
 }

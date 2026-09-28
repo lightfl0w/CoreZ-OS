@@ -595,6 +595,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("rand.o",       ROOT / "lib" / "rand" / "rand.c"),
         ("rbtree.o",     ROOT / "lib" / "rbtree" / "rbtree.c"),
         ("png.o",        ROOT / "lib" / "png" / "png.c"),
+        ("ttf.o",        ROOT / "lib" / "ttf" / "ttf.c"),
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
@@ -860,16 +861,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         cwd=BUILD_DIR, out=BUILD_DIR / "font_kernel.o", deps=[],
         description="embed font_kernel.ttf", group="objcopy",
     ))
-    font8x16_bin = ROOT / "lib" / "assets" / "font8x16.bin"
-    tasks.append(Task(
-        name="console_font_kernel.o",
-        cmd=[tools.objcopy, "-I", "binary", "-O", "elf64-x86-64",
-             "-B", "i386:x86-64", "--set-section-alignment", ".data=64",
-             "font8x16.bin", str(BUILD_DIR / "console_font_kernel.o")],
-        cwd=font8x16_bin.parent, out=BUILD_DIR / "console_font_kernel.o",
-        deps=[font8x16_bin],
-        description="embed font8x16.bin", group="objcopy",
-    ))
     asset_specs = (("wallpaper.png", 1024, 768, 0),
                    ("pic1.png", 768, 512, 1),
                    ("pic2.png", 640, 480, 2))
@@ -893,7 +884,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     kernel_objs_names = [
         "mb2_entry.o", "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
@@ -905,7 +896,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "lc_clone.o",
         "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",
         "udi_virtio.o", "udi_vmware.o", "font.o",
-        "theme.o", "font_kernel.o", "console_font_kernel.o", "wallpaper_kernel.o", "shm.o", "guiserver.o",
+        "theme.o", "font_kernel.o", "wallpaper_kernel.o", "shm.o", "guiserver.o",
         "wm.o", "wm_anim.o", "wm_bar.o", "guiclients.o", "guiclients_term.o", "guiclients_monitor.o",
         "flanterm.o", "flanterm_fb.o",
         "guiclients_png.o", "guiclients_files.o", "guiclients_edit.o", "gui.o", "x11.o", "x11_render.o", "x11_window.o", "x11_server.o",
