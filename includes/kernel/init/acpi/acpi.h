@@ -13,7 +13,7 @@ struct ACPI_RSDP {
     uint64_t xsdt_address;
     uint8_t extended_checksum;
     uint8_t reserved[3];
-};
+} __attribute__((packed));
 
 struct ACPI_SDT_HEADER {
     char signature[4];
@@ -25,17 +25,17 @@ struct ACPI_SDT_HEADER {
     uint32_t oem_revision;
     uint32_t creator_id;
     uint32_t creator_revision;
-};
+} __attribute__((packed));
 
 struct ACPI_RSDT {
     struct ACPI_SDT_HEADER header;
     uint32_t entry[1];
-};
+} __attribute__((packed));
 
 struct ACPI_XSDT {
     struct ACPI_SDT_HEADER header;
     uint64_t entry[1];
-};
+} __attribute__((packed));
 
 typedef struct {
     uint8_t address_space;
@@ -43,7 +43,7 @@ typedef struct {
     uint8_t bit_offset;
     uint8_t access_size;
     uint64_t address;
-} GENERIC_ADDRESS_STRUCT;
+} __attribute__((packed)) GENERIC_ADDRESS_STRUCT;
 
 struct ACPI_FADT {
     struct ACPI_SDT_HEADER header;
@@ -97,13 +97,13 @@ struct ACPI_FADT {
     GENERIC_ADDRESS_STRUCT x_pm_timer_block;
     GENERIC_ADDRESS_STRUCT x_gpe0_block;
     GENERIC_ADDRESS_STRUCT x_gpe1_block;
-};
+} __attribute__((packed));
 
 struct ACPI_MADT {
     struct ACPI_SDT_HEADER header;
     uint32_t lapic_addr;
     uint32_t flags;
-};
+} __attribute__((packed));
 
 struct ACPI_MADT_LAPIC {
     uint8_t type;
@@ -111,7 +111,7 @@ struct ACPI_MADT_LAPIC {
     uint8_t acpi_processor_id;
     uint8_t apic_id;
     uint32_t flags;
-};
+} __attribute__((packed));
 
 struct ACPI_MADT_IOAPIC {
     uint8_t type;
@@ -120,7 +120,7 @@ struct ACPI_MADT_IOAPIC {
     uint8_t reserved;
     uint32_t ioapic_addr;
     uint32_t gsi_base;
-};
+} __attribute__((packed));
 
 struct ACPI_MADT_ISO {
     uint8_t type;
@@ -129,7 +129,7 @@ struct ACPI_MADT_ISO {
     uint8_t source_irq;
     uint32_t gsi;
     uint16_t flags;
-};
+} __attribute__((packed));
 
 #define ACPI_MADT_TYPE_LAPIC 0u
 #define ACPI_MADT_TYPE_IOAPIC 1u

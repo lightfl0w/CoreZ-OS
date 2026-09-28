@@ -5,6 +5,8 @@
 #include "kernel/asm_func.h"
 #include "kernel/sched/sync.h"
 
+extern const unsigned char _binary_font8x16_bin_start[];
+
 static uint8_t *vram = (uint8_t *)0;
 static int scrnx = 0;
 static int scrny = 0;
@@ -386,7 +388,7 @@ void show_char(uint8_t *vram_ptr, int p, int x, int y, int sw, int sh, char c,
                uint32_t color, int bg) {
     if (!vram_ptr)
         return;
-    const uint8_t *font = FONT_BASE + ((uint8_t)c) * 16;
+    const uint8_t *font = _binary_font8x16_bin_start + ((uint8_t)c) * 16;
     uint32_t bgc = (bg < 0) ? 0 : (uint32_t)bg;
 
     for (int row = 0; row < 16; row++) {

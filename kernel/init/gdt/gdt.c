@@ -54,4 +54,5 @@ void gdt_init(void) {
     gdtr0.limit = (uint16_t)(sizeof(gdt) - 1);
     gdtr0.base = (uint64_t)gdt;
     asm_lgdt((uint64_t)&gdtr0);
+    asm_reload_segments();
 }

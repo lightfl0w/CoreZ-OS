@@ -379,8 +379,8 @@ void ide_init(void) {
 
     uint8_t hd_cnt = *((uint8_t *)(0x475));
     if (hd_cnt == 0) {
-        kprintf("  no hard disk detected (0x475=0), skip ide_init\n");
-        return;
+        kprintf("  BDA disk count is 0 (UEFI boot?), probe all positions\n");
+        hd_cnt = 4;
     }
 
     channel_cnt = (uint8_t)DIV_ROUND_UP(hd_cnt, 2);

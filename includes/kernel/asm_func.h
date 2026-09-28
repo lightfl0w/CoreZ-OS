@@ -36,6 +36,7 @@ extern uint64_t asm_save_eflags(void);
 extern void asm_restore_eflags(uint64_t eflags);
 
 extern void asm_lgdt(uint64_t gdtr_ptr);
+extern void asm_reload_segments(void);
 extern void asm_ltr(uint16_t sel);
 extern uint16_t asm_str(void);
 

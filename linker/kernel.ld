@@ -11,6 +11,11 @@ SECTIONS
 
     _kernel_virt_start = .;
 
+    .mb2 ALIGN(16) : AT(ADDR(.mb2) - _kernel_virt_base)
+    {
+        KEEP(*(.mb2))
+    }
+
     .text ALIGN(16) : AT(ADDR(.text) - _kernel_virt_base)
     {
         *(.text)

@@ -9,3 +9,13 @@ config MUSL_LIB
 config FISH
 	bool "Fish shell"
 	default y
+
+menu "Boot"
+
+config UEFI
+	bool "Self-made UEFI bootloader"
+	default y
+	help
+	  构建自制 UEFI 引导器与 ESP 镜像
+
+endmenu

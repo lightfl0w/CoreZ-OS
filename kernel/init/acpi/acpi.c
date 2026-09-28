@@ -1,5 +1,6 @@
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/asm_func.h"
+#include "kernel/init/mb2.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "drivers/char/console/io.h"
@@ -75,8 +76,36 @@ static uint8_t acpi_checksum(uint8_t *addr, uint32_t len) {
     return (sum == 0);
 }
 
+static struct ACPI_RSDP *acpi_mb2_rsdp(void) {
+    const struct MB2_INFO *mb2 = mb2_get();
+
+    if (mb2 == NULL || !mb2->valid)
+        return NULL;
+    if (mb2->has_rsdp_new) {
+        struct ACPI_RSDP *r = (struct ACPI_RSDP *)(uintptr_t)mb2->rsdp_new;
+        uint32_t len = (r->revision == 0) ? 20u : r->len;
+        if (len >= 20u && len <= (uint32_t)sizeof(mb2->rsdp_new) &&
+            memcmp(r->signature, "RSD PTR ", 8) == 0 &&
+            acpi_checksum((uint8_t *)r, len))
+            return r;
+    }
+    if (mb2->has_rsdp_old) {
+        struct ACPI_RSDP *r = (struct ACPI_RSDP *)(uintptr_t)mb2->rsdp_old;
+        if (memcmp(r->signature, "RSD PTR ", 8) == 0 &&
+            acpi_checksum((uint8_t *)r, 20))
+            return r;
+    }
+    return NULL;
+}
+
 static struct ACPI_RSDP *acpi_find_rsdp(void) {
-    void *ebda = acpi_map(0x000E0000, 0x20000);
+    struct ACPI_RSDP *mb2_rsdp = acpi_mb2_rsdp();
+    void *ebda;
+
+    if (mb2_rsdp != NULL)
+        return mb2_rsdp;
+
+    ebda = acpi_map(0x000E0000, 0x20000);
     if (!ebda)
         return NULL;
 
