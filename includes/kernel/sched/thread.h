@@ -97,6 +97,7 @@ struct TASK {
     char exe_path[256];
     uint32_t exe_bias;
     uint32_t win_base;
+    uint32_t win_rt;
     uint32_t sig_fault_addr;
     uint32_t stack_magic;
     uint64_t fd_cloexec;

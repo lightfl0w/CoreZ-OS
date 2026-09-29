@@ -799,17 +799,14 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
 
     mingw = shutil.which("x86_64-w64-mingw32-gcc")
     if mingw:
-        win_src = APPS_DIR / "win_hello.c"
-        win_exe = BUILD_DIR / "hello.exe"
+        win_src = APPS_DIR / "win_main.c"
+        win_exe = BUILD_DIR / "win_main.exe"
         win_task = Task(
-            name="hello.exe",
-            cmd=[mingw, str(win_src), "-nostdlib", "-nostartfiles",
-                 "-e", "entry", "-Os",
-                 "-Wl,--image-base,0x10000000",
-                 "-o", str(win_exe), "-lkernel32"],
+            name="win_main.exe",
+            cmd=[mingw, str(win_src), "-o", str(win_exe)],
             out=win_exe, deps=[win_src],
             optional=True, group="link",
-            description="link hello.exe (mingw PE32+ win32 hello)",
+            description="link win_main.exe (mingw PE32+ win32)",
         )
         tasks.append(win_task)
         user_elves.append(win_task)

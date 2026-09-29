@@ -4,7 +4,9 @@
 #include "drivers/char/tty.h"
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/access.h"
+#include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
+#include "kernel/userprog/process.h"
 #include "kernel/userprog/wait_exit.h"
 #include "lib/str/str.h"
 
@@ -17,12 +19,15 @@ struct WIN_OUT {
 struct WIN_VA {
     struct ARCH_REGS *regs;
     int next;
+    int ms;
+    uint64_t base;
 };
 
 typedef int64_t (*win_fn)(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
                           uint64_t a2, uint64_t a3);
 
 struct WIN_API {
+    const char *mod;
     const char *name;
     win_fn fn;
 };
@@ -120,6 +125,13 @@ static void win_out_field(struct WIN_OUT *o, const char *s, uint32_t n,
 static int32_t win_va_next(struct WIN_VA *va, uint64_t *out) {
     int i = va->next++;
     uint32_t addr;
+    if (va->ms) {
+        addr = (uint32_t)va->base + (uint32_t)i * 8u;
+        if (!access_ok((const void *)(uintptr_t)addr, 8, 0))
+            return -1;
+        *out = *(const uint64_t *)(uintptr_t)addr;
+        return 0;
+    }
     if (i == 0) {
         *out = va->regs->rdx;
         return 0;
@@ -140,11 +152,10 @@ static int32_t win_va_next(struct WIN_VA *va, uint64_t *out) {
     return 0;
 }
 
-static uint32_t win_vprintf(struct ARCH_REGS *r, const char *fmt) {
+static uint32_t win_vprintf_va(const char *fmt, struct WIN_VA *va) {
     char kfmt[WIN_FMT_MAX];
     char tmp[32];
     struct WIN_OUT out;
-    struct WIN_VA va;
     uint32_t flen;
     uint32_t i = 0;
 
@@ -155,8 +166,6 @@ static uint32_t win_vprintf(struct ARCH_REGS *r, const char *fmt) {
     kfmt[flen] = 0;
     out.len = 0;
     out.total = 0;
-    va.regs = r;
-    va.next = 0;
 
     while (kfmt[i] != 0) {
         char conv;
@@ -210,7 +219,7 @@ static uint32_t win_vprintf(struct ARCH_REGS *r, const char *fmt) {
         if (conv == 0)
             break;
         i++;
-        if (win_va_next(&va, &v) != 0)
+        if (win_va_next(va, &v) != 0)
             break;
         switch (conv) {
         case 's': {
@@ -263,6 +272,46 @@ static uint32_t win_vprintf(struct ARCH_REGS *r, const char *fmt) {
     }
     win_out_flush(&out);
     return out.total;
+}
+
+static uint32_t win_vprintf(struct ARCH_REGS *r, const char *fmt) {
+    struct WIN_VA va;
+    va.regs = r;
+    va.next = 0;
+    va.ms = 0;
+    va.base = 0;
+    return win_vprintf_va(fmt, &va);
+}
+
+static uint64_t win_rt_ptr(uint32_t off) {
+    if (current->win_rt == 0)
+        return 0;
+    return (uint64_t)(current->win_rt + off);
+}
+
+static uint64_t win_heap_alloc(uint32_t need, int zero) {
+    struct TASK *cur = current;
+    uint32_t base;
+    uint32_t p;
+    uint32_t end;
+    if (need == 0)
+        need = 1;
+    base = (cur->user_brk != 0)
+               ? cur->user_brk
+               : ((cur->brk_base != 0) ? cur->brk_base : USER_HEAP_BASE);
+    p = (base + 0xfu) & ~0xfu;
+    end = p + need;
+    if (end < p || end > USER_HEAP_LIMIT)
+        return 0;
+    for (uint32_t pg = p & ~(PAGE_SIZE - 1);
+         pg < ((end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)); pg += PAGE_SIZE) {
+        if (!page_is_mapped(pg) && get_a_page(pg) == 0)
+            return 0;
+    }
+    cur->user_brk = end;
+    if (zero)
+        memset((void *)(uintptr_t)p, 0, need);
+    return (uint64_t)p;
 }
 
 static int32_t win_user_name(char *dst, uint32_t cap, uint64_t uptr) {
@@ -377,7 +426,7 @@ static int64_t win_get_proc_address(struct ARCH_REGS *r, uint64_t mod,
     (void)a3;
     if (win_user_name(kname, sizeof(kname), name) != 0)
         return 0;
-    return (int64_t)(uint64_t)win32_lookup(kname);
+    return (int64_t)(uint64_t)win32_lookup(0, kname);
 }
 
 static int64_t win_load_library_a(struct ARCH_REGS *r, uint64_t name,
@@ -470,6 +519,17 @@ static int64_t win_puts(struct ARCH_REGS *r, uint64_t s, uint64_t a1,
     return 0;
 }
 
+static int64_t win_putchar(struct ARCH_REGS *r, uint64_t c, uint64_t a1,
+                           uint64_t a2, uint64_t a3) {
+    char ch = (char)(uint32_t)c;
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    TTY.write(&ch, 1);
+    return (int64_t)(uint8_t)ch;
+}
+
 static int64_t win_printf(struct ARCH_REGS *r, uint64_t fmt, uint64_t a1,
                           uint64_t a2, uint64_t a3) {
     (void)a1;
@@ -547,38 +607,194 @@ static int64_t win_memset(struct ARCH_REGS *r, uint64_t dst, uint64_t c,
     return (int64_t)dst;
 }
 
+static int64_t win_crt_vfprintf(struct ARCH_REGS *r, uint64_t options,
+                                uint64_t stream, uint64_t fmt, uint64_t locale) {
+    struct WIN_VA va;
+    uint32_t addr;
+    (void)options;
+    (void)stream;
+    (void)locale;
+    addr = (uint32_t)r->user_rsp + WIN_STACK_BASE;
+    if (!access_ok((const void *)(uintptr_t)addr, 8, 0))
+        return 0;
+    va.regs = r;
+    va.next = 0;
+    va.ms = 1;
+    va.base = *(const uint64_t *)(uintptr_t)addr;
+    return (int64_t)win_vprintf_va((const char *)(uintptr_t)fmt, &va);
+}
+
+static int64_t win_p___argc(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_ARGC);
+}
+
+static int64_t win_p___argv(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_ARGV);
+}
+
+static int64_t win_p__environ(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_ENVP);
+}
+
+static int64_t win_p__fmode(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_FMODE);
+}
+
+static int64_t win_p__commode(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_COMMODE);
+}
+
+static int64_t win_acrt_iob_func(struct ARCH_REGS *r, uint64_t idx, uint64_t a1,
+                                 uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return (int64_t)win_rt_ptr(WIN_RT_FILE +
+                               (uint32_t)idx * WIN_RT_FILE_STRIDE);
+}
+
+static int64_t win_malloc(struct ARCH_REGS *r, uint64_t n, uint64_t a1,
+                          uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    if (n > 0x7fffffffu)
+        return 0;
+    return (int64_t)win_heap_alloc((uint32_t)n, 0);
+}
+
+static int64_t win_calloc(struct ARCH_REGS *r, uint64_t n, uint64_t sz,
+                          uint64_t a2, uint64_t a3) {
+    uint64_t total = n * sz;
+    (void)r;
+    (void)a2;
+    (void)a3;
+    if (sz != 0 && total / sz != n)
+        return 0;
+    if (total > 0x7fffffffu)
+        return 0;
+    return (int64_t)win_heap_alloc((uint32_t)total, 1);
+}
+
+static int64_t win_free(struct ARCH_REGS *r, uint64_t p, uint64_t a1,
+                        uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)p;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return 0;
+}
+
+static int64_t win_seh_handler(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    return 1;
+}
+
 static const struct WIN_API win_api_table[] = {
-    {"WriteFile", win_write_file},
-    {"GetStdHandle", win_get_std_handle},
-    {"ExitProcess", win_exit_process},
-    {"GetLastError", win_get_last_error},
-    {"SetLastError", win_set_last_error},
-    {"Sleep", win_sleep},
-    {"GetTickCount", win_get_tick_count},
-    {"GetModuleHandleA", win_get_module_handle_a},
-    {"GetProcAddress", win_get_proc_address},
-    {"LoadLibraryA", win_load_library_a},
-    {"FreeLibrary", win_free_library},
-    {"VirtualProtect", win_virtual_protect},
-    {"VirtualQuery", win_virtual_query},
-    {"TlsGetValue", win_tls_get_value},
-    {"TlsSetValue", win_tls_set_value},
-    {"InitializeCriticalSection", win_section_noop},
-    {"EnterCriticalSection", win_section_noop},
-    {"LeaveCriticalSection", win_section_noop},
-    {"DeleteCriticalSection", win_section_noop},
-    {"SetUnhandledExceptionFilter", win_section_noop},
-    {"puts", win_puts},
-    {"printf", win_printf},
-    {"strlen", win_strlen},
-    {"strcmp", win_strcmp},
-    {"strncmp", win_strncmp},
-    {"memcpy", win_memcpy},
-    {"memset", win_memset},
-    {"exit", win_exit_process},
-    {"_exit", win_exit_process},
-    {"abort", win_exit_process},
-    {"", win_null},
+    {"kernel32", "WriteFile", win_write_file},
+    {"kernel32", "GetStdHandle", win_get_std_handle},
+    {"kernel32", "ExitProcess", win_exit_process},
+    {"kernel32", "GetLastError", win_get_last_error},
+    {"kernel32", "SetLastError", win_set_last_error},
+    {"kernel32", "Sleep", win_sleep},
+    {"kernel32", "GetTickCount", win_get_tick_count},
+    {"kernel32", "GetModuleHandleA", win_get_module_handle_a},
+    {"kernel32", "GetProcAddress", win_get_proc_address},
+    {"kernel32", "LoadLibraryA", win_load_library_a},
+    {"kernel32", "FreeLibrary", win_free_library},
+    {"kernel32", "VirtualProtect", win_virtual_protect},
+    {"kernel32", "VirtualQuery", win_virtual_query},
+    {"kernel32", "TlsGetValue", win_tls_get_value},
+    {"kernel32", "TlsSetValue", win_tls_set_value},
+    {"kernel32", "InitializeCriticalSection", win_section_noop},
+    {"kernel32", "EnterCriticalSection", win_section_noop},
+    {"kernel32", "LeaveCriticalSection", win_section_noop},
+    {"kernel32", "DeleteCriticalSection", win_section_noop},
+    {"kernel32", "SetUnhandledExceptionFilter", win_section_noop},
+    {"msvcrt", "printf", win_printf},
+    {"msvcrt", "puts", win_puts},
+    {"msvcrt", "putchar", win_putchar},
+    {"msvcrt", "strlen", win_strlen},
+    {"msvcrt", "strcmp", win_strcmp},
+    {"msvcrt", "strncmp", win_strncmp},
+    {"msvcrt", "memcpy", win_memcpy},
+    {"msvcrt", "memset", win_memset},
+    {"msvcrt", "exit", win_exit_process},
+    {"msvcrt", "_exit", win_exit_process},
+    {"msvcrt", "abort", win_exit_process},
+    {"api-ms-win-crt-environment-l1-1-0", "__p__environ", win_p__environ},
+    {"api-ms-win-crt-heap-l1-1-0", "_set_new_mode", win_null},
+    {"api-ms-win-crt-heap-l1-1-0", "calloc", win_calloc},
+    {"api-ms-win-crt-heap-l1-1-0", "free", win_free},
+    {"api-ms-win-crt-heap-l1-1-0", "malloc", win_malloc},
+    {"api-ms-win-crt-locale-l1-1-0", "_configthreadlocale", win_null},
+    {"api-ms-win-crt-math-l1-1-0", "__setusermatherr", win_null},
+    {"api-ms-win-crt-private-l1-1-0", "__C_specific_handler", win_seh_handler},
+    {"api-ms-win-crt-private-l1-1-0", "memcpy", win_memcpy},
+    {"api-ms-win-crt-runtime-l1-1-0", "_set_app_type", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "__p___argc", win_p___argc},
+    {"api-ms-win-crt-runtime-l1-1-0", "__p___argv", win_p___argv},
+    {"api-ms-win-crt-runtime-l1-1-0", "_cexit", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_configure_narrow_argv", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_crt_atexit", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_exit", win_exit_process},
+    {"api-ms-win-crt-runtime-l1-1-0", "_initialize_narrow_environment",
+     win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_initterm", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_initterm_e", win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "_set_invalid_parameter_handler",
+     win_null},
+    {"api-ms-win-crt-runtime-l1-1-0", "abort", win_exit_process},
+    {"api-ms-win-crt-runtime-l1-1-0", "exit", win_exit_process},
+    {"api-ms-win-crt-runtime-l1-1-0", "signal", win_null},
+    {"api-ms-win-crt-stdio-l1-1-0", "__acrt_iob_func", win_acrt_iob_func},
+    {"api-ms-win-crt-stdio-l1-1-0", "__p__commode", win_p__commode},
+    {"api-ms-win-crt-stdio-l1-1-0", "__p__fmode", win_p__fmode},
+    {"api-ms-win-crt-stdio-l1-1-0", "__stdio_common_vfprintf",
+     win_crt_vfprintf},
+    {"api-ms-win-crt-stdio-l1-1-0", "fflush", win_null},
+    {"api-ms-win-crt-stdio-l1-1-0", "setvbuf", win_null},
+    {"api-ms-win-crt-string-l1-1-0", "strlen", win_strlen},
+    {"api-ms-win-crt-string-l1-1-0", "strncmp", win_strncmp},
+    {"", "", win_null},
 };
 
 #define WIN_API_COUNT ((uint32_t)(sizeof(win_api_table) / sizeof(win_api_table[0])))
@@ -607,19 +823,44 @@ void win32_thunk_init(uint32_t base) {
     }
 }
 
-uint32_t win32_lookup(const char *name) {
-    for (uint32_t i = 0; i < WIN_API_COUNT; i++) {
-        if (strcmp(name, win_api_table[i].name) == 0)
-            return win_thunk_base + i * WIN_THUNK_SIZE;
-    }
-    return 0;
+static int win_char_eq(char a, char b) {
+    if (a >= 'A' && a <= 'Z')
+        a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z')
+        b = (char)(b - 'A' + 'a');
+    return a == b;
 }
 
-uint32_t win32_resolve(const char *name) {
-    uint32_t t = win32_lookup(name);
+static int win_mod_eq(const char *a, const char *b) {
+    if (a == 0 || b == 0)
+        return 0;
+    while (*a != 0 && *b != 0 && *a != '.' && *b != '.') {
+        if (!win_char_eq(*a, *b))
+            return 0;
+        a++;
+        b++;
+    }
+    return (*a == 0 || *a == '.') && (*b == 0 || *b == '.');
+}
+
+uint32_t win32_lookup(const char *mod, const char *name) {
+    uint32_t hit = 0;
+    for (uint32_t i = 0; i < WIN_API_COUNT; i++) {
+        if (strcmp(name, win_api_table[i].name) != 0)
+            continue;
+        if (win_mod_eq(mod, win_api_table[i].mod))
+            return win_thunk_base + i * WIN_THUNK_SIZE;
+        if (hit == 0)
+            hit = win_thunk_base + i * WIN_THUNK_SIZE;
+    }
+    return hit;
+}
+
+uint32_t win32_resolve(const char *mod, const char *name) {
+    uint32_t t = win32_lookup(mod, name);
     if (t != 0)
         return t;
-    kprintf("[pe] unresolved import %s\n", name);
+    kprintf("[pe] unresolved import %s!%s\n", mod != 0 ? mod : "?", name);
     return win_thunk_base + (WIN_API_COUNT - 1) * WIN_THUNK_SIZE;
 }
 

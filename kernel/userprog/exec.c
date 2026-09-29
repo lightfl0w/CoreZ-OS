@@ -13,6 +13,7 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/syscall/linux_abi.h"
+#include "kernel/syscall/win32.h"
 #include "kernel/userprog/elf.h"
 #include "kernel/userprog/pe.h"
 #include "kernel/userprog/process.h"
@@ -158,13 +159,21 @@ static void scan_note_abi(int32_t fd, uint32_t base_off, uint32_t filesz,
 }
 
 static void fill_entry_regs(struct ARCH_REGS *r, uint32_t entry, int is64,
-                            uint32_t rsp, uint32_t argc, uint32_t argv_base) {
+                            uint32_t rsp, uint32_t argc, uint32_t argv_base,
+                            uint32_t envp_base, int is_pe) {
     memset(r, 0, sizeof(struct ARCH_REGS));
     r->rip = entry;
     r->cs = is64 ? SELECTOR_USER64_CODE : SELECTOR_U_CODE;
     r->rflags = EFLAGS_IOPL_0 | EFLAGS_MBS | EFLAGS_IF_1;
     r->user_rsp = rsp;
     r->ss = SELECTOR_U_DATA;
+    r->gs_saved = is_pe ? SELECTOR_TLS : 0;
+    if (is_pe) {
+        r->rcx = argc;
+        r->rdx = argv_base;
+        r->r8 = envp_base;
+        return;
+    }
     if (is64) {
         r->rdi = argc;
         r->rsi = argv_base;
@@ -786,6 +795,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     uint32_t envlens[MAX_ARG_NR];
     int32_t envc = 0;
     uint32_t argv_user_base;
+    uint32_t envp_user_base;
     int32_t i;
     uint32_t slen;
     struct ARCH_REGS *ps;
@@ -1028,6 +1038,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
             PSTACK(ustack_ptr, argv_user_addrs[i]);
         PSTACK(ustack_ptr, argc);
         argv_user_base = ustack_ptr + aw;
+        envp_user_base = argv_user_base + (argc + 1u) * aw;
 #undef PVAL
 #undef PSTACK
     }
@@ -1062,16 +1073,26 @@ exec_done:
             close_file(fd);
         }
     }
+    if (img.is_pe && img.pe_rt != 0) {
+        uint32_t rt = img.pe_rt;
+        *(uint32_t *)(uintptr_t)(rt + WIN_RT_ARGC) = argc;
+        *(uint32_t *)(uintptr_t)(rt + WIN_RT_ARGV) = argv_user_base;
+        *(uint32_t *)(uintptr_t)(rt + WIN_RT_ENVP) = envp_user_base;
+        cur->tls_base = rt;
+        cur->tls_selector = SELECTOR_TLS;
+        cur->tls_msr = 0;
+        tls_desc_set_base(rt);
+    }
     if (regs != NULL) {
         fill_entry_regs(regs, (uint32_t)entry_point, is64, ustack_ptr, argc,
-                        argv_user_base);
+                        argv_user_base, envp_user_base, img.is_pe);
         return 0;
     }
 
     ps =
         (struct ARCH_REGS *)(cur->kernel_stack_top - THREAD_STACK_SIZE + 0x100);
     fill_entry_regs(ps, (uint32_t)entry_point, is64, ustack_ptr, argc,
-                    argv_user_base);
+                    argv_user_base, envp_user_base, img.is_pe);
 
     __asm__ volatile("mov %0, %%ds; mov %0, %%es; mov %0, %%fs;" ::"r"(
                          (uint16_t)SELECTOR_U_DATA)

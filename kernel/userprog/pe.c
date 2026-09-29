@@ -135,7 +135,7 @@ static int pe_map_sec(int32_t fd, uint32_t base, const struct PE_SECTION *s) {
 }
 
 static void pe_relocs(const struct PE_IMAGE *img) {
-    uint32_t delta = img->base - img->image_base;
+    int64_t delta = (int64_t)img->base - (int64_t)img->image_base;
     uint32_t off = 0;
     if (delta == 0 || img->reloc_rva == 0 || img->reloc_size == 0)
         return;
@@ -156,7 +156,7 @@ static void pe_relocs(const struct PE_IMAGE *img) {
             if (type == PE_RELOC_DIR64) {
                 uint64_t *slot =
                     (uint64_t *)(uintptr_t)(img->base + blk->va + roff);
-                *slot += delta;
+                *slot = (uint64_t)((int64_t)*slot + delta);
             }
         }
         off += total;
@@ -170,8 +170,10 @@ static void pe_imports(const struct PE_IMAGE *img) {
     d = (const struct PE_IMPDESC *)(uintptr_t)(img->base + img->import_rva);
     for (uint32_t n = 0; n < PE_IMPORT_MAX; n++) {
         uint32_t ilt;
+        const char *mod;
         if (d->name == 0 || d->ft == 0)
             break;
+        mod = (const char *)(uintptr_t)(img->base + d->name);
         ilt = (d->oft != 0) ? d->oft : d->ft;
         for (uint32_t k = 0; k < 0x4000u; k++) {
             const uint64_t *slot =
@@ -184,7 +186,7 @@ static void pe_imports(const struct PE_IMAGE *img) {
                 continue;
             name = (const char *)(uintptr_t)(img->base + (uint32_t)e + 2u);
             *(uint64_t *)(uintptr_t)(img->base + d->ft + k * 8u) =
-                (uint64_t)win32_resolve(name);
+                (uint64_t)win32_resolve(mod, name);
         }
         d++;
     }
@@ -197,11 +199,13 @@ int32_t pe_load(int32_t fd, struct EXEC_IMAGE *out) {
     struct PE_COFF coff;
     struct PE_OPTHDR opt;
     struct PE_SECRAW sr;
+    struct PE_SECTION hdr;
     uint32_t lfanew;
     uint32_t img_base;
     uint32_t size_image;
     uint32_t sec_off;
     uint32_t thunk;
+    uint32_t rt;
     uint32_t osz;
 
     if (pe_read(fd, 0, &dos, sizeof(dos)) != 0)
@@ -236,7 +240,7 @@ int32_t pe_load(int32_t fd, struct EXEC_IMAGE *out) {
     if (img_base + size_image >= USER_LOW_CEILING)
         return -1;
     memset(img, 0, sizeof(*img));
-    img->image_base = (uint32_t)opt.image_base;
+    img->image_base = opt.image_base;
     img->base = img_base;
     img->entry = (uint32_t)(img_base + opt.entry);
     img->app_entry = img->entry;
@@ -269,6 +273,23 @@ int32_t pe_load(int32_t fd, struct EXEC_IMAGE *out) {
     win32_thunk_init(thunk);
     pe_apply_rx(thunk, 1);
     img->thunk_base = thunk;
+    rt = thunk + PAGE_SIZE;
+    if (get_a_page(rt) == 0)
+        return -1;
+    memset((void *)(uintptr_t)rt, 0, PAGE_SIZE);
+    *(uint64_t *)(uintptr_t)(rt + WIN_TEB_STACK_BASE) = USER_STACK_TOP;
+    *(uint64_t *)(uintptr_t)(rt + WIN_TEB_STACK_LIMIT) = USER_STACK_BOTTOM;
+    *(uint64_t *)(uintptr_t)(rt + WIN_TEB_SELF) = rt;
+    img->rt = rt;
+    if (opt.size_headers != 0) {
+        hdr.va = 0;
+        hdr.vsize = opt.size_headers;
+        hdr.raw_off = 0;
+        hdr.raw_size = opt.size_headers;
+        hdr.flags = 0;
+        if (pe_map_sec(fd, img_base, &hdr) != 0)
+            return -1;
+    }
     for (uint32_t i = 0; i < coff.nsec; i++) {
         if (pe_map_sec(fd, img_base, &img->sec[i]) != 0)
             return -1;
@@ -291,13 +312,15 @@ int32_t pe_load(int32_t fd, struct EXEC_IMAGE *out) {
         pages = DIV_ROUND_UP((va - first) + size, PAGE_SIZE);
         pe_apply_rx(first, pages);
     }
-    img->brk_base = (thunk + PAGE_SIZE + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    img->brk_base = rt + PAGE_SIZE;
     out->entry = (int32_t)img->entry;
     out->app_entry = img->app_entry;
     out->base = img->base;
     out->brk_base = img->brk_base;
     out->is64 = 1;
     out->is_pe = 1;
+    out->pe_rt = rt;
     current->win_base = img_base;
+    current->win_rt = rt;
     return 0;
 }

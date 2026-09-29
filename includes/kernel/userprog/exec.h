@@ -25,6 +25,7 @@ struct EXEC_IMAGE {
     uint32_t bias;
     uint32_t base;
     uint32_t brk_base;
+    uint32_t pe_rt;
 };
 
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],

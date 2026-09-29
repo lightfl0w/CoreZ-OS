@@ -27,7 +27,7 @@ struct PE_SECTION {
 };
 
 struct PE_IMAGE {
-    uint32_t image_base;
+    uint64_t image_base;
     uint32_t base;
     uint32_t entry;
     uint32_t app_entry;
@@ -39,6 +39,7 @@ struct PE_IMAGE {
     uint32_t reloc_size;
     uint32_t image_end;
     uint32_t thunk_base;
+    uint32_t rt;
     uint32_t brk_base;
     uint32_t nsec;
     struct PE_SECTION sec[PE_SECTION_MAX];
