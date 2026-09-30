@@ -4,7 +4,7 @@
 #include "kernel/asm_func.h"
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/fs.h"
 
 struct FS_INODE *inode_open(struct DISK_PARTITION *part, uint32_t inode_no) {
@@ -28,7 +28,7 @@ struct FS_INODE *inode_open(struct DISK_PARTITION *part, uint32_t inode_no) {
         return NULL;
     }
     memset(inode, 0, PAGE_SIZE);
-    if (ext2_read_inode(inode_no, inode)) {
+    if (fs_read_inode(inode_no, inode)) {
         free_kernel_page((uint32_t)inode);
         return NULL;
     }

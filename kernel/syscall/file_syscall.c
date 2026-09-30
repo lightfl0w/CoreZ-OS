@@ -1,7 +1,7 @@
 #include "kernel/syscall/file_syscall.h"
 #include "drivers/block/ide.h"
 #include "kernel/fs/dir.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
@@ -159,7 +159,7 @@ int32_t sys_getdents(int32_t fd, void *dirp, uint32_t count) {
     uint32_t pos = 0;
     struct FS_DIRENT de;
     uint32_t written = 0;
-    while (ext2_dir_next(pf->fd_inode, &pos, &de) == 0) {
+    while (fs_dir_next(pf->fd_inode, &pos, &de) == 0) {
         uint32_t name_len = strlen(de.filename);
         uint16_t reclen = (uint16_t)(10u + name_len + 1u);
         if (written + reclen > count) {
@@ -185,12 +185,12 @@ int32_t sys_readlink(const char *path, char *buf, uint32_t bufsiz) {
     }
     uint32_t ino = 0;
     int ft = 0;
-    if (ext2_lookup_ftype(path, &ino, &ft, 0) || ft != FT_SYMLINK) {
+    if (fs_lookup_ftype(path, &ino, &ft, 0) || ft != FT_SYMLINK) {
         current->errno = 22;
         return -1;
     }
     char kbuf[MAX_PATH_LEN];
-    int len = ext2_read_link_target(ino, kbuf, MAX_PATH_LEN);
+    int len = fs_read_link_target(ino, kbuf, MAX_PATH_LEN);
     if (len < 0) {
         current->errno = 22;
         return -1;
@@ -209,12 +209,12 @@ int32_t sys_access(const char *path, int32_t mode) {
     }
     uint32_t ino_no = 0;
     int ft = 0;
-    if (ext2_lookup_ftype(path, &ino_no, &ft, 1)) {
+    if (fs_lookup_ftype(path, &ino_no, &ft, 1)) {
         current->errno = 2;
         return -1;
     }
     struct FS_INODE obj;
-    if (ext2_read_inode(ino_no, &obj)) {
+    if (fs_read_inode(ino_no, &obj)) {
         return -1;
     }
     uint32_t bits = (uint32_t)mode & 7u;
@@ -246,12 +246,12 @@ int32_t sys_chmod(const char *path, uint32_t mode) {
     }
     uint32_t ino_no = 0;
     int ft = 0;
-    if (ext2_lookup_ftype(path, &ino_no, &ft, 1)) {
+    if (fs_lookup_ftype(path, &ino_no, &ft, 1)) {
         current->errno = 2;
         return -1;
     }
     struct FS_INODE obj;
-    if (ext2_read_inode(ino_no, &obj)) {
+    if (fs_read_inode(ino_no, &obj)) {
         return -1;
     }
     if (current->euid != 0 && current->euid != obj.i_uid) {
@@ -259,5 +259,5 @@ int32_t sys_chmod(const char *path, uint32_t mode) {
         return -1;
     }
     obj.i_mode = (obj.i_mode & 0xF000u) | (mode & 0x0FFFu);
-    return ext2_write_inode(ino_no, &obj) ? -1 : 0;
+    return fs_write_inode(ino_no, &obj) ? -1 : 0;
 }

@@ -62,7 +62,7 @@ def main():
         smp = sys.argv[sys.argv.index("--smp") + 1]
     uefi = "--uefi" in sys.argv
     subprocess.run(
-        ["python3", "scripts/make_ext2.py", "build", "build/test_hd.img",
+        ["python3", "scripts/make_ext4.py", "build", "build/test_hd.img",
          "--smoke"], check=True, cwd=ROOT)
     cmd = qemu_cmd(smp, uefi)
     if cmd is None:

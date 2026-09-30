@@ -7,7 +7,7 @@
 #include "kernel/assert.h"
 #include "kernel/auxv.h"
 #include "kernel/fs/fs.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
@@ -878,7 +878,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     {
         char abs[MAX_PATH_LEN];
         const char *src = path;
-        if (ext2_abs_path(path, abs, sizeof(abs)) == 0) {
+        if (fs_abs_path(path, abs, sizeof(abs)) == 0) {
             src = abs;
         }
         uint32_t el;

@@ -9,7 +9,7 @@
 #include "drivers/net/socket.h"
 #include "kernel/asm_func.h"
 #include "kernel/fs/dir.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/proc.h"
@@ -40,7 +40,7 @@ int32_t compat_write(int32_t fd, const void *buf, uint32_t count);
 int32_t compat_dir_fd(const char *path) {
     uint32_t ino = 0;
     int is_dir = 0;
-    if (ext2_lookup(path, &ino, &is_dir) || !is_dir)
+    if (fs_lookup(path, &ino, &is_dir) || !is_dir)
         return -1;
     int gfd = file_table_alloc_slot();
     if (gfd < 0)
@@ -123,7 +123,7 @@ int32_t compat_getdents64(int32_t fd, void *dirp, uint32_t count) {
     uint32_t written = 0;
     struct FS_DIRENT de;
     for (;;) {
-        if (ext2_dir_next(pf->fd_inode, &pos, &de) != 0)
+        if (fs_dir_next(pf->fd_inode, &pos, &de) != 0)
             break;
         uint32_t nl = strlen(de.filename);
         uint16_t reclen = (uint16_t)((19u + nl + 1u + 7u) & ~7u);
@@ -229,7 +229,7 @@ int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
 int32_t compat_statfs_fill(uint64_t buf) {
     struct LINUX_STATFS sf;
     uint32_t bsize, blocks, bfree, files, ffree;
-    ext2_statfs_info(&bsize, &blocks, &bfree, &files, &ffree);
+    fs_statfs_info(&bsize, &blocks, &bfree, &files, &ffree);
     memset(&sf, 0, sizeof(sf));
     sf.f_type = (int64_t)LINUX_EXT2_SUPER_MAGIC;
     sf.f_bsize = bsize;
@@ -248,7 +248,7 @@ int64_t lc_statfs(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    if (strcmp(kpath, "/") != 0 && ext2_lookup(kpath, &(uint32_t){0}, &(int){0}))
+    if (strcmp(kpath, "/") != 0 && fs_lookup(kpath, &(uint32_t){0}, &(int){0}))
         return -LINUX_ENOENT;
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
         return -LINUX_EFAULT;
@@ -279,13 +279,13 @@ int64_t lc_fchown(LC_ARGS) {
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
     struct FS_INODE obj;
-    if (ext2_read_inode(pf->fd_inode->i_no, &obj))
+    if (fs_read_inode(pf->fd_inode->i_no, &obj))
         return -LINUX_EIO;
     if (b != (uint64_t)-1)
         obj.i_uid = (uint16_t)b;
     if (c != (uint64_t)-1)
         obj.i_gid = (uint16_t)c;
-    return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
+    return fs_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchownat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
@@ -303,10 +303,10 @@ int64_t lc_fchmod(LC_ARGS) {
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
     struct FS_INODE obj;
-    if (ext2_read_inode(pf->fd_inode->i_no, &obj))
+    if (fs_read_inode(pf->fd_inode->i_no, &obj))
         return -LINUX_EIO;
     obj.i_mode = (obj.i_mode & 0xF000u) | ((uint32_t)b & 0x0FFFu);
-    return ext2_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
+    return fs_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchmodat(LC_ARGS) {
     (void)d;
@@ -356,8 +356,8 @@ int32_t compat_ftruncate(int32_t fd, int32_t length) {
     struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL || is_pipe((uint32_t)fd))
         return -LINUX_EINVAL;
-    ext2_truncate_inode(pf->fd_inode);
-    ext2_write_inode(pf->fd_inode->i_no, pf->fd_inode);
+    fs_truncate_inode(pf->fd_inode);
+    fs_write_inode(pf->fd_inode->i_no, pf->fd_inode);
     return 0;
 }
 int32_t compat_flags_linux2native(uint32_t lflags) {
@@ -387,7 +387,7 @@ static void stat_fill_inode(struct LINUX_STAT *ls, uint32_t ino,
     struct FS_INODE obj;
     uint32_t now = (uint32_t)rtc_unix_time();
     ls->st_nlink = (mode & 0xF000u) == 0x4000u ? fs_dir_nlink(ino) : 1;
-    if (ext2_read_inode(ino, &obj) != 0) {
+    if (fs_read_inode(ino, &obj) != 0) {
         ls->st_atim.tv_sec = now;
         ls->st_mtim.tv_sec = now;
         ls->st_ctim.tv_sec = now;
@@ -444,7 +444,7 @@ int32_t compat_openat(int32_t dirfd, const char *kpath, uint32_t lflags,
     struct FS_STAT pst;
     uint32_t ino = 0;
     int is_dir = 0;
-    if (ext2_lookup(kpath, &ino, &is_dir) == 0 && is_dir) {
+    if (fs_lookup(kpath, &ino, &is_dir) == 0 && is_dir) {
         if (lflags & (LINUX_O_CREAT | LINUX_O_TRUNC | LINUX_O_APPEND))
             return -LINUX_EISDIR;
         int32_t fd = compat_dir_fd(kpath);
@@ -901,11 +901,11 @@ static int64_t lc_mkdir_apply(const char *kpath) {
         return 0;
     uint32_t ino = 0;
     int is_dir = 0;
-    if (ext2_lookup(kpath, &ino, &is_dir) == 0)
+    if (fs_lookup(kpath, &ino, &is_dir) == 0)
         return -LINUX_EEXIST;
     char parent[MAX_PATH_LEN];
     lc_parent_of(kpath, parent);
-    if (ext2_lookup(parent, &ino, &is_dir) != 0 || !is_dir)
+    if (fs_lookup(parent, &ino, &is_dir) != 0 || !is_dir)
         return -LINUX_ENOENT;
     return -LINUX_EPERM;
 }
@@ -1157,11 +1157,11 @@ int64_t lc_utimensat(LC_ARGS) {
         if (rc != 0)
             return rc;
         int ft = 0;
-        if (ext2_lookup_ftype(kpath, &ino, &ft, 1) != 0)
+        if (fs_lookup_ftype(kpath, &ino, &ft, 1) != 0)
             return -LINUX_ENOENT;
     }
     struct FS_INODE obj;
-    if (ext2_read_inode(ino, &obj))
+    if (fs_read_inode(ino, &obj))
         return -LINUX_EIO;
     if (current->euid != 0 && current->euid != obj.i_uid &&
         fs_check_perm(&obj, 2u)) {
@@ -1170,7 +1170,7 @@ int64_t lc_utimensat(LC_ARGS) {
     obj.i_atime = at;
     obj.i_mtime = mt;
     obj.i_ctime = now;
-    return ext2_write_inode(ino, &obj) ? -LINUX_EIO : 0;
+    return fs_write_inode(ino, &obj) ? -LINUX_EIO : 0;
 }
 
 int64_t lc0_open(LC_ARGS) {
