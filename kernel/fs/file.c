@@ -2,7 +2,7 @@
 #include "kernel/asm_func.h"
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
 #include "drivers/char/tty.h"
@@ -188,7 +188,7 @@ static uint32_t chardev_write(struct FILE *file, const void *buf,
 uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
         return chardev_read(file, buf, count);
-    int r = ext2_read_from_inode(file->fd_inode, file->fd_pos, buf, count);
+    int r = fs_read_from_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
 }
@@ -196,7 +196,7 @@ uint32_t file_read(struct FILE *file, void *buf, uint32_t count) {
 uint32_t file_write(struct FILE *file, const void *buf, uint32_t count) {
     if (fs_is_chardev(file->fd_inode))
         return chardev_write(file, buf, count);
-    int r = ext2_write_to_inode(file->fd_inode, file->fd_pos, buf, count);
+    int r = fs_write_to_inode(file->fd_inode, file->fd_pos, buf, count);
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
 }

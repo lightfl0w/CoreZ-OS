@@ -614,6 +614,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("nvme.o",       ROOT / "drivers" / "block" / "nvme.c"),
         ("pci.o",        ROOT / "drivers" / "pci" / "pci.c"),
         ("ext2.o",       KERNEL_DIR / "fs" / "ext2.c"),
+        ("ext4.o",       KERNEL_DIR / "fs" / "ext4.c"),
+        ("fsapi.o",      KERNEL_DIR / "fs" / "fsapi.c"),
         ("fs.o",         KERNEL_DIR / "fs" / "fs.c"),
         ("inode.o",      KERNEL_DIR / "fs" / "inode.c"),
         ("dir.o",        KERNEL_DIR / "fs" / "dir.c"),
@@ -916,7 +918,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
-        "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
+        "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "ext4.o", "fsapi.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o", "pe.o",
         "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
@@ -1602,9 +1604,9 @@ def do_run(console: Console, stats: BuildStats,
             console.warn(f"{esp} 不存在; 请确认 CONFIG_UEFI=y 且构建成功")
             return
         hd_img = BUILD_DIR / "test_hd.img"
-        mkdisk = SCRIPTS / "make_ext2.py"
+        mkdisk = SCRIPTS / "make_ext4.py"
         if mkdisk.exists():
-            console.info("generating test_hd.img via make_ext2.py")
+            console.info("generating test_hd.img via make_ext4.py")
             run([sys.executable, str(mkdisk), str(BUILD_DIR), str(hd_img)])
         vars_dst = BUILD_DIR / "OVMF_VARS.fd"
         shutil.copyfile(vars_src, vars_dst)
@@ -1637,9 +1639,9 @@ def do_run(console: Console, stats: BuildStats,
         cmd += ["-fda", str(BUILD_DIR / "floppy.img")]
     else:
         hd_img = BUILD_DIR / "test_hd.img"
-        mkdisk = SCRIPTS / "make_ext2.py"
+        mkdisk = SCRIPTS / "make_ext4.py"
         if mkdisk.exists():
-            console.info("generating test_hd.img via make_ext2.py")
+            console.info("generating test_hd.img via make_ext4.py")
             run([sys.executable, str(mkdisk), str(BUILD_DIR), str(hd_img)])
         cmd += ["-hda", str(hd_img)]
     cmd += ["-debugcon", "stdio", "-display", "gtk,zoom-to-fit=off"]
@@ -1681,18 +1683,12 @@ def main(argv: Sequence[str]) -> int:
                         help="不挂虚拟网卡/后端(默认挂 e1000 + user 后端)")
     parser.add_argument("--boot-floppy", action="store_true",
                         help="以 floppy.img 作为引导软盘(-fda); 默认用 test_hd.img(-hda)")
-    parser.add_argument("--uefi", action="store_true",
-                        help="以 OVMF + esp.img 走 UEFI 引导(需 CONFIG_UEFI=y "
-                             "且已生成 build/esp.img)")
     parser.add_argument("--bios", action="store_true",
                         help="强制走传统 BIOS 链(test_hd.img + boot.bin/loader.bin); "
                              "默认在 CONFIG_UEFI=y 且 build/esp.img 存在时走 UEFI")
     parser.add_argument("--kvm", action="store_true",
                         help="启用 KVM 硬件加速(-enable-kvm -cpu host), 用于测试 "
                              "需在 ring0 执行的 MWAIT 等真实 CPU 特性(需 Linux/WSL2)")
-    parser.add_argument("--with-musl-lib", action="store_true",
-                        help="编完整原生 musl libc.a 并链接 musl_demo.elf/libc_testsuite.elf "
-                             "(默认由 CONFIG_MUSL_LIB 决定)")
     args = parser.parse_args(argv)
     _enable_vt_on_windows()
     console = Console(use_color=color_enabled(args.no_color))
@@ -1714,8 +1710,8 @@ def main(argv: Sequence[str]) -> int:
     console.info(f"objcopy = {tools.objcopy}")
     console.writeln()
     restamp_build_env(tools, console)
-    plan = make_plan(tools, with_musl_lib=(
-        args.with_musl_lib or CONFIG.get("CONFIG_MUSL_LIB") == "y"))
+    plan = make_plan(tools,
+                     with_musl_lib=(CONFIG.get("CONFIG_MUSL_LIB") == "y"))
     try:
         stats = execute_plan(plan, tools, console, jobs=args.jobs)
     except SystemExit as exc:
@@ -1764,17 +1760,12 @@ def main(argv: Sequence[str]) -> int:
     console.writeln()
     if args.target == "run":
         esp_img = BUILD_DIR / "esp.img"
-        use_uefi = args.uefi or (
+        use_uefi = (
             not args.bios
             and not args.boot_floppy
             and CONFIG.get("CONFIG_UEFI") == "y"
             and esp_img.exists()
         )
-        if args.uefi and not esp_img.exists():
-            console.warn("--uefi 已指定，但 build/esp.img 不存在；"
-                         "请确认 CONFIG_UEFI=y 且构建成功。")
-        if args.uefi and _find_ovmf() is None:
-            console.warn("--uefi 已指定，但未找到 OVMF 固件；无法以 UEFI 引导。")
         mode = "UEFI (OVMF + esp.img)" if use_uefi else "BIOS (boot.bin/loader.bin)"
         console.info(f"boot mode: {mode}")
         do_run(console, stats, args.sm, args.gdb, args.no_net, args.boot_floppy,

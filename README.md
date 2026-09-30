@@ -77,7 +77,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 内置命令：`ls` `cd` `pwd` `mkdir` `rmdir` `rm` `clear` `ps` `gui` `shutdown`；
 支持外部程序执行与管道。
 
-`apps/` 下的用户程序（自带 mini-libc 编译为 ELF，musl 相关项由 `--with-musl-lib` 构建）：
+`apps/` 下的用户程序（自带 mini-libc 编译为 ELF，musl 相关项由 `CONFIG_MUSL_LIB=y` 构建）：
 
 | 程序                                          | 演示内容                         |
 | ------------------------------------------- | ---------------------------- |
@@ -97,7 +97,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | `gui_launch`                                | GUI 合成器入口                    |
 | `lc_demo` / `musl_demo` / `libc_tests_main` | 自带 libc / musl ABI / libc 测试套件 |
 
-`third_modules/` 下是第三方代码：musl（`--with-musl-lib` 构建完整 libc 并运行
+`third_modules/` 下是第三方代码：musl（`CONFIG_MUSL_LIB=y` 构建完整 libc 并运行
 libc-testsuite）、mr\_micro\_shell、toybox。
 
 ## 目录结构
@@ -107,7 +107,7 @@ libc-testsuite）、mr\_micro\_shell、toybox。
 ├── linker/
 │   ├── kernel.ld           # 内核链接脚本
 │   └── user.ld             # 用户程序链接脚本
-├── scripts/                # 镜像与资源脚本（make_ext2/make_fat/mkfloppy/make_font_subset 等）
+├── scripts/                # 镜像与资源脚本（make_ext4/make_fat/mkfloppy/make_font_subset 等）
 ├── arch/x86/
 │   ├── boot/               # boot.asm 引导扇区 + loader.asm（VBE/KASLR/长模式）
 │   ├── asm/                # entry/switch/stub 等汇编
@@ -154,7 +154,7 @@ python3 build.py clean
 
 `run` 默认以 `build/test_hd.img` 硬盘镜像引导（自动生成：P1 FAT32 引导分区 +
 P2 ext2 数据分区，并写入用户程序）；`--boot-floppy` 可改用软盘镜像。
-`--with-musl-lib` 会额外编译完整 musl libc 并构建 libc-testsuite。
+`CONFIG_MUSL_LIB=y` 会额外编译完整 musl libc 并构建 libc-testsuite。
 
 ### 运行
 
@@ -204,7 +204,7 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 - [x] 文件系统：ext2（读写）、/proc、管道、dup/fd 引用计数
 - [x] 网络：e1000 + ARP/IP/ICMP/TCP/UDP + socket API
 - [x] GUI 合成器、shell 与用户程序集
-- [x] musl 构建选项（`--with-musl-lib`）
+- [x] musl 构建选项
 - [ ] 修复 fork 子进程 SIGSEGV（见已知问题）
 - [ ] 内核堆分配器（malloc 形态的细粒度分配）
 - [ ] 多核调度（AP 目前仅验证可启动，未参与调度）

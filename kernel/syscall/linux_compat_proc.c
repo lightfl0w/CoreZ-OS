@@ -9,7 +9,7 @@
 #include "drivers/net/socket.h"
 #include "kernel/asm_func.h"
 #include "kernel/fs/dir.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/proc.h"

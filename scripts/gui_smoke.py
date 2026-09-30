@@ -80,7 +80,7 @@ def main():
             if "error:" in ln:
                 print(ln.strip())
         return 1
-    subprocess.run(["python3", "scripts/make_ext2.py", "build",
+    subprocess.run(["python3", "scripts/make_ext4.py", "build",
                     "build/test_hd.img", "--smoke"], cwd=ROOT, check=True)
     DBG.unlink(missing_ok=True)
     QMP.unlink(missing_ok=True)

@@ -2,7 +2,7 @@
 
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
-#include "kernel/fs/ext2.h"
+#include "kernel/fs/fsapi.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/inode.h"
 
@@ -59,7 +59,7 @@ struct FS_DIRENT *dir_read(struct FS_DIR *handle) {
         return NULL;
     }
     struct FS_DIRENT *dir_e = (struct FS_DIRENT *)d->dir_buf;
-    if (ext2_dir_next(d->inode, &d->dir_pos, dir_e)) {
+    if (fs_dir_next(d->inode, &d->dir_pos, dir_e)) {
         return NULL;
     }
     return dir_e;
