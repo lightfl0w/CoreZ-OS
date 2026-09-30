@@ -635,6 +635,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("linux_compat_fs.o", KERNEL_DIR / "syscall" / "linux_compat_fs.c"),
         ("linux_compat_proc.o", KERNEL_DIR / "syscall" / "linux_compat_proc.c"),
         ("win32.o",      KERNEL_DIR / "syscall" / "win32.c"),
+        ("win32_gdi.o",  KERNEL_DIR / "syscall" / "win32_gdi.c"),
         ("usyscall.o",   ROOT / "libc" / "user" / "syscall.c"),
         ("ustdio.o",     ROOT / "libc" / "user" / "stdio.c"),
         ("wait_exit.o",  KERNEL_DIR / "userprog" / "wait_exit.c"),
@@ -811,6 +812,18 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         tasks.append(win_task)
         user_elves.append(win_task)
 
+        gui_src = APPS_DIR / "win_gui.c"
+        gui_exe = BUILD_DIR / "win_gui.exe"
+        gui_task = Task(
+            name="win_gui.exe",
+            cmd=[mingw, str(gui_src), "-o", str(gui_exe), "-lgdi32", "-luser32"],
+            out=gui_exe, deps=[gui_src],
+            optional=True, group="link",
+            description="link win_gui.exe (mingw PE32+ win32 gdi)",
+        )
+        tasks.append(gui_task)
+        user_elves.append(gui_task)
+
     zig = shutil.which("zig")
     cxx = shutil.which("clang++")
     if zig or cxx:
@@ -907,7 +920,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o", "pe.o",
         "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
-        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "win32.o", "signal.o", "file_syscall.o",
+        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "win32.o", "win32_gdi.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
         "lc_clone.o",
         "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",

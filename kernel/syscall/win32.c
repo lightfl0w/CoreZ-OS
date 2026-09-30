@@ -289,7 +289,7 @@ static uint64_t win_rt_ptr(uint32_t off) {
     return (uint64_t)(current->win_rt + off);
 }
 
-static uint64_t win_heap_alloc(uint32_t need, int zero) {
+uint64_t win_heap_alloc(uint32_t need, int zero) {
     struct TASK *cur = current;
     uint32_t base;
     uint32_t p;
@@ -314,7 +314,7 @@ static uint64_t win_heap_alloc(uint32_t need, int zero) {
     return (uint64_t)p;
 }
 
-static int32_t win_user_name(char *dst, uint32_t cap, uint64_t uptr) {
+int32_t win_user_name(char *dst, uint32_t cap, uint64_t uptr) {
     uint32_t len;
     if (uptr == 0)
         return -1;
@@ -794,19 +794,85 @@ static const struct WIN_API win_api_table[] = {
     {"api-ms-win-crt-stdio-l1-1-0", "setvbuf", win_null},
     {"api-ms-win-crt-string-l1-1-0", "strlen", win_strlen},
     {"api-ms-win-crt-string-l1-1-0", "strncmp", win_strncmp},
+    {"user32", "RegisterClassA", w32_register_class_a},
+    {"user32", "CreateWindowExA", w32_create_window_ex_a},
+    {"user32", "ShowWindow", w32_show_window},
+    {"user32", "UpdateWindow", w32_update_window},
+    {"user32", "GetMessageA", w32_get_message_a},
+    {"user32", "PeekMessageA", w32_peek_message_a},
+    {"user32", "TranslateMessage", w32_translate_message},
+    {"user32", "DispatchMessageA", w32_dispatch_message_a},
+    {"user32", "DefWindowProcA", w32_def_window_proc_a},
+    {"user32", "PostQuitMessage", w32_post_quit_message},
+    {"user32", "PostMessageA", w32_post_message_a},
+    {"user32", "DestroyWindow", w32_destroy_window},
+    {"user32", "GetDC", w32_get_dc},
+    {"user32", "ReleaseDC", w32_release_dc},
+    {"user32", "BeginPaint", w32_begin_paint},
+    {"user32", "EndPaint", w32_end_paint},
+    {"user32", "GetClientRect", w32_get_client_rect},
+    {"user32", "InvalidateRect", w32_invalidate_rect},
+    {"user32", "LoadCursorA", w32_load_cursor_a},
+    {"user32", "LoadIconA", w32_load_icon_a},
+    {"user32", "MessageBoxA", w32_message_box_a},
+    {"user32", "SetWindowTextA", w32_set_window_text_a},
+    {"user32", "GetSystemMetrics", w32_get_system_metrics},
+    {"user32", "MessageBeep", w32_message_beep},
+    {"gdi32", "CreateCompatibleDC", w32_create_compatible_dc},
+    {"gdi32", "CreateCompatibleBitmap", w32_create_compatible_bitmap},
+    {"gdi32", "CreateDIBSection", w32_create_dib_section},
+    {"gdi32", "SelectObject", w32_select_object},
+    {"gdi32", "DeleteObject", w32_delete_object},
+    {"gdi32", "DeleteDC", w32_delete_dc},
+    {"gdi32", "BitBlt", w32_bit_blt},
+    {"gdi32", "StretchBlt", w32_stretch_blt},
+    {"gdi32", "PatBlt", w32_pat_blt},
+    {"gdi32", "Rectangle", w32_rectangle},
+    {"gdi32", "Ellipse", w32_ellipse},
+    {"gdi32", "MoveToEx", w32_move_to_ex},
+    {"gdi32", "LineTo", w32_line_to},
+    {"gdi32", "TextOutA", w32_text_out_a},
+    {"gdi32", "DrawTextA", w32_draw_text_a},
+    {"gdi32", "SetTextColor", w32_set_text_color},
+    {"gdi32", "SetBkColor", w32_set_bk_color},
+    {"gdi32", "SetBkMode", w32_set_bk_mode},
+    {"gdi32", "CreateSolidBrush", w32_create_solid_brush},
+    {"gdi32", "CreatePen", w32_create_pen},
+    {"gdi32", "GetStockObject", w32_get_stock_object},
+    {"gdi32", "FillRect", w32_fill_rect},
+    {"gdi32", "FrameRect", w32_frame_rect},
+    {"gdi32", "SetPixel", w32_set_pixel},
+    {"gdi32", "GetDeviceCaps", w32_get_device_caps},
     {"", "", win_null},
 };
 
 #define WIN_API_COUNT ((uint32_t)(sizeof(win_api_table) / sizeof(win_api_table[0])))
 
-_Static_assert(WIN_API_COUNT <= WIN_THUNK_SLOTS,
+_Static_assert(WIN_API_COUNT + 4u <= WIN_THUNK_SLOTS,
                "win32 api table exceeds thunk page");
 
 void win32_thunk_init(uint32_t base) {
+    uint32_t body = base + WIN_API_COUNT * WIN_THUNK_SIZE;
+    uint64_t body_addr = (uint64_t)body;
+    uint32_t dnr = WIN32_SYSCALL_BASE;
     win_thunk_base = base;
     for (uint32_t i = 0; i < WIN_API_COUNT; i++) {
         uint8_t *p = (uint8_t *)(uintptr_t)(base + i * WIN_THUNK_SIZE);
         uint32_t nr = WIN32_SYSCALL_BASE + i;
+        if (win_api_table[i].fn == w32_dispatch_message_a) {
+            dnr = nr;
+            p[0] = 0xff;
+            p[1] = 0x25;
+            p[2] = 0x00;
+            p[3] = 0x00;
+            p[4] = 0x00;
+            p[5] = 0x00;
+            for (uint32_t k = 0; k < 8; k++)
+                p[6 + k] = (uint8_t)((body_addr >> (8u * k)) & 0xffu);
+            for (uint32_t k = 14; k < WIN_THUNK_SIZE; k++)
+                p[k] = 0xcc;
+            continue;
+        }
         p[0] = 0x49;
         p[1] = 0x89;
         p[2] = 0xca;
@@ -821,6 +887,21 @@ void win32_thunk_init(uint32_t base) {
         for (uint32_t k = 11; k < WIN_THUNK_SIZE; k++)
             p[k] = 0xcc;
     }
+    uint8_t *b = (uint8_t *)(uintptr_t)body;
+    static const uint8_t body_code[] = {
+        0x49, 0x89, 0xca, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48,
+        0x85, 0xc0, 0x74, 0x19, 0x49, 0x8b, 0x0a, 0x49, 0x8b, 0x52, 0x08,
+        0x4d, 0x8b, 0x42, 0x10, 0x4d, 0x8b, 0x4a, 0x18, 0x48, 0x83, 0xec,
+        0x28, 0xff, 0xd0, 0x48, 0x83, 0xc4, 0x28, 0xc3,
+    };
+    for (uint32_t k = 0; k < sizeof(body_code); k++)
+        b[k] = body_code[k];
+    b[4] = (uint8_t)(dnr & 0xffu);
+    b[5] = (uint8_t)((dnr >> 8) & 0xffu);
+    b[6] = (uint8_t)((dnr >> 16) & 0xffu);
+    b[7] = (uint8_t)((dnr >> 24) & 0xffu);
+    for (uint32_t k = (uint32_t)sizeof(body_code); k < 3u * WIN_THUNK_SIZE; k++)
+        b[k] = 0xcc;
 }
 
 static int win_char_eq(char a, char b) {

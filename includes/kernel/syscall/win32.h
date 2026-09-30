@@ -35,4 +35,107 @@ uint32_t win32_lookup(const char *mod, const char *name);
 uint32_t win32_resolve(const char *mod, const char *name);
 int64_t win32_handler(struct ARCH_REGS *r);
 
+uint64_t win_heap_alloc(uint32_t need, int zero);
+int32_t win_user_name(char *dst, uint32_t cap, uint64_t uptr);
+
+int64_t w32_register_class_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                             uint64_t a2, uint64_t a3);
+int64_t w32_create_window_ex_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3);
+int64_t w32_show_window(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_update_window(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_get_message_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_peek_message_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                           uint64_t a2, uint64_t a3);
+int64_t w32_translate_message(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3);
+int64_t w32_dispatch_message_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3);
+int64_t w32_def_window_proc_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3);
+int64_t w32_post_quit_message(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3);
+int64_t w32_post_message_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                           uint64_t a2, uint64_t a3);
+int64_t w32_destroy_window(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                           uint64_t a2, uint64_t a3);
+int64_t w32_get_dc(struct ARCH_REGS *r, uint64_t a0, uint64_t a1, uint64_t a2,
+                   uint64_t a3);
+int64_t w32_release_dc(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                       uint64_t a2, uint64_t a3);
+int64_t w32_begin_paint(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_end_paint(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                      uint64_t a2, uint64_t a3);
+int64_t w32_get_client_rect(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3);
+int64_t w32_invalidate_rect(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3);
+int64_t w32_load_cursor_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_load_icon_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_message_box_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_set_window_text_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                              uint64_t a2, uint64_t a3);
+int64_t w32_get_system_metrics(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3);
+int64_t w32_message_beep(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                         uint64_t a2, uint64_t a3);
+
+int64_t w32_create_compatible_dc(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                                 uint64_t a2, uint64_t a3);
+int64_t w32_create_compatible_bitmap(struct ARCH_REGS *r, uint64_t a0,
+                                     uint64_t a1, uint64_t a2, uint64_t a3);
+int64_t w32_create_dib_section(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3);
+int64_t w32_select_object(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_delete_object(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                          uint64_t a2, uint64_t a3);
+int64_t w32_delete_dc(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                      uint64_t a2, uint64_t a3);
+int64_t w32_bit_blt(struct ARCH_REGS *r, uint64_t a0, uint64_t a1, uint64_t a2,
+                    uint64_t a3);
+int64_t w32_stretch_blt(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_pat_blt(struct ARCH_REGS *r, uint64_t a0, uint64_t a1, uint64_t a2,
+                    uint64_t a3);
+int64_t w32_rectangle(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                      uint64_t a2, uint64_t a3);
+int64_t w32_ellipse(struct ARCH_REGS *r, uint64_t a0, uint64_t a1, uint64_t a2,
+                    uint64_t a3);
+int64_t w32_move_to_ex(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                       uint64_t a2, uint64_t a3);
+int64_t w32_line_to(struct ARCH_REGS *r, uint64_t a0, uint64_t a1, uint64_t a2,
+                    uint64_t a3);
+int64_t w32_text_out_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                       uint64_t a2, uint64_t a3);
+int64_t w32_draw_text_a(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_set_text_color(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                           uint64_t a2, uint64_t a3);
+int64_t w32_set_bk_color(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                         uint64_t a2, uint64_t a3);
+int64_t w32_set_bk_mode(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                        uint64_t a2, uint64_t a3);
+int64_t w32_create_solid_brush(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                               uint64_t a2, uint64_t a3);
+int64_t w32_create_pen(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                       uint64_t a2, uint64_t a3);
+int64_t w32_get_stock_object(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                             uint64_t a2, uint64_t a3);
+int64_t w32_fill_rect(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                      uint64_t a2, uint64_t a3);
+int64_t w32_frame_rect(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                       uint64_t a2, uint64_t a3);
+int64_t w32_set_pixel(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                      uint64_t a2, uint64_t a3);
+int64_t w32_get_device_caps(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                            uint64_t a2, uint64_t a3);
+
 #endif

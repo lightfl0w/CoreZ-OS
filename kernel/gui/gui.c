@@ -23,6 +23,11 @@ extern const unsigned char _binary_wallpaper_png_end[];
 #define FONT_DISK_MAX (6u * 1024u * 1024u)
 #define WALLPAPER_DISK_MAX (16u * 1024u * 1024u)
 static int running = 0;
+static int ready = 0;
+
+int gui_session_ready(void) {
+    return ready;
+}
 
 static void load_embedded_font(void) {
     int len = (int)(_binary_font_kernel_ttf_end -
@@ -114,6 +119,7 @@ int gui_session_run(void) {
     if (running)
         return -1;
     running = 1;
+    ready = 0;
 
     asm_sti();
 
@@ -143,6 +149,7 @@ int gui_session_run(void) {
     x11_server_start();
     clients_spawn_initial();
 
+    ready = 1;
     comp_run();
     kprintf("gui: session ended\n");
     mtime_sleep(150);
@@ -152,6 +159,7 @@ int gui_session_run(void) {
     io_set_gui_active(0);
     io_clear_screen();
 
+    ready = 0;
     running = 0;
     return 0;
 }

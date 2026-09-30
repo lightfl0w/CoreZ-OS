@@ -42,7 +42,7 @@ FILES = [
     "futex_bs_probe.elf",
     "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
     "t.fish", "shell.elf",
-    "wallpaper.png", "pic1.png", "pic2.png", "win_main.exe"
+    "wallpaper.png", "pic1.png", "pic2.png", "win_main.exe", "win_gui.exe"
 ]
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
 SPECIAL_MODES = {"suidsh": 0x81ED | 0o4000}
