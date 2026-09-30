@@ -29,7 +29,6 @@ def _force_utf8_stdout() -> None:
                 pass
 _force_utf8_stdout()
 ROOT       = Path(__file__).resolve().parent
-BOOT_DIR   = ROOT / "arch" / "x86" / "boot"
 APPS_DIR   = ROOT / "apps"
 KERNEL_DIR = ROOT / "kernel"
 BUILD_DIR  = ROOT / "build"
@@ -41,6 +40,7 @@ AUTOCONF_H    = BUILD_DIR / "config" / "autoconf.h"
 
 ARCH_PROFILES = {
     "x86_64": {
+        "arch_dir": "arch/x86",
         "musl_arch": "x86_64",
         "freestanding_key": "x86_64-freestanding",
         "freestanding_triple": "x86_64-unknown-none",
@@ -67,10 +67,38 @@ ARCH_PROFILES = {
             "x86_64-linux-gnu":    "x86_64-unknown-linux-gnu",
         },
     },
+    "aarch64": {
+        "arch_dir": "arch/arm64",
+        "musl_arch": "aarch64",
+        "freestanding_key": "aarch64-freestanding",
+        "freestanding_triple": "aarch64-unknown-none",
+        "rust_triple": "aarch64-unknown-linux-musl",
+        "kernel_arch_cflags": ["-mgeneral-regs-only", "-mno-outline-atomics"],
+        "ld_emulation": "aarch64elf",
+        "kernel_linker_script": "linker/kernel.ld",
+        "user_dyn_linker_script": "linker/user_dyn.ld",
+        "nasm_elf_format": "elf64",
+        "uefi_clang_target": "aarch64-unknown-windows",
+        "uefi_nasm_format": "win64",
+        "uefi_linker": "lld-link",
+        "ovmf_dir": "/usr/share/edk2-ovmf/aarch64",
+        "objcopy_tramp_fmt": "elf64-littleaarch64",
+        "objcopy_tramp_arch": "aarch64",
+        "qemu_system": "qemu-system-aarch64",
+        "clang_musl_target": "aarch64-linux-musl",
+        "musl_loader": "ld-musl-aarch64.so.1",
+        "cargo_cc_var": "CC_aarch64_unknown_linux_musl",
+        "clang_triples": {
+            "aarch64-freestanding": "aarch64-unknown-none",
+            "aarch64-linux-musl":   "aarch64-linux-musl",
+            "aarch64-linux-gnu":    "aarch64-unknown-linux-gnu",
+        },
+    },
 }
 DEFAULT_ARCH_KEY = "x86_64"
 ARCH_KEYS = {
     "CONFIG_ARCH_X86_64": "x86_64",
+    "CONFIG_ARCH_AARCH64": "aarch64",
 }
 
 
@@ -106,6 +134,8 @@ FREESTANDING_KEY = ARCH["freestanding_key"]
 
 CLANG_TRIPLES = ARCH["clang_triples"]
 CLANG_DEFAULT_TRIPLE = ARCH["freestanding_triple"]
+ARCH_DIR   = ROOT / ARCH["arch_dir"]
+BOOT_DIR   = ARCH_DIR / "boot"
 CLANG_FREESTANDING_FLAGS = ["-nostdlibinc"]
 CC_CLANG_CANDIDATES = ("clang", "clang-22", "clang-21", "clang-20", "clang-19",
                        "clang-18", "clang-17")
@@ -562,12 +592,12 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     for stem in ("func", "io", "stub", "entry", "switch", "idle", "mb2_entry"):
         tasks.append(task_assemble_elf64(
             f"{stem}.o",
-            ROOT / "arch" / "x86" / "asm" / f"{stem}.asm",
+            ARCH_DIR / "asm" / f"{stem}.asm",
             BUILD_DIR / f"{stem}.o", tools,
         ))
     tasks.append(task_assemble_bin(
         "ap_trampoline.bin",
-        ROOT / "arch" / "x86" / "asm" / "ap_trampoline.asm",
+        ARCH_DIR / "asm" / "ap_trampoline.asm",
         BUILD_DIR / "ap_trampoline.bin", tools))
     tasks.append(task_objcopy_binary(
         "ap_tramp.o", BUILD_DIR / "ap_trampoline.bin",
@@ -583,8 +613,9 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("pic.o",        KERNEL_DIR / "init" / "pic" / "pic.c"),
         ("apic.o",       KERNEL_DIR / "init" / "apic" / "apic.c"),
         ("acpi.o",     KERNEL_DIR / "init" / "acpi" / "acpi.c"),
-        ("idt.o",        ROOT / "arch" / "x86" / "interrupt" / "idt.c"),
-        ("interrupt.o",  ROOT / "arch" / "x86" / "interrupt" / "interrupt.c"),
+        ("idt.o",        ARCH_DIR / "interrupt" / "idt.c"),
+        ("interrupt.o",  ARCH_DIR / "interrupt" / "interrupt.c"),
+        ("early.o",      ARCH_DIR / "early.c"),
         ("kernel.o",     KERNEL_DIR / "init" / "main.c"),
         ("mb2.o",        KERNEL_DIR / "init" / "mb2.c"),
         ("assert.o",     KERNEL_DIR / "init" / "assert.c"),
@@ -910,7 +941,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     ))
     kernel_objs_names = [
         "mb2_entry.o", "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
-        "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
+        "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "early.o", "pic.o",
         "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
@@ -956,7 +987,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     ))
 
     if CONFIG.get("CONFIG_UEFI") == "y":
-        uefi_dir = ROOT / "arch" / "x86" / "uefi"
+        uefi_dir = ARCH_DIR / "uefi"
         bootx64 = BUILD_DIR / "BOOTX64.EFI"
         esp_img = BUILD_DIR / "esp.img"
         uefi_enabled = tools.kind == "clang" and bool(tools.lld_link)

@@ -1,3 +1,6 @@
+#ifndef ARCH_X86_INTERRUPT_IDT_H
+#define ARCH_X86_INTERRUPT_IDT_H
+
 #include <stdint.h>
 
 struct IDT_ENTRY {
@@ -19,3 +22,5 @@ extern struct IDT_ENTRY idt[256];
 void idt_init(void);
 void idt_load_idtr(void);
 void idt_syscall_init(void);
+
+#endif
