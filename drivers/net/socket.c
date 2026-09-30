@@ -303,9 +303,20 @@ int net_send(int fd, const void *buf, uint32_t len) {
     }
     lock_release(&net_lock);
 
-    if (sock_block(s, SWAIT_SEND, SOCK_CONNECT_TMO))
-        return -1;
-    return tcp_send(s->pcb, buf, len);
+    uint32_t sent = 0;
+    const uint8_t *p = (const uint8_t *)buf;
+    while (sent < len) {
+        uint32_t chunk = len - sent;
+        if (chunk > TCP_SND_BUF)
+            chunk = TCP_SND_BUF;
+        if (sock_block(s, SWAIT_SEND, SOCK_CONNECT_TMO))
+            return sent ? (int)sent : -1;
+        int n = tcp_send(s->pcb, p + sent, chunk);
+        if (n <= 0)
+            return sent ? (int)sent : -1;
+        sent += (uint32_t)n;
+    }
+    return (int)sent;
 }
 
 int net_recv(int fd, void *buf, uint32_t len) {
