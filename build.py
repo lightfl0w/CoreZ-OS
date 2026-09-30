@@ -51,6 +51,10 @@ ARCH_PROFILES = {
         "user_linker_script": "linker/user.ld",
         "user_dyn_linker_script": "linker/user_dyn.ld",
         "nasm_elf_format": "elf64",
+        "uefi_clang_target": "x86_64-unknown-windows",
+        "uefi_nasm_format": "win64",
+        "uefi_linker": "lld-link",
+        "ovmf_dir": "/usr/share/edk2-ovmf/x64",
         "objcopy_tramp_fmt": "elf64-x86-64",
         "objcopy_tramp_arch": "i386:x86-64",
         "qemu_system": "qemu-system-x86_64",
@@ -129,6 +133,9 @@ UP_LDFLAGS_64 = ["-s", "-m", ARCH["ld_emulation"],
                  "-e", "_start", "-static", "-pie", "--no-dynamic-linker",
                  "-z", "pack-relative-relocs"]
 MUSL64_BASE = FREE + ["-fPIE"]
+UEFI_CFLAGS = FREE + ["-fno-stack-protector", "-fshort-wchar", "-mno-red-zone",
+                      "-nostdlibinc", "-Wall", "-Wextra", "-Wconversion",
+                      "-Wno-unused-parameter", *INCS]
 
 MUSL_PREFIX = BUILD_DIR / "musl"
 MUSL_INC   = MUSL_PREFIX / "include"
@@ -198,6 +205,7 @@ class Tools:
     kind:    str = "clang"
     kcc:     List[str] = field(default_factory=list)
     kcc_kind: str = "clang"
+    lld_link: str = ""
 _LLVM_BIN_DIR_CACHE: Optional[List[str]] = None
 def _llvm_bin_dirs() -> List[str]:
     global _LLVM_BIN_DIR_CACHE
@@ -244,6 +252,10 @@ def _resolve_cc() -> Tuple[List[str], str]:
     )
 def detect_tools() -> Tools:
     cc, kind = _resolve_cc()
+    try:
+        lld_link = _find("lld-link", [ARCH["uefi_linker"], "lld-link"])
+    except FileNotFoundError:
+        lld_link = ""
     return Tools(
         nasm    = _find("nasm",    ["nasm"]),
         cc      = cc,
@@ -253,6 +265,7 @@ def detect_tools() -> Tools:
         kind    = kind,
         kcc     = cc,
         kcc_kind = kind,
+        lld_link = lld_link,
     )
 @dataclass
 class CmdResult:
@@ -492,6 +505,31 @@ def task_python(name: str, script: Path, args: Sequence[str],
         cmd=[sys.executable, str(script), *args],
         out=out, deps=[], description=str(script.name), group="python",
     )
+def task_nasm_uefi(name: str, src: Path, out: Path, tools: Tools) -> Task:
+    return Task(
+        name=name,
+        cmd=[tools.nasm, "-f", ARCH["uefi_nasm_format"], str(src), "-o", str(out)],
+        out=out, deps=[], description=str(src.relative_to(ROOT)), group="uefi",
+    )
+def task_cc_uefi(name: str, src: Path, out: Path, tools: Tools,
+                 flags: List[str]) -> Task:
+    cmd = [*tools.cc, f"--target={ARCH['uefi_clang_target']}", *flags,
+           "-c", str(src), "-o", str(out)]
+    COMPILE_COMMANDS.append({
+        "directory": str(ROOT),
+        "arguments": cmd,
+        "file": str(src),
+    })
+    return Task(
+        name=name, cmd=cmd, out=out, deps=[],
+        description=str(src.relative_to(ROOT)), group="uefi",
+    )
+def task_link_uefi(name: str, out: Path, tools: Tools,
+                   objs: Sequence[Path]) -> Task:
+    cmd = [tools.lld_link, "/subsystem:efi_application", "/entry:efi_entry",
+           "/nodefaultlib", f"/out:{out}", *map(str, objs)]
+    return Task(name=name, cmd=cmd, cwd=BUILD_DIR, out=out, deps=[],
+                description=f"link → {out.name} (UEFI PE)", group="uefi")
 def _musl_buildenv(tools: Tools) -> Optional[dict]:
     if os.name == "nt":
         return None
@@ -523,7 +561,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                           BOOT_DIR / "vbr.asm", BUILD_DIR / "vbr.bin", tools))
     tasks.append(task_assemble_bin("loader.bin",
                           BOOT_DIR / "loader.asm", BUILD_DIR / "loader.bin", tools))
-    for stem in ("func", "io", "stub", "entry", "switch", "idle"):
+    for stem in ("func", "io", "stub", "entry", "switch", "idle", "mb2_entry"):
         tasks.append(task_assemble_elf64(
             f"{stem}.o",
             ROOT / "arch" / "x86" / "asm" / f"{stem}.asm",
@@ -557,6 +595,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("rand.o",       ROOT / "lib" / "rand" / "rand.c"),
         ("rbtree.o",     ROOT / "lib" / "rbtree" / "rbtree.c"),
         ("png.o",        ROOT / "lib" / "png" / "png.c"),
+        ("ttf.o",        ROOT / "lib" / "ttf" / "ttf.c"),
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
@@ -584,6 +623,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("tss.o",        KERNEL_DIR / "init" / "tss" / "tss.c"),
         ("process.o",    KERNEL_DIR / "userprog" / "process.c"),
         ("exec.o",       KERNEL_DIR / "userprog" / "exec.c"),
+        ("pe.o",         KERNEL_DIR / "userprog" / "pe.c"),
         ("pipe.o",       KERNEL_DIR / "shell" / "pipe.c"),
         ("ksyscall.o",   KERNEL_DIR / "syscall" / "syscall.c"),
         ("signal.o",     KERNEL_DIR / "syscall" / "signal.c"),
@@ -594,6 +634,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("linux_compat_io.o", KERNEL_DIR / "syscall" / "linux_compat_io.c"),
         ("linux_compat_fs.o", KERNEL_DIR / "syscall" / "linux_compat_fs.c"),
         ("linux_compat_proc.o", KERNEL_DIR / "syscall" / "linux_compat_proc.c"),
+        ("win32.o",      KERNEL_DIR / "syscall" / "win32.c"),
+        ("win32_gdi.o",  KERNEL_DIR / "syscall" / "win32_gdi.c"),
         ("usyscall.o",   ROOT / "libc" / "user" / "syscall.c"),
         ("ustdio.o",     ROOT / "libc" / "user" / "stdio.c"),
         ("wait_exit.o",  KERNEL_DIR / "userprog" / "wait_exit.c"),
@@ -756,6 +798,32 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     tasks.append(gui_elf)
     user_elves.append(gui_elf)
 
+    mingw = shutil.which("x86_64-w64-mingw32-gcc")
+    if mingw:
+        win_src = APPS_DIR / "win_main.c"
+        win_exe = BUILD_DIR / "win_main.exe"
+        win_task = Task(
+            name="win_main.exe",
+            cmd=[mingw, str(win_src), "-o", str(win_exe)],
+            out=win_exe, deps=[win_src],
+            optional=True, group="link",
+            description="link win_main.exe (mingw PE32+ win32)",
+        )
+        tasks.append(win_task)
+        user_elves.append(win_task)
+
+        gui_src = APPS_DIR / "win_gui.c"
+        gui_exe = BUILD_DIR / "win_gui.exe"
+        gui_task = Task(
+            name="win_gui.exe",
+            cmd=[mingw, str(gui_src), "-o", str(gui_exe), "-lgdi32", "-luser32"],
+            out=gui_exe, deps=[gui_src],
+            optional=True, group="link",
+            description="link win_gui.exe (mingw PE32+ win32 gdi)",
+        )
+        tasks.append(gui_task)
+        user_elves.append(gui_task)
+
     zig = shutil.which("zig")
     cxx = shutil.which("clang++")
     if zig or cxx:
@@ -843,16 +911,16 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         description="embed wallpaper.png", group="objcopy",
     ))
     kernel_objs_names = [
-        "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
+        "mb2_entry.o", "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
-        "gdt.o", "tss.o", "process.o", "exec.o",
+        "gdt.o", "tss.o", "process.o", "exec.o", "pe.o",
         "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
-        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "signal.o", "file_syscall.o",
+        "linux_compat.o", "linux_compat_io.o", "linux_compat_fs.o", "linux_compat_proc.o", "win32.o", "win32_gdi.o", "signal.o", "file_syscall.o",
         "usyscall.o", "ustdio.o", "wait_exit.o", "fork.o", "clone.o",
         "lc_clone.o",
         "mouse.o", "gfx.o", "gpu.o", "display.o", "input.o", "udi.o",
@@ -866,10 +934,11 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     ]
     kernel_link_objs = [BUILD_DIR / n for n in kernel_objs_names]
     kernel_elf = BUILD_DIR / "kernel.elf"
-    tasks.append(task_link(
+    kernel_link_task = task_link(
         "kernel.elf", kernel_elf, tools, kernel_link_objs,
         script=ROOT / ARCH["kernel_linker_script"],
-    ))
+    )
+    tasks.append(kernel_link_task)
     kernel_bin = BUILD_DIR / "kernel.bin"
     tasks.append(Task(
         name="kernel.bin",
@@ -887,6 +956,26 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
          str(floppy_img)],
         out=floppy_img,
     ))
+
+    if CONFIG.get("CONFIG_UEFI") == "y":
+        uefi_dir = ROOT / "arch" / "x86" / "uefi"
+        bootx64 = BUILD_DIR / "BOOTX64.EFI"
+        esp_img = BUILD_DIR / "esp.img"
+        uefi_enabled = tools.kind == "clang" and bool(tools.lld_link)
+        uefi_entry = task_nasm_uefi("uefi_entry.obj", uefi_dir / "entry.asm",
+                                    BUILD_DIR / "uefi_entry.obj", tools)
+        uefi_main = task_cc_uefi("uefi_main.obj", uefi_dir / "main.c",
+                                 BUILD_DIR / "uefi_main.obj", tools, UEFI_CFLAGS)
+        uefi_efi = task_link_uefi("BOOTX64.EFI", bootx64, tools,
+                                  [BUILD_DIR / "uefi_entry.obj",
+                                   BUILD_DIR / "uefi_main.obj"])
+        uefi_esp = task_python("esp.img", SCRIPTS / "mkesp.py",
+                               [str(BUILD_DIR), str(esp_img)], out=esp_img)
+        uefi_esp.description = "mkesp.py → esp.img"
+        uefi_esp.deps = [bootx64, kernel_elf]
+        for t in (uefi_entry, uefi_main, uefi_efi, uefi_esp):
+            t.optional = not uefi_enabled
+        tasks.extend((uefi_entry, uefi_main, uefi_efi, uefi_esp))
 
     musl_env = _musl_buildenv(tools) if with_musl_lib else None
     plan_musl_enabled = musl_env is not None
@@ -1264,7 +1353,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
         return f"({seconds/60:.1f}min)"
     def c_dim(s: str) -> str:
         return f"{console._c(Ansi.DIM)}{console._c(Ansi.GRAY)}{s}{console._c(Ansi.RESET)}"
-    total_steps = 13
+    total_steps = 13 + (1 if any(t.group == "uefi" for t in plan.tasks) else 0)
     s = 1
     console.step_header(s, total_steps, "Resolving Kconfig")
     for t in (t for t in plan.tasks if t.name == "kconfig"):
@@ -1279,7 +1368,7 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
     console.step_header(s, total_steps, "Compiling kernel assembly")
     asm_kern = [t for t in plan.tasks if t.group == "asm" and t.name in
                 ("func.o", "io.o", "stub.o", "entry.o", "switch.o", "idle.o",
-                 "ap_trampoline.bin")]
+                 "mb2_entry.o", "ap_trampoline.bin")]
     for t in asm_kern:
         run_task(t)
         console.ok(f"{t.description}  {c_dim(fmt_dur(stats.timings[t.name][0]))}")
@@ -1397,6 +1486,14 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
     dur = time.perf_counter() - t0
     console.ok(f"build/floppy.img  {c_dim(fmt_dur(dur))}")
     s += 1
+    uefi_tasks = [t for t in plan.tasks
+                  if t.group == "uefi" or t.name == "esp.img"]
+    if uefi_tasks:
+        console.step_header(s, total_steps, "Building UEFI bootloader")
+        with console.progress(len(uefi_tasks), "UEFI", Ansi.BR_MAG) as update:
+            for i, t in enumerate(uefi_tasks, 1):
+                run_task(t)
+                update(i, t.description)
     stats.timings["__total__"] = (time.perf_counter() - overall_t0, "overall")
     return stats
 def show_failure_hint(console: Console, missing: List[str]) -> None:
@@ -1468,9 +1565,22 @@ def restamp_build_env(tools: Tools, console: Console) -> None:
         do_clean(console)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_ENV_STAMP.write_text(fingerprint + "\n", encoding="utf-8")
+def _find_ovmf() -> Optional[Tuple[Path, Path]]:
+    dirs = [ARCH.get("ovmf_dir"), "/usr/share/OVMF", "/usr/share/edk2/x64",
+            "/usr/share/edk2-ovmf/x64", "/usr/share/ovmf/x64"]
+    for d in dirs:
+        if not d:
+            continue
+        base = Path(d)
+        for cn in ("OVMF_CODE.4m.fd", "OVMF_CODE.fd"):
+            for vn in ("OVMF_VARS.4m.fd", "OVMF_VARS.fd"):
+                code, vars_src = base / cn, base / vn
+                if code.exists() and vars_src.exists():
+                    return code, vars_src
+    return None
 def do_run(console: Console, stats: BuildStats,
            smp: int, gdb: bool, no_net: bool, boot_floppy: bool,
-           kvm: bool) -> None:
+           kvm: bool, uefi: bool = False) -> None:
     qemu = shutil.which(ARCH["qemu_system"])
     if qemu is None:
         console.warn(f"{ARCH['qemu_system']} not found on PATH; build is up-to-date.")
@@ -1480,6 +1590,41 @@ def do_run(console: Console, stats: BuildStats,
         console.warn("未找到 /dev/kvm, KVM 不可用 (需 Linux/WSL2 且开启嵌套虚拟化); "
                      "回退 TCG 软件模拟")
         kvm = False
+    if uefi:
+        ovmf = _find_ovmf()
+        if ovmf is None:
+            console.warn("未找到 OVMF 固件 (OVMF_CODE/OVMF_VARS); "
+                         "无法以 UEFI 引导")
+            return
+        code, vars_src = ovmf
+        esp = BUILD_DIR / "esp.img"
+        if not esp.exists():
+            console.warn(f"{esp} 不存在; 请确认 CONFIG_UEFI=y 且构建成功")
+            return
+        hd_img = BUILD_DIR / "test_hd.img"
+        mkdisk = SCRIPTS / "make_ext2.py"
+        if mkdisk.exists():
+            console.info("generating test_hd.img via make_ext2.py")
+            run([sys.executable, str(mkdisk), str(BUILD_DIR), str(hd_img)])
+        vars_dst = BUILD_DIR / "OVMF_VARS.fd"
+        shutil.copyfile(vars_src, vars_dst)
+        cmd = [qemu, "-machine", "pc", "-accel", "tcg,tb-size=256", "-m", "1G",
+               "-smp", str(max(1, smp)), "-vga", "std",
+               "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
+               "-drive", f"if=pflash,format=raw,unit=1,file={vars_dst}",
+               "-hda", str(esp), "-hdb", str(hd_img),
+               "-debugcon", "stdio", "-display", "gtk,zoom-to-fit=off"]
+        if gdb:
+            cmd += ["-s", "-S"]
+        console.writeln()
+        console.writeln(f"  {console._c(Ansi.BR_GRN)}▶ launching qemu..."
+                        f"{'（SMP' if smp > 1 else ''}"
+                        f"{' · OVMF/UEFI' if uefi else ''}"
+                        f"{' · GDB 等待' if gdb else ''}"
+                        f"{console._c(Ansi.RESET)}")
+        console.writeln()
+        subprocess.run(cmd)
+        return
     if kvm:
         console.info("KVM 加速已启用 (-enable-kvm -cpu host), 可在 ring0 测 MWAIT")
         cmd = [qemu, "-enable-kvm", "-cpu", "host", "-m", "1G",
@@ -1536,6 +1681,12 @@ def main(argv: Sequence[str]) -> int:
                         help="不挂虚拟网卡/后端(默认挂 e1000 + user 后端)")
     parser.add_argument("--boot-floppy", action="store_true",
                         help="以 floppy.img 作为引导软盘(-fda); 默认用 test_hd.img(-hda)")
+    parser.add_argument("--uefi", action="store_true",
+                        help="以 OVMF + esp.img 走 UEFI 引导(需 CONFIG_UEFI=y "
+                             "且已生成 build/esp.img)")
+    parser.add_argument("--bios", action="store_true",
+                        help="强制走传统 BIOS 链(test_hd.img + boot.bin/loader.bin); "
+                             "默认在 CONFIG_UEFI=y 且 build/esp.img 存在时走 UEFI")
     parser.add_argument("--kvm", action="store_true",
                         help="启用 KVM 硬件加速(-enable-kvm -cpu host), 用于测试 "
                              "需在 ring0 执行的 MWAIT 等真实 CPU 特性(需 Linux/WSL2)")
@@ -1589,21 +1740,45 @@ def main(argv: Sequence[str]) -> int:
         if seconds < 10:
             return f"({seconds:.2f}s)"
         return f"({seconds/60:.1f}min)"
-    console.summary([
-        ("artefacts",   f"floppy.img · kernel.bin · kernel.elf", Ansi.BR_WHT),
+    uefi_esp = BUILD_DIR / "esp.img"
+    artefacts = "floppy.img · kernel.bin · kernel.elf"
+    if uefi_esp.exists():
+        artefacts += " · BOOTX64.EFI · esp.img"
+    rows = [
+        ("artefacts",   artefacts,                                Ansi.BR_WHT),
         ("floppy size", human_size(floppy),                       Ansi.BR_CYN),
         ("kernel size", human_size(kernel),                       Ansi.BR_CYN),
         ("kernel.elf",  human_size(elf),                          Ansi.BR_CYN),
+    ]
+    if uefi_esp.exists():
+        rows.append(("esp size", human_size(uefi_esp), Ansi.BR_CYN))
+    rows += [
         ("compiled",    str(stats.compiled),                      Ansi.BR_GRN),
         ("cached",      str(stats.cache_hit),                     Ansi.BR_YEL),
         ("failed",      str(stats.failed),                        Ansi.BR_RED if stats.failed else Ansi.GRAY),
         ("total",       fmt_dur(total_dur),                       Ansi.BR_WHT),
-    ])
+    ]
+    console.summary(rows)
     console.writeln(f"  {console._c(Ansi.GREEN)}{console._c(Ansi.BOLD)}"
                     f"✔  build complete{console._c(Ansi.RESET)}")
     console.writeln()
     if args.target == "run":
-        do_run(console, stats, args.sm, args.gdb, args.no_net, args.boot_floppy, args.kvm)
+        esp_img = BUILD_DIR / "esp.img"
+        use_uefi = args.uefi or (
+            not args.bios
+            and not args.boot_floppy
+            and CONFIG.get("CONFIG_UEFI") == "y"
+            and esp_img.exists()
+        )
+        if args.uefi and not esp_img.exists():
+            console.warn("--uefi 已指定，但 build/esp.img 不存在；"
+                         "请确认 CONFIG_UEFI=y 且构建成功。")
+        if args.uefi and _find_ovmf() is None:
+            console.warn("--uefi 已指定，但未找到 OVMF 固件；无法以 UEFI 引导。")
+        mode = "UEFI (OVMF + esp.img)" if use_uefi else "BIOS (boot.bin/loader.bin)"
+        console.info(f"boot mode: {mode}")
+        do_run(console, stats, args.sm, args.gdb, args.no_net, args.boot_floppy,
+               args.kvm, use_uefi)
     return 0
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

@@ -819,21 +819,54 @@ int ext2_read_from_inode(const struct FS_INODE *ino, uint32_t off, void *buf,
 }
 
 #define EXT2_READ_BLOCKS 32u
+#define EXT2_STREAM_MIN 65536u
+#define EXT2_STREAM_BLOCKS 128u
 
 static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
                                      void *buf, uint32_t count) {
+    uint32_t done = 0;
+
     if (ino->i_no == 0 || off >= ino->i_size) {
         return 0;
     }
     if (off + count > ino->i_size) {
         count = ino->i_size - off;
     }
+    if (count >= EXT2_STREAM_MIN && (off % bs) == 0) {
+        uint32_t limit = count - (count % bs);
+        while (done < limit) {
+            uint32_t fblk = (off + done) / bs;
+            uint32_t maxb = (limit - done) / bs;
+            uint32_t addr = 0;
+            uint32_t run = 1;
+            if (maxb > EXT2_STREAM_BLOCKS) {
+                maxb = EXT2_STREAM_BLOCKS;
+            }
+            if (ext2_map_block(ino, fblk, &addr)) {
+                break;
+            }
+            while (run < maxb) {
+                uint32_t next = 0;
+                if (ext2_map_block(ino, fblk + run, &next)) {
+                    break;
+                }
+                if (next != addr + run) {
+                    break;
+                }
+                run++;
+            }
+            ext2_read_blocks(addr, run, (uint8_t *)buf + done);
+            done += run * bs;
+        }
+        if (done >= count) {
+            return (int)done;
+        }
+    }
     uint32_t pages = DIV_ROUND_UP(EXT2_READ_BLOCKS * bs, PAGE_SIZE);
     uint8_t *blk = (uint8_t *)get_kernel_pages(pages);
     if (blk == NULL) {
-        return 0;
+        return (int)done;
     }
-    uint32_t done = 0;
     while (done < count) {
         uint32_t pos = off + done;
         uint32_t fblk = pos / bs;

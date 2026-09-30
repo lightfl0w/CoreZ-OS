@@ -98,6 +98,19 @@ asm_lgdt:
         lgdt    [rdi]
         ret
 
+global asm_reload_segments
+asm_reload_segments:
+        push    qword 0x08
+        lea     rax, [rel .reload]
+        push    rax
+        retfq
+.reload:
+        mov     ax, 0x10
+        mov     ds, ax
+        mov     es, ax
+        mov     ss, ax
+        ret
+
 global asm_ltr
 asm_ltr:
         mov     ax, di

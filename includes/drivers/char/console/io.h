@@ -3,8 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FONT_BASE ((const uint8_t *)0x9C000)
-
 void io_init(uint8_t *vram, int scrnx, int scrny, uint32_t vram_bytes,
              int pitch, int bpp);
 void set_text_color(int color);

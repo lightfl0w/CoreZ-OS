@@ -276,9 +276,9 @@ void mm_init(void) {
             }
         }
     }
-    mark_used(0x200000, 0x400000 - 0x200000);
-    mark_used(0x400000,
-              (uint32_t)((uintptr_t)&_kernel_phys_end) - 0x400000);
+    uint32_t shadow_end = (uint32_t)(((uintptr_t)&_kernel_phys_end + 0x1FFFFFu) &
+                                     ~(uintptr_t)0x1FFFFFu);
+    mark_used(0x200000, shadow_end - 0x200000);
     mark_used(PER_CPU_BASE, NR_CPU * PAGE_SIZE);
     {
         uint32_t pool_pages = kernel_pool.pool_size / PAGE_SIZE;

@@ -17,6 +17,7 @@ struct EXEC_IMAGE {
     int32_t app_entry;
     int is64;
     int is_linux;
+    int is_pe;
     int has_interp;
     uint32_t phdr_vaddr;
     uint32_t phentsize;
@@ -24,6 +25,7 @@ struct EXEC_IMAGE {
     uint32_t bias;
     uint32_t base;
     uint32_t brk_base;
+    uint32_t pe_rt;
 };
 
 int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
