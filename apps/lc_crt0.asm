@@ -38,13 +38,17 @@ _lc_start:
 ; 入参: rdi=nr, rsi=a, rdx=b, rcx=c, r8=d, r9=e, [rsp+8]=f
 global __lc_syscall6
 __lc_syscall6:
+    push    rbx                
+    push    rbp               
     mov     rax, rdi            ; rax = nr
     mov     rbx, rsi            ; rbx = a
     xchg    rcx, rdx            ; rcx = b, rdx = c (xchg 避免 rcx 被先覆盖)
     mov     rsi, r8             ; rsi = d
     mov     rdi, r9             ; rdi = e
-    mov     rbp, [rsp + 8]      ; rbp = f
+    mov     rbp, [rsp + 24]     ; rbp = f
     int     0x80
+    pop     rbp
+    pop     rbx
     ret
 
 section .data

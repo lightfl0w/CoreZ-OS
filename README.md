@@ -153,7 +153,7 @@ python3 build.py clean
 ```
 
 `run` 默认以 `build/test_hd.img` 硬盘镜像引导（自动生成：P1 FAT32 引导分区 +
-P2 ext2 数据分区，并写入用户程序）；`--boot-floppy` 可改用软盘镜像。
+P2 ext4 数据分区，并写入用户程序）；`--boot-floppy` 可改用软盘镜像。
 `CONFIG_MUSL_LIB=y` 会额外编译完整 musl libc 并构建 libc-testsuite。
 
 ### 运行
@@ -201,10 +201,10 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 - [x] 内存管理：物理池、内核虚拟地址池、ioremap、用户地址空间
 - [x] 进程：线程/进程、抢占调度、COW fork、clone、exec（ELF32/64）、wait/孤儿回收
 - [x] 同步：信号量、可重入锁、futex、信号
-- [x] 文件系统：ext2（读写）、/proc、管道、dup/fd 引用计数
+- [x] 文件系统：ext2/ext4（读写）、/proc、管道、dup/fd 引用计数
 - [x] 网络：e1000 + ARP/IP/ICMP/TCP/UDP + socket API
 - [x] GUI 合成器、shell 与用户程序集
 - [x] musl 构建选项
-- [ ] 修复 fork 子进程 SIGSEGV（见已知问题）
+- [x] 修复 fork 子进程 SIGSEGV（lc compat shim 未保存 callee-saved rbx/rbp）
 - [ ] 内核堆分配器（malloc 形态的细粒度分配）
 - [ ] 多核调度（AP 目前仅验证可启动，未参与调度）

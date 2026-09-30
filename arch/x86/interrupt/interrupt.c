@@ -110,128 +110,6 @@ void isr_handler(struct ARCH_REGS *r) {
             uint64_t cr2f = 0;
             if (sig == SIGSEGV) {
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2f));
-                kprintf("[user-segv] pid=%d vec=%d err=%x rip=%x bias=%x "
-                        "off=%x cr2=%x%08x rsi=%x rdi=%x rax=%x rsp=%x\n",
-                        current->pid, (int)n, (uint32_t)r->err_code,
-                        (uint32_t)r->eip, current->exe_bias,
-                        (uint32_t)r->eip - current->exe_bias,
-                        (uint32_t)(cr2f >> 32), (uint32_t)cr2f,
-                        (uint32_t)r->rsi, (uint32_t)r->rdi, (uint32_t)r->rax,
-                        (uint32_t)r->user_rsp);
-                kprintf("[segv-reg] r12=%x r13=%x r14=%x r15=%x rbx=%x "
-                        "rbp=%x rdx=%x\n",
-                        (uint32_t)r->r12, (uint32_t)r->r13, (uint32_t)r->r14,
-                        (uint32_t)r->r15, (uint32_t)r->rbx, (uint32_t)r->rbp,
-                        (uint32_t)r->rdx);
-                {
-                    uint32_t self = (uint32_t)r->r12;
-                    if (self >= USER_VADDR_START &&
-                        user_range_readable(self + 0x40, 0x90)) {
-                        kprintf("[segv-self] start=%x count=%x la0=%x %x %x %x "
-                                "la1=%x %x %x %x\n",
-                                *(const uint32_t *)(uintptr_t)(self + 0xb8),
-                                *(const uint32_t *)(uintptr_t)(self + 0xc0),
-                                *(const uint32_t *)(uintptr_t)(self + 0x48),
-                                *(const uint32_t *)(uintptr_t)(self + 0x4c),
-                                *(const uint32_t *)(uintptr_t)(self + 0x50),
-                                *(const uint32_t *)(uintptr_t)(self + 0x54),
-                                *(const uint32_t *)(uintptr_t)(self + 0x58),
-                                *(const uint32_t *)(uintptr_t)(self + 0x5c),
-                                *(const uint32_t *)(uintptr_t)(self + 0x60),
-                                *(const uint32_t *)(uintptr_t)(self + 0x64));
-                    }
-                }
-                {
-                    extern int page_is_mapped(uint32_t v);
-                    uint32_t tpage = ((uint32_t)r->user_rsp + 0x70) & ~0xfffu;
-                    uint32_t rpage = (uint32_t)r->user_rsp & ~0xfffu;
-                    uint32_t nz = 0;
-                    uint32_t nzr = 0;
-                    if (tpage >= USER_VADDR_START &&
-                        user_range_readable(tpage, 0x1000)) {
-                        for (uint32_t w = 0; w < 0x1000; w += 4) {
-                            if (*(const uint32_t *)(uintptr_t)(tpage + w) != 0)
-                                nz++;
-                        }
-                    }
-                    if (rpage >= USER_VADDR_START && tpage != rpage &&
-                        user_range_readable(rpage, 0x1000)) {
-                        for (uint32_t w = 0; w < 0x1000; w += 4) {
-                            if (*(const uint32_t *)(uintptr_t)(rpage + w) != 0)
-                                nzr++;
-                        }
-                    }
-                    kprintf("[segv-pg] tokpg=%x nz=%u/%u mapped=%d rsp=%x "
-                            "pg=%x nz=%u\n",
-                            tpage, nz, 1024u, page_is_mapped(tpage),
-                            (uint32_t)r->user_rsp, rpage, nzr);
-                }
-                {
-                    uint32_t tk = (uint32_t)r->r12 + 0x68;
-                    if (tk >= USER_VADDR_START &&
-                        user_range_readable(tk, 0x40)) {
-                        uint32_t tp = *(const uint32_t *)(uintptr_t)(tk + 0x10);
-                        uint32_t tl = *(const uint32_t *)(uintptr_t)(tk + 0x18);
-                        uint32_t tc = *(const uint32_t *)(uintptr_t)(tk + 0x30);
-                        uint32_t hn = *(const uint32_t *)(uintptr_t)(tk + 0x38);
-                        kprintf("[segv-tokr] tp=%x tl=%u tc=%x hn=%x\n", tp, tl,
-                                tc, hn);
-                        if (tp >= USER_VADDR_START && tl > 0 && tl < 512 &&
-                            user_range_readable(tp, 4 * tl)) {
-                            kprintf("[segv-src]");
-                            for (uint32_t j = 0; j < tl && j < 40; j++) {
-                                kprintf(" %x",
-                                        *(const uint32_t *)(uintptr_t)(tp +
-                                                                       4 * j));
-                            }
-                            kprintf("\n");
-                        }
-                    }
-                }
-                {
-                    uint32_t s2 = (uint32_t)r->r12 + 0x30;
-                    if (s2 >= USER_VADDR_START &&
-                        user_range_readable(s2, 0x80)) {
-                        for (uint32_t k = 0; k < 0x80; k += 32) {
-                            kprintf("[segv-pop] +%x: %x %x %x %x %x %x %x %x\n",
-                                    (uint32_t)(k + 0x30),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 4),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 8),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 12),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 16),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 20),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 24),
-                                    *(const uint32_t *)(uintptr_t)(s2 + k + 28));
-                        }
-                    }
-                }
-                {
-                    uint32_t cr0 = (uint32_t)r->user_rsp + 0x70;
-                    if (cr0 >= USER_VADDR_START &&
-                        user_range_readable(cr0, 0x108)) {
-                        for (uint32_t k = 0; k < 0x100; k += 32) {
-                            kprintf("[segv-fr] +%x: %x %x %x %x %x %x %x %x\n",
-                                    k,
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 4),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 8),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 12),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 16),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 20),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 24),
-                                    *(const uint32_t *)(uintptr_t)(cr0 + k + 28));
-                        }
-                        kprintf("[segv-tok2] %x %x %x %x\n",
-                                *(const uint32_t *)(uintptr_t)(cr0 + 0x90),
-                                *(const uint32_t *)(uintptr_t)(cr0 + 0x94),
-                                *(const uint32_t *)(uintptr_t)(cr0 + 0x98),
-                                *(const uint32_t *)(uintptr_t)(cr0 + 0x9c));
-                    }
-                }
-                if (cr2f < 0xc0000000ull) {
-                    page_table_dump((uint32_t)cr2f);
-                }
                 if ((current->signal_pending | current->signal_mask) &
                     (1u << SIGSEGV)) {
                     signal_terminate(current, SIGSEGV);
@@ -246,9 +124,6 @@ void isr_handler(struct ARCH_REGS *r) {
                         tlb_retry_rip = (uint32_t)r->eip;
                         tlb_retry_pid = current->pid;
                         uint32_t nphy = user_remap_page(cr2f & ~0xfffu);
-                        kprintf("[tlb-fix] pid=%d rip=%x cr2=%x remap=%x\n",
-                                current->pid, (uint32_t)r->eip,
-                                (uint32_t)cr2f, nphy);
                         if (nphy != 0) {
                             uint64_t cr3v = current->pml4_phys;
                             __asm__ volatile("mov %0, %%cr3"
