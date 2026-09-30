@@ -8,6 +8,7 @@
 #include "kernel/init/apic/apic.h"
 #include "drivers/driver_ops.h"
 #include "kernel/init/gdt/gdt.h"
+#include "arch/early.h"
 #include "arch/interrupt/idt.h"
 #include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
@@ -54,8 +55,7 @@ void drivers_init(int min_level, int max_level) {
 }
 
 void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
-    asm_write_cr4(asm_read_cr4() | 0x600);
-    asm_write_cr0(asm_read_cr0() | 0x10000);
+    arch_early_init();
     kernel_kphys = kphys;
 
     stack_canary_init();

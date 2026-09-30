@@ -53,7 +53,6 @@ static volatile uint8_t frame_owner[FRAME_IDX_MAX];
 uint64_t kernel_pml4;
 uint32_t kernel_kphys;
 
-static int fr_dup_reports;
 static int fr_arm = 1;
 static uint32_t fr_va[FRAME_IDX_MAX];
 static int fr_va_reports;
@@ -95,17 +94,6 @@ static void fr_va_unmap(uint32_t vaddr, uint32_t phy) {
         fr_va[idx] = 0;
     }
 }
-
-static void fr_dup_hit(const char *tag, uint32_t phy, int extra) {
-    if (fr_dup_reports >= 32) {
-        return;
-    }
-    fr_dup_reports++;
-    struct TASK *c = current;
-    kprintf("[fr-dup] %s phy=%x pid=%d v=%d\n", tag, phy,
-            c != NULL ? (int)c->pid : -1, extra);
-}
-
 
 static uint32_t e820_mem_upper(void) {
     uint64_t top = mb2_mem_top();
@@ -324,9 +312,6 @@ static void pfree_raw(struct MM_POOL *pool, uint32_t phy_addr) {
     uint32_t idx = (phy_addr - pool->phy_addr_start) / PAGE_SIZE;
     ASSERT(idx < pool->pool_bitmap.btmp_bytes_len * 8);
     ASSERT((phy_addr & 0xfffu) == 0);
-    if (bitmap_scan_test(&pool->pool_bitmap, idx) == 0) {
-        fr_dup_hit("bitmap", phy_addr, (int)idx);
-    }
     bitmap_set(&pool->pool_bitmap, idx, 0);
 }
 
@@ -418,11 +403,6 @@ static uint32_t pcpu_pop(uint32_t c) {
  * 调用者必须已关中断，以保证本 CPU 缓存的独占访问
  */
 static int pcpu_push(uint32_t c, uint32_t phy) {
-    for (uint32_t i = 0; i < pcpu_cache_count[c]; i++) {
-        if (pcpu_page_cache[c][i] == phy) {
-            fr_dup_hit("cache", phy, (int)i);
-        }
-    }
     if (pcpu_cache_count[c] >= PCP_CACHE_MAX) {
         return 0;
     }
@@ -951,13 +931,6 @@ void free_user_page(uint32_t vaddr) {
     uint64_t *pte = pte_ptr(vaddr);
     if (*pte & 1) {
         uint32_t phy = (uint32_t)(*pte & 0xfffff000ull);
-        if (cur != NULL &&
-            (vaddr >= 0xbf000000u ||
-             (cur->exe_bias != 0 &&
-              ((vaddr - cur->exe_bias) & ~0xfffu) == 0x3a1000))) {
-            kprintf("[watch] free_user_page pid=%d vaddr=%x phy=%x stack=%d\n",
-                    cur->pid, vaddr, phy, (int)(vaddr >= 0xbf000000u));
-        }
         *pte = 0;
         __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
         uint32_t bit_idx =
