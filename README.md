@@ -106,7 +106,7 @@ libc-testsuite）、mr\_micro\_shell、toybox。
 ├── build.py                # 构建系统（探测工具链、并行编译、打包镜像、启动 QEMU）
 ├── linker/
 │   ├── kernel.ld           # 内核链接脚本
-│   └── user.ld             # 用户程序链接脚本
+│   └── user_dyn.ld         # 动态用户程序链接脚本（共享库/PT_INTERP）
 ├── scripts/                # 镜像与资源脚本（make_ext4/make_fat/mkfloppy/make_font_subset 等）
 ├── arch/x86/
 │   ├── boot/               # boot.asm 引导扇区 + loader.asm（VBE/KASLR/长模式）

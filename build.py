@@ -48,7 +48,6 @@ ARCH_PROFILES = {
         "kernel_arch_cflags": ["-mcmodel=large", "-mno-red-zone", "-mstackrealign"],
         "ld_emulation": "elf_x86_64",
         "kernel_linker_script": "linker/kernel.ld",
-        "user_linker_script": "linker/user.ld",
         "user_dyn_linker_script": "linker/user_dyn.ld",
         "nasm_elf_format": "elf64",
         "uefi_clang_target": "x86_64-unknown-windows",
@@ -129,7 +128,6 @@ KERNEL_CFLAGS = FREE + INCS + [
 UP_CFLAGS_64 = FREE + ["-fPIE", "-fno-stack-protector", *USER_INCS,
                        "-include", str(AUTOCONF_H)]
 UP_LDFLAGS_64 = ["-s", "-m", ARCH["ld_emulation"],
-                 "-T", str(ROOT / ARCH["user_linker_script"]),
                  "-e", "_start", "-static", "-pie", "--no-dynamic-linker",
                  "-z", "pack-relative-relocs"]
 MUSL64_BASE = FREE + ["-fPIE"]
@@ -780,7 +778,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                        [BUILD_DIR / "lc_start.o", BUILD_DIR / "lc_demo.o",
                         BUILD_DIR / "lc_libc.o"],
        flags=["-s", "-m", ARCH["ld_emulation"],
-              "-T", str(ROOT / ARCH["user_linker_script"]),
               "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
               "-z", "pack-relative-relocs"])
     tasks.append(lc_elf)
@@ -794,7 +791,6 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         [BUILD_DIR / "lc_start.o", BUILD_DIR / "gui_launch.o",
          BUILD_DIR / "lc_libc.o"],
         flags=["-s", "-m", ARCH["ld_emulation"],
-               "-T", str(ROOT / ARCH["user_linker_script"]),
                "-e", "_lc_start", "-static", "-pie", "--no-dynamic-linker",
                "-z", "pack-relative-relocs"])
     tasks.append(gui_elf)
@@ -1095,7 +1091,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             crtn = MUSL_LIB / "crtn.o"
             cmd = [ld, "-nostdlib", "-static", "-pie", "--no-dynamic-linker",
                    "-z", "pack-relative-relocs",
-                   "-T", str(ROOT / ARCH["user_linker_script"]), "-e", "_start",
+                   "-e", "_start",
                    str(crt1), str(crti), *map(str, objs), str(crtn),
                    "-L", str(MUSL_LIB), "--start-group", "-lc", "--end-group",
                    "-o", str(elf)]
@@ -1226,7 +1222,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
                 name="musl_pcre2_demo.elf",
                 cmd=[ld, "-nostdlib", "-static", "-pie", "--no-dynamic-linker",
                      "-z", "pack-relative-relocs",
-                     "-T", str(ROOT / ARCH["user_linker_script"]), "-e", "_start",
+                     "-e", "_start",
                      str(MUSL_LIB / "crt1.o"), str(MUSL_LIB / "crti.o"),
                      str(p2_obj), str(MUSL_LIB / "crtn.o"),
                      "-L", str(MUSL_LIB), "-L", str(PCRE2_LIB),
