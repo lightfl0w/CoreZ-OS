@@ -109,13 +109,7 @@ static int ext2_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
     if (blk + cnt > total_blocks && total_blocks != 0) {
         cnt = total_blocks - blk;
     }
-    uint8_t *p = (uint8_t *)buf;
-    for (uint32_t i = 0; i < cnt; i++) {
-        if (ext2_read_block(blk + i, p + i * bs) != 0) {
-            return -1;
-        }
-    }
-    return 0;
+    return pbc_read_run(start, blk, cnt, buf);
 }
 
 struct DISK_PARTITION *ext2_partition(void) {

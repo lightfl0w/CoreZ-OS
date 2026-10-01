@@ -195,6 +195,117 @@ int pbc_read(uint32_t dev, uint32_t blk, void *buf) {
     return 0;
 }
 
+#define PBC_RUN_MAX 32u
+
+static uint8_t *s_bounce;
+static uint32_t s_bounce_blocks;
+
+static uint8_t *pbc_bounce_get(uint32_t blocks) {
+    if (s_bounce == NULL || s_bounce_blocks < blocks) {
+        uint8_t *nb = (uint8_t *)get_kernel_pages(
+            (blocks * PBC_SLOT_SIZE + PAGE_SIZE - 1) / PAGE_SIZE);
+        if (nb == NULL) {
+            return NULL;
+        }
+        s_bounce = nb;
+        s_bounce_blocks = blocks;
+    }
+    return s_bounce;
+}
+
+static int pbc_load_slot(uint32_t dev, uint32_t blk, const uint8_t *src) {
+    uint32_t f = pbc_lk();
+    if (pbc_find(dev, blk) != NULL) {
+        pbc_unlk(f);
+        return 1;
+    }
+    uint32_t wb_dev = 0;
+    uint32_t wb_blk = 0;
+    uint8_t wb_dirty = 0;
+    struct PBC_SLOT *s = pbc_alloc(dev, blk, &wb_dev, &wb_blk, &wb_dirty);
+    if (s == NULL) {
+        pbc_unlk(f);
+        return -1;
+    }
+    struct PBC_DEV *od = wb_dirty ? dev_of(wb_dev) : NULL;
+    uint32_t bs = dev_of(dev)->bs;
+    pbc_unlk(f);
+    if (wb_dirty) {
+        pbc_write_to_disk(od, wb_blk, s->data);
+    }
+    memcpy(s->data, src, bs);
+    f = pbc_lk();
+    s->valid = 1;
+    s->dirty = 0;
+    s->last_used = ++s_seq;
+    s->busy = 0;
+    pbc_unlk(f);
+    return 0;
+}
+
+int pbc_read_run(uint32_t dev, uint32_t blk, uint32_t cnt, void *buf) {
+    struct PBC_DEV *d = dev_of(dev);
+    if (cnt == 0) {
+        return 0;
+    }
+    if (d == NULL || d->disk == NULL) {
+        return -1;
+    }
+    uint32_t bs = d->bs;
+    uint8_t *dst = (uint8_t *)buf;
+    if (s_nr_slots == 0) {
+        BLOCK.read_sectors(d->disk, d->start + blk * d->spb, dst,
+                           cnt * d->spb);
+        return 0;
+    }
+    uint32_t i = 0;
+    while (i < cnt) {
+        uint32_t f = pbc_lk();
+        struct PBC_SLOT *s = pbc_find(dev, blk + i);
+        if (s != NULL) {
+            s->busy = 1;
+            s->last_used = ++s_seq;
+            pbc_unlk(f);
+            memcpy(dst, s->data, bs);
+            f = pbc_lk();
+            s->busy = 0;
+            pbc_unlk(f);
+            i++;
+            dst += bs;
+            continue;
+        }
+        uint32_t run = 1;
+        while (run < PBC_RUN_MAX && i + run < cnt) {
+            if (pbc_find(dev, blk + i + run) != NULL) {
+                break;
+            }
+            run++;
+        }
+        uint8_t *bounce = pbc_bounce_get(run);
+        if (bounce == NULL) {
+            pbc_unlk(f);
+            for (uint32_t k = 0; k < run; k++) {
+                if (pbc_read(dev, blk + i + k, dst + k * bs) != 0) {
+                    return -1;
+                }
+            }
+            i += run;
+            dst += run * bs;
+            continue;
+        }
+        pbc_unlk(f);
+        BLOCK.read_sectors(d->disk, d->start + (blk + i) * d->spb, bounce,
+                           run * d->spb);
+        for (uint32_t k = 0; k < run; k++) {
+            pbc_load_slot(dev, blk + i + k, bounce + k * bs);
+            memcpy(dst + k * bs, bounce + k * bs, bs);
+        }
+        i += run;
+        dst += run * bs;
+    }
+    return 0;
+}
+
 int pbc_write(uint32_t dev, uint32_t blk, const void *buf) {
     if (s_nr_slots == 0) {
         struct PBC_DEV *d = dev_of(dev);

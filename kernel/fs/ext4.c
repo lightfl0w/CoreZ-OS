@@ -167,13 +167,7 @@ static int ext4_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
     if (blk + cnt > total_blocks && total_blocks != 0) {
         cnt = total_blocks - blk;
     }
-    uint8_t *p = (uint8_t *)buf;
-    for (uint32_t i = 0; i < cnt; i++) {
-        if (ext4_read_block(blk + i, p + i * bs) != 0) {
-            return -1;
-        }
-    }
-    return 0;
+    return pbc_read_run(start, blk, cnt, buf);
 }
 
 static int jsb_read(uint32_t blk, void *buf) {

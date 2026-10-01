@@ -276,9 +276,12 @@ static int tty_read_raw(char *buf, uint32_t n) {
 static int tty_read(char *buf, uint32_t n) {
     if (n == 0)
         return 0;
+    int rc;
     if (tty_tios.c_lflag & LINUX_ICANON)
-        return tty_read_line(buf, n);
-    return tty_read_raw(buf, n);
+        rc = tty_read_line(buf, n);
+    else
+        rc = tty_read_raw(buf, n);
+    return rc;
 }
 
 static uint32_t tty_avail(void) { return ioq_length(&keyboard_ioq); }
