@@ -1,24 +1,29 @@
-#include "drivers/net/ktls.h"
+#include "drivers/net/dns.h"
 
-#include "drivers/char/rtc.h"
 #include "drivers/net/net.h"
 #include "drivers/net/socket.h"
-#include "lib/rand/rand.h"
 #include "lib/str/str.h"
 
-#define KTLS_DNS_PORT 53
-#define KTLS_DNS_TRIES 50
-#define KTLS_DNS_WAIT_MS 200
+#define DNS_PORT 53
+#define DNS_TRIES 50
+#define DNS_WAIT_MS 200
+#define DNS_FDSET_WORDS (SEL_FD_SET_BYTES / 4)
+#define DNS_NS_DEFAULT 0x0A000203u
 
-static uint32_t s_ns = 0x0A000203u;
-static int s_fd = -1;
+static uint32_t s_ns = DNS_NS_DEFAULT;
 
-void ktls_set_nameserver(uint32_t ns) {
+void dns_set_nameserver(uint32_t ns) {
     if (ns)
         s_ns = ns;
 }
 
-uint32_t ktls_nameserver(void) { return s_ns; }
+uint32_t dns_nameserver(void) { return s_ns; }
+
+static void dns_fd_set(uint32_t *set, int fd) {
+    if (fd < 0 || (uint32_t)fd >= SEL_FD_SET_FDS)
+        return;
+    set[fd / 32] |= 1u << (fd % 32);
+}
 
 static int dns_build_query(const char *host, uint8_t *out, uint16_t id) {
     uint32_t n = 0;
@@ -121,7 +126,7 @@ static int dns_parse_answer(const uint8_t *b, uint32_t len, uint16_t id,
     return -1;
 }
 
-uint32_t ktls_resolve(const char *hostname, uint32_t *out_ip) {
+uint32_t dns_resolve(const char *hostname, uint32_t *out_ip) {
     static uint8_t q[512];
     static uint8_t r[1024];
     uint16_t id;
@@ -147,20 +152,18 @@ uint32_t ktls_resolve(const char *hostname, uint32_t *out_ip) {
         net_close(fd);
         return 0;
     }
-    if (net_sendto(fd, q, (uint32_t)qn, s_ns, KTLS_DNS_PORT) < 0) {
+    if (net_sendto(fd, q, (uint32_t)qn, s_ns, DNS_PORT) < 0) {
         net_close(fd);
         return 0;
     }
-    for (tries = 0; tries < KTLS_DNS_TRIES; tries++) {
-        uint32_t rf[2];
+    for (tries = 0; tries < DNS_TRIES; tries++) {
+        uint32_t rf[DNS_FDSET_WORDS];
         uint32_t saddr = 0;
         uint16_t sport = 0;
         int n;
-        rf[0] = 0;
-        rf[1] = 0;
-        if (fd < 64)
-            rf[fd / 32] |= 1u << (fd % 32);
-        if (net_select(fd + 1, rf, 0, 0, KTLS_DNS_WAIT_MS) <= 0)
+        memset(rf, 0, sizeof rf);
+        dns_fd_set(rf, fd);
+        if (net_select(fd + 1, rf, 0, 0, DNS_WAIT_MS) <= 0)
             continue;
         n = net_recvfrom(fd, r, sizeof r, &saddr, &sport);
         if (n <= 0)
@@ -172,73 +175,4 @@ uint32_t ktls_resolve(const char *hostname, uint32_t *out_ip) {
     }
     net_close(fd);
     return 0;
-}
-
-static int ktls_tr_send(void *ctx, const uint8_t *buf, uint32_t len) {
-    int fd = *(int *)ctx;
-    int n = net_send(fd, buf, len);
-    if (n <= 0)
-        return -1;
-    return n;
-}
-
-static int ktls_tr_recv(void *ctx, uint8_t *buf, uint32_t len) {
-    int fd = *(int *)ctx;
-    int n = net_recv(fd, buf, len);
-    if (n <= 0)
-        return -1;
-    return n;
-}
-
-static void ktls_rng(void *buf, uint32_t len) { rand_bytes(buf, len); }
-
-static int64_t ktls_now(void) { return (int64_t)rtc_unix_time(); }
-
-struct tls_conn *ktls_connect(uint32_t ip, uint16_t port, const char *hostname) {
-    struct tls_config cfg;
-    struct tls_conn *c;
-
-    if (s_fd >= 0)
-        return 0;
-    if (!hostname || !ip)
-        return 0;
-    s_fd = net_socket(AF_INET, SOCK_STREAM, 0);
-    if (s_fd < 0)
-        return 0;
-    if (net_connect(s_fd, ip, port) < 0) {
-        net_close(s_fd);
-        s_fd = -1;
-        return 0;
-    }
-    memset(&cfg, 0, sizeof cfg);
-    cfg.tr.send = ktls_tr_send;
-    cfg.tr.recv = ktls_tr_recv;
-    cfg.tr.ctx = &s_fd;
-    cfg.rng = ktls_rng;
-    cfg.now_unix = ktls_now;
-    cfg.hostname = hostname;
-    c = tls_connect(&cfg);
-    if (!c) {
-        net_close(s_fd);
-        s_fd = -1;
-        return 0;
-    }
-    return c;
-}
-
-int ktls_write(struct tls_conn *c, const void *buf, uint32_t len) {
-    return tls_write(c, buf, len);
-}
-
-int ktls_read(struct tls_conn *c, void *buf, uint32_t len) {
-    return tls_read(c, buf, len);
-}
-
-int ktls_close(struct tls_conn *c) {
-    int r = tls_close(c);
-    if (s_fd >= 0) {
-        net_close(s_fd);
-        s_fd = -1;
-    }
-    return r;
 }

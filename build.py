@@ -709,7 +709,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("x509.o",       ROOT / "lib" / "tls" / "x509.c"),
         ("tls.o",        ROOT / "lib" / "tls" / "tls.c"),
         ("tls_roots.o",  ROOT / "lib" / "tls" / "roots.c"),
-        ("ktls.o",       ROOT / "drivers" / "net" / "ktls.c"),
+        ("tls_net.o",    ROOT / "drivers" / "net" / "tls.c"),
+        ("dns.o",        ROOT / "drivers" / "net" / "dns.c"),
     ]
 
     tasks.append(Task(
@@ -756,6 +757,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("gs_probe", "gs_probe.c", "_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
+        ("tlsclient",   "tlsclient.c",   "_start", []),
+        ("apktls",      "apktls.c",      "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
         ("canary_test", "canary_test.c", "_start", []),
     ]
@@ -776,6 +779,24 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             outs.append(obj)
         return outs
     lib_objs = compile_user_lib(BUILD_DIR)
+    tls_lib_sources = [
+        (ROOT / "lib" / "crypto", "sha256.c",   "up_sha256.o"),
+        (ROOT / "lib" / "crypto", "chacha20.c", "up_chacha20.o"),
+        (ROOT / "lib" / "crypto", "aes_gcm.c",  "up_aes_gcm.o"),
+        (ROOT / "lib" / "crypto", "x25519.c",   "up_x25519.o"),
+        (ROOT / "lib" / "crypto", "p256.c",     "up_p256.o"),
+        (ROOT / "lib" / "crypto", "rsa.c",      "up_rsa.o"),
+        (ROOT / "lib" / "tls",    "x509.c",     "up_x509.o"),
+        (ROOT / "lib" / "tls",    "tls.c",      "up_tls.o"),
+        (ROOT / "lib" / "tls",    "roots.c",    "up_roots.o"),
+    ]
+    tls_objs = []
+    for _dir, fname, oname in tls_lib_sources:
+        src = _dir / fname
+        obj = BUILD_DIR / oname
+        tasks.append(task_cc(oname, src, obj, tools, UP_CFLAGS_64))
+        tls_objs.append(obj)
+    tls_programs = ("apktls",)
     for prog_name, src_c, entry_flag, opt_flags in user_programs:
         nick_map = {"prog_no_arg": "up_no_arg", "prog_arg": "up_arg",
                     "cat": "up_cat", "fork_demo": "up_fork",
@@ -792,10 +813,11 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         if entry_flag:
             elf_flags[elf_flags.index("-e") + 1] = entry_flag
         elf = BUILD_DIR / f"{prog_name}.elf"
+        extra_objs = list(tls_objs) if prog_name in tls_programs else []
         elf_task = task_link(
             f"{prog_name}.elf", elf, tools,
             [BUILD_DIR / "up_start.o", BUILD_DIR / "lc_clone.o", prog_obj,
-             *lib_objs],
+             *lib_objs, *extra_objs],
             flags=elf_flags,
         )
         tasks.append(elf_task)
@@ -971,7 +993,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
         "sha256.o", "chacha20.o", "aes_gcm.o", "x25519.o", "p256.o", "rsa.o",
-        "x509.o", "tls.o", "tls_roots.o", "ktls.o",
+        "x509.o", "tls.o", "tls_roots.o", "tls_net.o", "dns.o",
     ]
     kernel_link_objs = [BUILD_DIR / n for n in kernel_objs_names]
     kernel_elf = BUILD_DIR / "kernel.elf"

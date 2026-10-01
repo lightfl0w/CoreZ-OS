@@ -7,6 +7,8 @@
 #include "drivers/char/tty.h"
 #include "drivers/net/net.h"
 #include "drivers/net/socket.h"
+#include "drivers/net/dns.h"
+#include "drivers/net/tls.h"
 #include "kernel/asm_func.h"
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
@@ -819,6 +821,75 @@ static int64_t nsys_select(struct ARCH_REGS *r) {
                                 (int)r->edi);
 }
 
+static struct tls_conn *s_tls_conn;
+
+static int64_t nsys_dns_resolve(struct ARCH_REGS *r) {
+    char host[256];
+    const char *h = path_arg_reg(r, r->ebx, host, sizeof host);
+    uint32_t ip = 0;
+    if (!h)
+        return (uint32_t)-1;
+    if (!ok_write(r, r->ecx, 4))
+        return (uint32_t)-1;
+    if (!dns_resolve(h, &ip))
+        return 0;
+    if (copy_to_user((void *)(uintptr_t)r->ecx, &ip, 4) != 0)
+        return (uint32_t)-1;
+    return (int64_t)ip;
+}
+
+static int64_t nsys_tls_connect(struct ARCH_REGS *r) {
+    char host[256];
+    const char *h = path_arg_reg(r, r->edx, host, sizeof host);
+    if (!h)
+        return (uint32_t)-1;
+    if (s_tls_conn)
+        return (uint32_t)-1;
+    s_tls_conn = tls_connect_tcp((uint32_t)r->ebx, (uint16_t)r->ecx, h);
+    return s_tls_conn ? 0 : (uint32_t)-1;
+}
+
+static int64_t nsys_tls_send(struct ARCH_REGS *r) {
+    if (!s_tls_conn)
+        return (uint32_t)-1;
+    if (!ok_read(r, r->ebx, r->ecx))
+        return (uint32_t)-1;
+    return (uint32_t)tls_write_tcp(s_tls_conn, (const void *)(uintptr_t)r->ebx,
+                                   (uint32_t)r->ecx);
+}
+
+static int64_t nsys_tls_recv(struct ARCH_REGS *r) {
+    if (!s_tls_conn)
+        return (uint32_t)-1;
+    if (!ok_write(r, r->ebx, r->ecx))
+        return (uint32_t)-1;
+    return (uint32_t)tls_read_tcp(s_tls_conn, (void *)(uintptr_t)r->ebx,
+                                  (uint32_t)r->ecx);
+}
+
+static int64_t nsys_tls_close(struct ARCH_REGS *r) {
+    (void)r;
+    if (!s_tls_conn)
+        return (uint32_t)-1;
+    tls_close_tcp(s_tls_conn);
+    s_tls_conn = NULL;
+    return 0;
+}
+
+static int64_t nsys_tls_error(struct ARCH_REGS *r) {
+    const char *msg = tls_error(s_tls_conn);
+    uint32_t n = (uint32_t)strlen(msg) + 1;
+    if (n > (uint32_t)r->ecx)
+        n = (uint32_t)r->ecx;
+    if (n == 0)
+        return 0;
+    if (!ok_write(r, r->ebx, n))
+        return (uint32_t)-1;
+    if (copy_to_user((void *)(uintptr_t)r->ebx, msg, n) != 0)
+        return (uint32_t)-1;
+    return (int64_t)n;
+}
+
 typedef int64_t (*nsys_fn)(struct ARCH_REGS *r);
 
 static const nsys_fn nsys_table[] = {
@@ -865,6 +936,9 @@ static const nsys_fn nsys_table[] = {
     [SYS_SOCK_FCNTL] = nsys_sock_fcntl, [SYS_SELECT] = nsys_select,
     [SYS_MKNOD] = nsys_mknod,         [SYS_SYMLINK] = nsys_symlink,
     [SYS_SETFGPID] = nsys_setfgpid,   [SYS_SMASH] = nsys_smash,
+    [SYS_DNS_RESOLVE] = nsys_dns_resolve, [SYS_TLS_CONNECT] = nsys_tls_connect,
+    [SYS_TLS_SEND] = nsys_tls_send,   [SYS_TLS_RECV] = nsys_tls_recv,
+    [SYS_TLS_CLOSE] = nsys_tls_close, [SYS_TLS_ERROR] = nsys_tls_error,
 };
 
 volatile uint32_t sc_total;

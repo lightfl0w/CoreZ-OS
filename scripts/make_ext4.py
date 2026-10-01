@@ -43,6 +43,7 @@ FILES = [
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
     "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
+    "tlsclient.elf", "apktls.elf",
     "t.fish", "shell.elf",
     "wallpaper.png", "pic1.png", "pic2.png", "win_main.exe", "win_gui.exe",
 ]
@@ -96,6 +97,7 @@ SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"toybox echo TOYBOX_ECHO_OK\n"
                   b"toybox id\ntoybox ls -l /etc/passwd\n"
                   b"toybox su user -c id\ntoybox cat /proc/self/status\n"
+                  b"tlsclient.elf\napktls.elf\nping.elf example.com\n"
                   b"toybox ls /\n")
 
 

@@ -81,7 +81,13 @@ enum SYS_NR {
     SYS_MKNOD,
     SYS_SYMLINK,
     SYS_SETFGPID,
-    SYS_SMASH
+    SYS_SMASH,
+    SYS_DNS_RESOLVE,
+    SYS_TLS_CONNECT,
+    SYS_TLS_SEND,
+    SYS_TLS_RECV,
+    SYS_TLS_CLOSE,
+    SYS_TLS_ERROR
 };
 
 #endif

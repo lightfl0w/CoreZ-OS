@@ -128,6 +128,13 @@ int32_t  sock_setsockopt(int32_t fd, int32_t level, int32_t optname,
 int32_t  sock_select(int32_t nfds, uint32_t* rfds, uint32_t* wfds,
                      uint32_t* efds, int32_t timeout_ms);
 
+uint32_t dns_lookup(const char* hostname, uint32_t* out_ip);
+int32_t  tls_sys_connect(uint32_t ip, uint16_t port, const char* hostname);
+int32_t  tls_sys_send(const void* buf, uint32_t len);
+int32_t  tls_sys_recv(void* buf, uint32_t len);
+int32_t  tls_sys_close(void);
+int32_t  tls_sys_error(char* buf, uint32_t len);
+
 #define NET_FDSET_WORDS 2
 typedef uint32_t net_fd_set[NET_FDSET_WORDS];
 #define FD_ZERO(s) do { uint32_t* _b = (uint32_t*)(s); _b[0] = 0; _b[1] = 0; } while (0)

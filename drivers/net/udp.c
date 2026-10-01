@@ -96,7 +96,7 @@ int udp_sendto(NETIF *ifp, struct UDP_PCB *pcb, const void *data, uint32_t len,
     net_put16(seg + 6, udp_sum(seg, tot, laddr, daddr));
     int rc = ip_output(ifp, daddr, IPPROTO_UDP, seg, tot);
     lock_release(&net_lock);
-    return rc;
+    return rc < 0 ? rc : (int)len;
 }
 
 static int udp_rx_room(struct UDP_PCB *pcb) {
