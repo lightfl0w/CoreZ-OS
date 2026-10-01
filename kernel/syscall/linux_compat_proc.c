@@ -714,6 +714,7 @@ int64_t lc_arch_prctl(LC_ARGS) {
     (void)r;
     const uint64_t MSR_FS_BASE = 0xC0000100;
     const uint64_t MSR_GS_BASE = 0xC0000101;
+    const uint64_t MSR_KERNEL_GS_BASE = 0xC0000102;
     struct TASK *cur = current;
     switch (a) {
     case 0x1002u:
@@ -722,13 +723,13 @@ int64_t lc_arch_prctl(LC_ARGS) {
         asm_wrmsr(MSR_FS_BASE, b);
         return 0;
     case 0x1001u:
-        cur->tls_base = (uint32_t)b;
-        asm_wrmsr(MSR_GS_BASE, b);
+        cur->gs_base_user = b;
+        asm_wrmsr(MSR_KERNEL_GS_BASE, b);
         return 0;
     case 0x1003u:
         return (int64_t)(uint32_t)asm_rdmsr(MSR_FS_BASE);
     case 0x1004u:
-        return (int64_t)(uint32_t)asm_rdmsr(MSR_GS_BASE);
+        return (int64_t)(uint32_t)asm_rdmsr(MSR_KERNEL_GS_BASE);
     default:
         return -LINUX_EINVAL;
     }

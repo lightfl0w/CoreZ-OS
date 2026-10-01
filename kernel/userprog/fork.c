@@ -172,6 +172,7 @@ pid_t sys_fork(struct ARCH_REGS *r) {
     child->tls_base = parent->tls_base;
     child->tls_selector = parent->tls_selector;
     child->tls_msr = parent->tls_msr;
+    child->gs_base_user = parent->gs_base_user;
     child->compat = parent->compat;
     child->pgid = parent->pgid ? parent->pgid : parent->pid;
     child->sid = parent->sid;

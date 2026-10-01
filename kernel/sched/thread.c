@@ -242,6 +242,7 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->tls_base = 0;
     t->tls_selector = 0;
     t->tls_msr = 0;
+    t->gs_base_user = 0;
     t->errno = 0;
     t->pgid = 0;
     t->uid = 0;
@@ -342,6 +343,7 @@ void thread_init(void) {
     task_table[0].tls_base = 0;
     task_table[0].tls_selector = 0;
     task_table[0].tls_msr = 0;
+    task_table[0].gs_base_user = 0;
     task_table[0].errno = 0;
     task_table[0].compat = 0;
     task_table[0].futex_tag.prev = task_table[0].futex_tag.next = NULL;

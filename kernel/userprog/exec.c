@@ -907,6 +907,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     cur->tls_base = 0;
     cur->tls_selector = 0;
     cur->tls_msr = 0;
+    cur->gs_base_user = 0;
     cur->errno = 0;
     cur->compat = is_linux;
     cur->stack_bottom = USER_STACK_BOTTOM;
