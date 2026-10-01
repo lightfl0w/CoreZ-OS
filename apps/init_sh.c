@@ -326,7 +326,7 @@ static int buildin_execute(int32_t argc, char **argv) {
             printf("\n[prog %d exited, status %d]\n", (int)child_pid,
                    (int)status);
         } else if (pid == 0) {
-            execv("/gui.elf", (const char *[]){"/gui.elf", NULL});
+            execv("/bin/gui.elf", (const char *[]){"/bin/gui.elf", NULL});
             printf("gui: exec failed.\n");
             exit(-1);
         } else {
@@ -365,6 +365,16 @@ static void cmd_execute(int32_t argc, char **argv) {
         str_len(prog_path) + 4 < MAX_PATH_LEN) {
         char *tail = prog_path + str_len(prog_path);
         str_copy(tail, ".elf");
+    }
+    if (stat(prog_path, &file_stat) == -1 && str_find(argv[0], '/') == NULL &&
+        str_len(argv[0]) + 10 < MAX_PATH_LEN) {
+        str_copy(prog_path, "/bin/");
+        str_copy(prog_path + 5, argv[0]);
+        if (stat(prog_path, &file_stat) == -1 && str_find(argv[0], '.') == NULL &&
+            str_len(prog_path) + 4 < MAX_PATH_LEN) {
+            char *tail = prog_path + str_len(prog_path);
+            str_copy(tail, ".elf");
+        }
     }
     if (stat(prog_path, &file_stat) == -1) {
         printf("sh: cannot access %s: No such file or directory\n", argv[0]);

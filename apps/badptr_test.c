@@ -15,7 +15,7 @@ static unsigned int raw_syscall(unsigned int nr, unsigned int a, unsigned int b,
 int main(void) {
     static char buf[64];
     int ok = 1;
-    unsigned int fd = raw_syscall(SYS_OPEN, (unsigned int)"/font_subset.ttf", 0, 0);
+    unsigned int fd = raw_syscall(SYS_OPEN, (unsigned int)"/share/font_subset.ttf", 0, 0);
     struct {
         unsigned int nr;
         unsigned int a, b, c;
