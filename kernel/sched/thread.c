@@ -4,6 +4,7 @@
 #include "drivers/char/keyboard.h"
 #include "kernel/asm_func.h"
 #include "kernel/assert.h"
+#include "kernel/fs/pbcache.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/sync.h"
 #include "kernel/userprog/process.h"
@@ -205,6 +206,9 @@ static void idle(void *arg) {
     (void)arg;
     for (;;) {
         thread_block();
+        if (cpu_id() == 0) {
+            pbc_flush_tick();
+        }
         cpu_idle();
     }
 }
