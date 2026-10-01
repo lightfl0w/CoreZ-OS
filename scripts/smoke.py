@@ -11,6 +11,7 @@ ESP = BUILD / "esp.img"
 VARS = BUILD / "OVMF_VARS.fd"
 LOG = Path("/tmp/nit_smoke.log")
 MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS",
+         "KHEAP_SELFTEST_OK",
          "TOYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root root",
          "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0", "at_probe: PASS",
          "futex_bs_probe: PASS", "RUST_HELLO_OK", "rust_probe: PASS",

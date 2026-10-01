@@ -33,7 +33,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | -------- | ------------------------------------------------------------------------------------------------ |
 | 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框；`pool_lock`(物理位图) 与 `map_lock`(页表/虚拟位图) 分离，单页分配走每 CPU 缓存，空闲页数由原子计数 O(1) 读出                 |
 | 内核虚拟地址池  | `KERNEL_VADDR_START` 起的 vaddr 位图，`ioremap` 设备映射（NX/PCD）                                          |
-| 内核堆      | `get_kernel_pages`：高半区（`VIRT_OF = phys + 0xC0000000`）直接映射分配                                       |
+| 内核堆      | `kernel/mm/kheap`：O(1) 分配器 |
 | COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时在 `map_lock` 下 `page_cow_resolve` 一次完成决策/拷贝/递减 |
 | 用户地址空间   | 每进程独立 PML4 + 用户 vaddr 位图；`mmap`/`brk` 堆扩展                                                        |
 
@@ -115,7 +115,7 @@ libc-testsuite）、mr\_micro\_shell、toybox。
 ├── includes/               # 全部公共头文件，目录树与源码镜像
 ├── kernel/
 │   ├── init/               # main.c、gdt/tss/idt/apic/pic/pit/acpi/smp/mb2
-│   ├── mm/                 # pool/bitmap/access（copy_from_user 等）
+│   ├── mm/                 # pool/bitmap/kheap(TLSF malloc)/access（copy_from_user 等）
 │   ├── sched/              # thread/sync/percpu
 │   ├── userprog/           # process/fork/clone/exec/wait_exit
 │   ├── fs/                 # ext2/file/inode/dir/proc
@@ -206,5 +206,5 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 - [x] GUI 合成器、shell 与用户程序集
 - [x] musl 构建选项
 - [x] 修复 fork 子进程 SIGSEGV（lc compat shim 未保存 callee-saved rbx/rbp）
-- [ ] 内核堆分配器（malloc 形态的细粒度分配）
+- [x] 内核堆分配器（`kernel/mm/kheap`：TLSF 风格 O(1) malloc，启动自检 + 冒烟标记 `KHEAP_SELFTEST_OK`）
 - [ ] 多核调度（AP 目前仅验证可启动，未参与调度）

@@ -18,6 +18,7 @@
 #include "kernel/init/tss/tss.h"
 #include "libc/user/stdio.h"
 #include "libc/user/syscall.h"
+#include "kernel/mm/kheap.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/ssp.h"
 #include "drivers/net/net.h"
@@ -97,6 +98,10 @@ void kmain(uint32_t magic, void *mbi_ptr, uint32_t kphys) {
 
     kprintf("[init] mm\n");
     mm_init();
+
+    kprintf("[init] kheap\n");
+    kheap_init();
+    kheap_selftest();
 
     kprintf("[init] gdt\n");
     gdt_init();

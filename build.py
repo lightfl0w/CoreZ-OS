@@ -628,6 +628,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
+        ("kheap.o",      KERNEL_DIR / "mm" / "kheap.c"),
         ("list.o",       ROOT / "lib" / "list" / "list.c"),
         ("thread.o",     KERNEL_DIR / "sched" / "thread.c"),
         ("sync.o",       KERNEL_DIR / "sched" / "sync.c"),
@@ -974,7 +975,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     kernel_objs_names = [
         "mb2_entry.o", "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "early.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "kheap.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
         "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "ext4.o", "fsapi.o", "fs.o", "inode.o",
