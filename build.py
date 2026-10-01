@@ -700,6 +700,16 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("x11_render.o", KERNEL_DIR / "gui" / "x11_render.c"),
         ("x11_window.o", KERNEL_DIR / "gui" / "x11_window.c"),
         ("x11_server.o", KERNEL_DIR / "gui" / "x11_server.c"),
+        ("sha256.o",     ROOT / "lib" / "crypto" / "sha256.c"),
+        ("chacha20.o",   ROOT / "lib" / "crypto" / "chacha20.c"),
+        ("aes_gcm.o",    ROOT / "lib" / "crypto" / "aes_gcm.c"),
+        ("x25519.o",     ROOT / "lib" / "crypto" / "x25519.c"),
+        ("p256.o",       ROOT / "lib" / "crypto" / "p256.c"),
+        ("rsa.o",        ROOT / "lib" / "crypto" / "rsa.c"),
+        ("x509.o",       ROOT / "lib" / "tls" / "x509.c"),
+        ("tls.o",        ROOT / "lib" / "tls" / "tls.c"),
+        ("tls_roots.o",  ROOT / "lib" / "tls" / "roots.c"),
+        ("ktls.o",       ROOT / "drivers" / "net" / "ktls.c"),
     ]
 
     tasks.append(Task(
@@ -960,6 +970,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "guiclients_png.o", "guiclients_files.o", "guiclients_edit.o", "gui.o", "x11.o", "x11_render.o", "x11_window.o", "x11_server.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
+        "sha256.o", "chacha20.o", "aes_gcm.o", "x25519.o", "p256.o", "rsa.o",
+        "x509.o", "tls.o", "tls_roots.o", "ktls.o",
     ]
     kernel_link_objs = [BUILD_DIR / n for n in kernel_objs_names]
     kernel_elf = BUILD_DIR / "kernel.elf"
