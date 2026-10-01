@@ -87,6 +87,7 @@ void idt_init(void) {
 
     idt_set(0x80, syscall_0x80, IDT_TYPE_TRAP_GATE3);
     idt_set(IPI_VECTOR_RESCHED, ipi_resched, IDT_TYPE_INT_GATE64);
+    idt_set(LAPIC_CALIB_VECTOR, ipi_calib, IDT_TYPE_INT_GATE64);
 
     idt_load_idtr();
 

@@ -131,6 +131,12 @@ ipi_resched:
     push qword 0x82
     jmp irq_common_stub
 
+global ipi_calib
+ipi_calib:
+    push qword 0
+    push qword 0x70
+    jmp irq_common_stub
+
 extern irq_handler
 irq_common_stub:
     test qword [rsp + 16], 3

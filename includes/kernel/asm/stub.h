@@ -58,5 +58,6 @@ extern void default_handler(void);
 extern void syscall_0x80(void);
 extern void syscall_entry(void);
 extern void ipi_resched(void);
+extern void ipi_calib(void);
 
 #endif

@@ -7,6 +7,8 @@
 #include "kernel/mm/pool/pool.h"
 #include "kernel/init/acpi/acpi.h"
 #include "kernel/init/pit/pit.h"
+#include "arch/x86/interrupt/interrupt.h"
+#include "arch/x86/irq.h"
 
 #define MSR_APIC_BASE 0x1B
 #define APIC_BASE_ENABLE (1u << 8)
@@ -19,6 +21,13 @@
 #define LAPIC_LVT_LINT1 0x360
 
 #define LVIT_MASK (1u << 16)
+#define LVTT_PERIODIC (1u << 17)
+
+#define LAPIC_DCR 0x3E0
+#define LAPIC_TIMER_ICR 0x380
+#define LAPIC_TIMER_DIV 3u
+#define LAPIC_TIMER_MIN_COUNT 16u
+#define LAPIC_CAL_TICKS 30u
 
 #define IOAPIC_VER 0x01
 #define IOREG_TABLE 0x10
@@ -41,9 +50,14 @@
 static volatile uint32_t *lapic;
 static volatile uint32_t *ioapic;
 static int s_apic_active;
+static uint32_t g_timer_count;
 
 int apic_active(void) {
     return s_apic_active;
+}
+
+int lapic_timer_on(void) {
+    return s_apic_active && g_timer_count != 0;
 }
 
 static uint32_t rdmsr(uint32_t msr) {
@@ -66,6 +80,15 @@ static uint32_t lapic_read(uint32_t off) {
 
 void lapic_eoi(void) {
     lapic_write(LAPIC_EOI, 0);
+}
+
+void lapic_timer_program_periodic(void) {
+    if (g_timer_count == 0) {
+        return;
+    }
+    lapic_write(LAPIC_DCR, LAPIC_TIMER_DIV);
+    lapic_write(LAPIC_LVT_T, (VECTOR_BASE + IRQ_TIMER) | LVTT_PERIODIC);
+    lapic_write(LAPIC_TIMER_ICR, g_timer_count);
 }
 
 #define LAPIC_ID 0x020
@@ -106,7 +129,7 @@ void lapic_ap_enable(void) {
     lapic_write(LAPIC_LVT_LINT0, LVIT_MASK);
     lapic_write(LAPIC_LVT_LINT1, LVIT_MASK);
     lapic_write(LAPIC_LVT_PMC, LVIT_MASK);
-    lapic_write(LAPIC_LVT_T, VECTOR_BASE | LVIT_MASK);
+    lapic_timer_program_periodic();
     lapic_write(LAPIC_SVR, (lapic_read(LAPIC_SVR) & ~0xFFu) | 0x100u | 0x2F);
 }
 
@@ -226,21 +249,51 @@ int apic_init(void) {
 
     lapic_write(LAPIC_SVR, (lapic_read(LAPIC_SVR) & ~0xFFu) | 0x100u | 0x2F);
 
-    /* LAPIC 自带定时器不再作为系统 tick 源：其频率需要用 PIT 校准，而校准依赖
-     * 逐口读 0x40 的轮询，在虚拟化下每次读都是 VM exit，导致测得的窗口远长于
-     * 10ms，tick 频率会低几个数量级且每次启动都不同。系统 tick 统一由 PIT
-     * （1.193182MHz 固定频率，分频 PIT_HZ）提供，见 main.c 的 pit_init。 */
-    lapic_write(LAPIC_LVT_T, VECTOR_BASE | LVIT_MASK);
-
     ioapic_init();
     disable_pic();
 
     s_apic_active = 1;
+
+    {
+        uint32_t eflags = asm_save_eflags();
+        uint32_t t0;
+        uint32_t e0;
+        uint32_t e;
+        uint32_t guess = 0x10000u;
+        asm_sti();
+        for (;;) {
+            lapic_calib_count = 0;
+            lapic_write(LAPIC_DCR, LAPIC_TIMER_DIV);
+            lapic_write(LAPIC_LVT_T,
+                        LAPIC_CALIB_VECTOR | LVTT_PERIODIC);
+            lapic_write(LAPIC_TIMER_ICR, guess);
+            t0 = tick;
+            e0 = lapic_calib_count;
+            while ((uint32_t)(tick - t0) < LAPIC_CAL_TICKS) {
+                asm_pause();
+            }
+            e = lapic_calib_count - e0;
+            if (e > 0 || guess <= 0x40u) {
+                break;
+            }
+            guess >>= 4;
+        }
+        asm_restore_eflags(eflags);
+        g_timer_count = e * guess / LAPIC_CAL_TICKS;
+    }
+    if (g_timer_count < LAPIC_TIMER_MIN_COUNT) {
+        g_timer_count = 0;
+        kprintf("[APIC] lapic timer calibrate failed, tick stays on PIT\n");
+    } else {
+        lapic_timer_program_periodic();
+        uint32_t reg = IOREG_TABLE + 2 * irq_pin(IRQ_TIMER);
+        ioapic_write(reg, IO_IR_MASK | irq_route_flags(IRQ_TIMER));
+        kprintf("[APIC] lapic timer vector%u count=%u (%u Hz, div16)\n",
+                (unsigned)(VECTOR_BASE + IRQ_TIMER), (unsigned)g_timer_count,
+                (unsigned)PIT_HZ);
+    }
     kprintf("[APIC] id=%u lapic=0x%x ioapic=0x%x\n", (unsigned)lapic_get_id(),
             madt ? madt->lapic_addr : ACPI_APIC_DEFAULT_LAPIC,
             madt ? madt->ioapic_addr : ACPI_APIC_DEFAULT_IOAPIC);
-    kprintf("[APIC] timer irq%u -> pin%u vector%u (PIT)\n",
-            (unsigned)IRQ_TIMER, (unsigned)irq_pin(IRQ_TIMER),
-            (unsigned)(VECTOR_BASE + IRQ_TIMER));
     return 0;
 }
