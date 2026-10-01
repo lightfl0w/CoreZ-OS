@@ -1,10 +1,12 @@
 #ifndef FS_PROC_H
 #define FS_PROC_H
 #include <stdint.h>
+#include "kernel/fs/vfs.h"
 struct FILE;
 struct FS_STAT;
 #define PROC_DIRF_FLAG 0xFFFEu
 int proc_match(const char *path);
+const struct VFS_OPS *proc_vfs_ops(void);
 int proc_open(const char *path, uint8_t flags);
 uint32_t proc_read(struct FILE *file, void *buf, uint32_t count);
 int proc_stat(const char *path, struct FS_STAT *buf);
