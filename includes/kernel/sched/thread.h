@@ -104,6 +104,7 @@ struct TASK {
     uint64_t fd_cloexec;
     int32_t fd_owner_pid;
     uint8_t slot_used;
+    uint8_t rq_cpu;
     uint8_t cpu_aff;
     uint32_t on_cpu;
     uint8_t fpu_storage[FPU_SAVE_SIZE] __attribute__((aligned(64)));

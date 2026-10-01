@@ -19,6 +19,7 @@
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/access.h"
+#include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
 #include "kernel/shell/pipe.h"
 #include "kernel/syscall/file_syscall.h"
@@ -200,6 +201,7 @@ uint32_t sys_brk(uint32_t addr) {
     uint32_t old_page = (cur_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     uint32_t new_page = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if (new_page > old_page) {
+        vaddr_unreserve(old_page, (new_page - old_page) / PAGE_SIZE);
         for (uint32_t page = old_page; page < new_page; page += PAGE_SIZE) {
             if (page_is_mapped(page)) {
                 kprintf("[brk] collision at 0x%x, keep 0x%x pid=%d base=%x\n",
@@ -215,6 +217,7 @@ uint32_t sys_brk(uint32_t addr) {
         for (uint32_t page = new_page; page < old_page; page += PAGE_SIZE) {
             free_user_page(page);
         }
+        vaddr_reserve_at(new_page, (old_page - new_page) / PAGE_SIZE);
     }
     cur->user_brk = new_brk;
     return new_brk;

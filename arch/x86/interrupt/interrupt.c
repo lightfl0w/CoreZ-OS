@@ -275,6 +275,8 @@ void irq_handler(struct ARCH_REGS *r) {
             if (!percpu_tick && apic_active())
                 lapic_send_ipi_all_but_self(IPI_VECTOR_RESCHED);
         } else {
+            if (current != 0 && current->weight != 0)
+                scheduler_tick();
             if (current != 0 && preempt_disabled() == 0)
                 schedule();
         }

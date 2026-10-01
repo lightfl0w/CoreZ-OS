@@ -27,8 +27,8 @@ static uint32_t wake_pid[MAX_TASKS];
 #define SCHED_LATENCY 8U
 static uint64_t min_vruntime;
 static uint64_t run_bitmap;
-static uint64_t rq_weight;
-static uint64_t rq_avg;
+static uint64_t rq_weight[NR_CPU];
+static uint64_t rq_avg[NR_CPU];
 
 static uint32_t prio_to_weight(uint8_t prio) {
     uint32_t p = prio ? prio : 1;
@@ -103,26 +103,26 @@ static int is_idle_task(const struct TASK *t) {
     return 0;
 }
 
-static void rq_add(struct TASK *t) {
+static void rq_add(struct TASK *t, uint32_t c) {
     int64_t w = (int64_t)t->weight;
-    int64_t total = (int64_t)rq_weight + w;
-    int64_t v = (int64_t)rq_avg +
-                w * ((int64_t)t->vruntime - (int64_t)rq_avg) / total;
-    rq_avg = v > 0 ? (uint64_t)v : 0;
-    rq_weight = (uint64_t)total;
+    int64_t total = (int64_t)rq_weight[c] + w;
+    int64_t v = (int64_t)rq_avg[c] +
+                w * ((int64_t)t->vruntime - (int64_t)rq_avg[c]) / total;
+    rq_avg[c] = v > 0 ? (uint64_t)v : 0;
+    rq_weight[c] = (uint64_t)total;
 }
 
-static void rq_del(struct TASK *t) {
+static void rq_del(struct TASK *t, uint32_t c) {
     int64_t w = (int64_t)t->weight;
-    int64_t total = (int64_t)rq_weight - w;
+    int64_t total = (int64_t)rq_weight[c] - w;
     if (total > 0) {
-        int64_t v = (int64_t)rq_avg -
-                    w * ((int64_t)t->vruntime - (int64_t)rq_avg) / total;
-        rq_avg = v > 0 ? (uint64_t)v : 0;
+        int64_t v = (int64_t)rq_avg[c] -
+                    w * ((int64_t)t->vruntime - (int64_t)rq_avg[c]) / total;
+        rq_avg[c] = v > 0 ? (uint64_t)v : 0;
     } else {
-        rq_avg = min_vruntime;
+        rq_avg[c] = min_vruntime;
     }
-    rq_weight = (uint64_t)(total > 0 ? total : 0);
+    rq_weight[c] = (uint64_t)(total > 0 ? total : 0);
 }
 
 static void set_status(struct TASK *t, enum TASK_STATUS status) {
@@ -132,20 +132,22 @@ static void set_status(struct TASK *t, enum TASK_STATUS status) {
               (status == TASK_RUNNING || status == TASK_READY);
     t->status = status;
     if (now && !was) {
+        uint32_t c = cpu_id();
         run_bitmap |= bit;
-        rq_add(t);
+        rq_add(t, c);
+        t->rq_cpu = (uint8_t)c;
     } else if (!now && was) {
         run_bitmap &= ~bit;
-        rq_del(t);
+        rq_del(t, t->rq_cpu);
     }
 }
 
-static uint64_t rq_avg_now(void) {
-    return rq_weight ? rq_avg : min_vruntime;
+static uint64_t rq_avg_now(uint32_t c) {
+    return rq_weight[c] ? rq_avg[c] : min_vruntime;
 }
 
 static void place_entity(struct TASK *t) {
-    uint64_t avg = rq_avg_now();
+    uint64_t avg = rq_avg_now(cpu_id());
     uint64_t lag = t->slice / 2;
     if (lag < 1)
         lag = 1;
@@ -548,7 +550,7 @@ void thread_timer_wake(void) {
 
 void sched_dbg_task(struct TASK *t) {
     uint64_t bit = 1ULL << task_slot(t);
-    uint64_t avg = rq_avg_now();
+    uint64_t avg = rq_avg_now(cpu_id());
     kprintf("[sch] pid=%d st=%x on_cpu=%u in_ready=%d in_cpu0=%d in_run=%d "
             "vr=%x%08x dl=%x%08x w=%u sl=%u avg=%x%08x\n",
             (int)t->pid, (unsigned)t->status, (unsigned)t->on_cpu,
@@ -590,7 +592,7 @@ uint32_t preempt_disabled(void) {
 }
 
 static uint32_t pick_cpu_slot(uint32_t c) {
-    uint64_t avg = rq_avg_now();
+    uint64_t avg = rq_avg_now(c);
     uint64_t m = ready_cpu[c];
     uint32_t best = MAX_TASKS;
     uint32_t fallback = MAX_TASKS;
@@ -620,13 +622,16 @@ void scheduler_tick(void) {
     struct TASK *cur = current;
     if (cur == NULL || cur->weight == 0)
         return;
+    uint32_t c = cpu_id();
     uint32_t f = sched_lock_irq();
     int in_rq = (run_bitmap & (1ULL << task_slot(cur))) != 0;
     if (in_rq)
-        rq_del(cur);
+        rq_del(cur, cur->rq_cpu);
     cur->vruntime += WVSTEP / cur->weight;
-    if (in_rq)
-        rq_add(cur);
+    if (in_rq) {
+        rq_add(cur, c);
+        cur->rq_cpu = (uint8_t)c;
+    }
     sched_unlock_irq(f);
     cur->elapsed_ticks++;
     renew_deadline(cur);
@@ -665,6 +670,11 @@ void schedule(void) {
     struct TASK *next = &task_table[slot];
     ready_remove(next);
     assert_stack_magic(next);
+    if (!is_idle_task(next) && next->rq_cpu != (uint8_t)c) {
+        rq_del(next, next->rq_cpu);
+        rq_add(next, c);
+        next->rq_cpu = (uint8_t)c;
+    }
     set_status(next, TASK_RUNNING);
     next->on_cpu = c;
     if (next != idle_threads[c])
