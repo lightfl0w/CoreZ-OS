@@ -97,8 +97,17 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | `gui_launch`                                | GUI 合成器入口                    |
 | `lc_demo` / `musl_demo` / `libc_tests_main` | 自带 libc / musl ABI / libc 测试套件 |
 
-`third_modules/` 下是第三方代码：musl（`CONFIG_MUSL_LIB=y` 构建完整 libc 并运行
-libc-testsuite）、mr\_micro\_shell、toybox。
+`third_modules/` 下以 git submodule 形式引入第三方代码，构建时从源码编译，
+不重新分发任何二进制产物。各模块及许可证如下，版权归各自上游作者所有：
+
+| 模块 | 用途 | 许可证 |
+| --- | --- | --- |
+| [musl](https://git.musl-libc.org/cgit/musl) | 标准 C 库（`CONFIG_MUSL_LIB=y` 构建完整 libc） | MIT |
+| [libc-testsuite](https://git.musl-libc.org/cgit/libc-testsuite) | musl 配套 libc 行为测试 | MIT |
+| [busybox](https://git.busybox.net/busybox) | 核心用户态工具箱（静态 musl 编译，提供 ls/echo/id/su 等） | GPL-2.0-only |
+| [fish](https://github.com/fish-shell/fish-shell) | 交互式 shell（musl 动态链接运行） | GPL-2.0-only |
+| [pcre2](https://github.com/PCRE2Project/pcre2) | 正则表达式库 | BSD-3-Clause |
+| [flanterm](https://github.com/mintsuki/flanterm) | 帧缓冲终端渲染（GUI 终端） | MIT |
 
 ## 目录结构
 

@@ -1074,60 +1074,52 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             description="configure+make+install native musl 1.2.6",
         ))
 
-        TOYBOX_DIR = ROOT / "third_modules" / "toybox"
+        BUSYBOX_DIR = ROOT / "third_modules" / "busybox"
 
         _musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
         _musl_clang = MUSL_PREFIX / "bin" / "musl-clang"
         _musl_pick = (
             f"MC={shlex.quote(str(_musl_clang))}; "
             f"[ -x \"$MC\" ] || MC={shlex.quote(str(_musl_gcc))}; ")
-        _toybox_pre = (f"test -x {shlex.quote(str(_musl_gcc))} || "
-                       f"test -x {shlex.quote(str(_musl_clang))} || exit 0; " +
-                       _musl_pick)
+        _busybox_pre = (f"test -x {shlex.quote(str(_musl_gcc))} || "
+                        f"test -x {shlex.quote(str(_musl_clang))} || exit 0; " +
+                        _musl_pick)
+        _linux_inc = BUILD_DIR / "linux-include"
         tasks.append(Task(
-            name="toybox-config",
+            name="busybox-config",
             cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                 f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
-                 f"make oldconfig >/dev/null 2>&1; true"],
-            out=TOYBOX_DIR / ".config",
-            deps=[TOYBOX_DIR / "Makefile"],
-            optional=True, group="toybox",
-            description="toybox defconfig",
+                 _busybox_pre +
+                 f"cd {shlex.quote(str(BUSYBOX_DIR))} && "
+                 f"[ -f .config ] || {{ make defconfig >/dev/null 2>&1; "
+                 f"sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config; "
+                 f"yes '' | make oldconfig >/dev/null 2>&1; }}; true"],
+            out=BUSYBOX_DIR / ".config",
+            deps=[BUSYBOX_DIR / "Makefile"],
+            optional=True, group="busybox",
+            description="busybox defconfig (static)",
         ))
         tasks.append(Task(
-            name="toybox-abitag",
+            name="busybox-build",
             cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"\"$MC\" -c "
-                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.c'))} -o "
-                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.o'))}"],
-            out=TOYBOX_DIR / "abitag.o",
-            deps=[TOYBOX_DIR / "abitag.c"],
-            optional=True, group="toybox",
-            description="toybox GNU ABI-tag note",
-        ))
-        _toybox_ld = shlex.quote("-static " +
-                                 str(TOYBOX_DIR / "abitag.o") +
-                                 " -Wl,-Ttext-segment=0x8048000")
-        tasks.append(Task(
-            name="toybox-build",
-            cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                 f"rm -f toybox generated/unstripped/toybox && "
-                 f"CC=\"$MC\" "
-                 f"CFLAGS={shlex.quote('-static -Os')} "
-                 f"LDFLAGS={_toybox_ld} "
-                 f"make -j4 > toybox.log 2>&1 || "
-                 f"(tail -20 toybox.log; false) && "
-                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))} && "
-                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
-            out=BUILD_DIR / "toybox",
-            deps=[TOYBOX_DIR / ".config", TOYBOX_DIR / "toybox"],
-            optional=True, group="toybox",
-            description="build toybox (static musl)",
+                 _busybox_pre +
+                 f"cd {shlex.quote(str(BUSYBOX_DIR))} && "
+                 f"[ -d {shlex.quote(str(_linux_inc / 'linux'))} ] || "
+                 f"{{ mkdir -p {shlex.quote(str(_linux_inc))} && "
+                 f"cp -rL /usr/include/linux {shlex.quote(str(_linux_inc / 'linux'))} && "
+                 f"cp -rL /usr/include/asm {shlex.quote(str(_linux_inc / 'asm'))} && "
+                 f"cp -rL /usr/include/asm-generic {shlex.quote(str(_linux_inc / 'asm-generic'))} && "
+                 f"cp -rL /usr/include/mtd {shlex.quote(str(_linux_inc / 'mtd'))}; }} && "
+                 f"rm -f busybox && "
+                 f"make -j4 CC=\"$MC\" "
+                 f"CFLAGS={shlex.quote('-static -Os -I' + str(_linux_inc))} "
+                 f"LDFLAGS={shlex.quote('-static -Wl,-Ttext-segment=0x8048000')} > bb.log 2>&1 || "
+                 f"{{ grep -iE 'error:' bb.log | head -10; tail -5 bb.log; false; }} && "
+                 f"cp busybox {shlex.quote(str(BUILD_DIR / 'busybox'))} && "
+                 f"cp busybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
+            out=BUILD_DIR / "busybox",
+            deps=[BUSYBOX_DIR / ".config", BUSYBOX_DIR / "Makefile"],
+            optional=True, group="busybox",
+            description="build busybox (static musl)",
         ))
 
         musl_demo_c = task_cc("musl_demo.o", APPS_DIR / "musl_demo.c",
@@ -1546,10 +1538,10 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
                 update(i, t.description)
     s += 1
 
-    console.step_header(s, total_steps, "Building toybox")
-    toybox_tasks = [t for t in plan.tasks if t.group == "toybox"]
-    with console.progress(len(toybox_tasks), "toybox", Ansi.BR_BLU) as update:
-        for i, t in enumerate(toybox_tasks, 1):
+    console.step_header(s, total_steps, "Building busybox")
+    busybox_tasks = [t for t in plan.tasks if t.group == "busybox"]
+    with console.progress(len(busybox_tasks), "busybox", Ansi.BR_BLU) as update:
+        for i, t in enumerate(busybox_tasks, 1):
             run_task(t)
             update(i, t.description)
     s += 1

@@ -462,13 +462,20 @@ static void autoexec(void) {
     if (fd == -1) {
         return;
     }
-    char buf[MAX_PATH_LEN];
-    int32_t n = read(fd, buf, sizeof(buf) - 1);
+    char buf[2048];
+    uint32_t got = 0;
+    while (got < sizeof(buf) - 1) {
+        int32_t n = read(fd, buf + got, sizeof(buf) - 1 - got);
+        if (n <= 0) {
+            break;
+        }
+        got += (uint32_t)n;
+    }
     close(fd);
-    if (n <= 0) {
+    if (got == 0) {
         return;
     }
-    buf[n] = 0;
+    buf[got] = 0;
     char *p = buf;
     while (p) {
         char *nl = str_find(p, '\n');

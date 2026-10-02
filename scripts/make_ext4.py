@@ -38,7 +38,7 @@ FILES = [
     "futex_probe.elf", "eintr_probe.elf", "sel_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf", "dyn_hello.elf",
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "busybox", "dyn_demo.elf", "dyn_hello.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
@@ -50,7 +50,7 @@ SHARE_FILES = [
     "font_subset.ttf", "wallpaper.png", "pic1.png", "pic2.png",
     "t.fish", "win_main.exe", "win_gui.exe",
 ]
-ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
+ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "busybox"}
 SPECIAL_MODES = {"suidsh": 0o104755}
 FILE_MODE = 0o100755
 
@@ -90,18 +90,18 @@ SYMLINKS = [("catlink", "/bin/cat.elf"),
             ("longlink", "/bin/cat.elf" + "/sub/dir/padding/xyz" * 3)]
 
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
-                  b"/bin/toybox ls -l /lib\n"
+                  b"/bin/busybox ls -l /lib\n"
                   b"/bin/at_probe.elf\n/bin/futex_bs_probe.elf\n"
                   b"/bin/rust_hello.elf\n/bin/rust_probe.elf\n"
                   b"/bin/musl_abi_test.elf\n"
                   b"/bin/dyn_demo.elf\n/bin/dyn_hello.elf\n"
                   b"/bin/fork_demo.elf\n/bin/cow_stress.elf\n/bin/fork_demo.elf\n"
-                  b"/bin/dev_demo.elf\n/bin/pcre2_demo.elf\n/bin/toybox cat /proc/meminfo\n"
-                  b"/bin/toybox echo TOYBOX_ECHO_OK\n"
-                  b"/bin/toybox id\n/bin/toybox ls -l /etc/passwd\n"
-                  b"/bin/toybox su user -c id\n/bin/toybox cat /proc/self/status\n"
+                  b"/bin/dev_demo.elf\n/bin/pcre2_demo.elf\n/bin/busybox cat /proc/meminfo\n"
+                  b"/bin/busybox echo BUSYBOX_ECHO_OK\n"
+                  b"/bin/busybox id\n/bin/busybox ls -l /etc/passwd\n"
+                  b"/bin/busybox su user -c id\n/bin/busybox cat /proc/self/status\n"
                   b"/bin/tlsclient.elf\n/bin/apktls.elf\n/bin/ping.elf example.com\n"
-                  b"/bin/toybox ls /\n/bin/toybox ls /bin\n")
+                  b"/bin/busybox ls /\n/bin/busybox ls /bin\n")
 
 
 def part_entry(bootable, fs_type, start_lba, sec_cnt):
@@ -172,7 +172,7 @@ def debugfs_cmds(bd, tmp, pre, names, smoke):
             emit_file(cmds, src, f"/lib/{name}", 0o100755)
 
     for name in BIN_LINKS:
-        tgt = "/bin/sh.elf" if name == "sh" else "/bin/toybox"
+        tgt = "/bin/sh.elf" if name == "sh" else "/bin/busybox"
         cmds.append(f"symlink /bin/{name} {tgt}")
 
     for name, tgt in SYMLINKS:
@@ -204,7 +204,7 @@ def populate(bd, tmp, p2_img, smoke, autoexec):
         pre["shell.conf"].write_bytes(b"/bin/init_sh.elf\n")
     else:
         pre["autoexec"] = tmp / "autoexec"
-        pre["autoexec"].write_bytes(b"/bin/toybox login\n")
+        pre["autoexec"].write_bytes(b"/bin/busybox login\n")
 
     cmds = debugfs_cmds(bd, tmp, pre, list(pre), smoke)
     script = tmp / "debugfs.cmds"
