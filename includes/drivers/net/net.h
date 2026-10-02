@@ -25,7 +25,6 @@ extern NETIF g_netif;
 extern struct SCHED_LOCK net_lock;
 
 extern int net_enable;
-void net_check_guards(void);
 void net_init(void);
 uint32_t net_now_ms(void);
 int nt_icmp_send(uint32_t dst, uint16_t id, uint16_t seq);

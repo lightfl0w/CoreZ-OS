@@ -170,7 +170,8 @@ static void ready_enqueue(struct TASK *t) {
         return;
 
     if (t->status != TASK_RUNNING) {
-        t->on_cpu = NR_CPU;
+        if (t->on_cpu >= NR_CPU)
+            t->on_cpu = NR_CPU;
         place_entity(t);
     }
     ready_bitmap |= bit;

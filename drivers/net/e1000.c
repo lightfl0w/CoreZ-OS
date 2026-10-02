@@ -58,8 +58,8 @@ struct E1000_RX_DESC {
 } __attribute__((packed));
 
 static volatile uint8_t *s_regs;
-static struct E1000_TX_DESC *s_tx;
-static struct E1000_RX_DESC *s_rx;
+static volatile struct E1000_TX_DESC *s_tx;
+static volatile struct E1000_RX_DESC *s_rx;
 static uint8_t *s_tx_buf;
 static uint8_t *s_rx_buf;
 static uint32_t s_tx_cur;

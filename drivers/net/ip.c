@@ -9,10 +9,16 @@
 #include "drivers/net/tcp.h"
 #include "drivers/net/udp.h"
 
-static uint32_t s_pend_dst;
-static uint8_t s_pend[ETH_FRAME_MAX];
-static uint32_t s_pend_len;
-static int s_pend_active;
+#define IP_PEND_MAX 4
+
+struct IP_PEND {
+    uint32_t dst;
+    uint32_t len;
+    int active;
+    uint8_t frame[ETH_FRAME_MAX];
+};
+
+static struct IP_PEND s_pend[IP_PEND_MAX];
 
 uint16_t ip_csum(const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -56,6 +62,16 @@ void ip_input(NETIF *ifp, const uint8_t *pkt, uint32_t len) {
         udp_input(ifp, net_be32(pkt + 12), pkt + ihlen, plen);
 }
 
+static struct IP_PEND *ip_pend_slot(uint32_t nh) {
+    for (int i = 0; i < IP_PEND_MAX; i++)
+        if (!s_pend[i].active)
+            return &s_pend[i];
+    for (int i = 0; i < IP_PEND_MAX; i++)
+        if (s_pend[i].dst == nh)
+            return &s_pend[i];
+    return 0;
+}
+
 int ip_output(NETIF *ifp, uint32_t daddr, uint8_t proto, const void *data,
               uint32_t len) {
     uint8_t pkt[IP_HDR_LEN + TCP_MSS];
@@ -82,19 +98,24 @@ int ip_output(NETIF *ifp, uint32_t daddr, uint8_t proto, const void *data,
         return eth_output(ifp, mac, ETH_IP, pkt, tot);
 
     lock_acquire(&net_lock);
-    s_pend_dst = nh;
-    s_pend_len = tot;
-    memcpy(s_pend, pkt, tot);
-    s_pend_active = 1;
+    struct IP_PEND *pend = ip_pend_slot(nh);
+    if (pend) {
+        pend->dst = nh;
+        pend->len = tot;
+        memcpy(pend->frame, pkt, tot);
+        pend->active = 1;
+    }
     lock_release(&net_lock);
     return 0;
 }
 
 void ip_arp_resolved(NETIF *ifp, uint32_t ip, const uint8_t *mac) {
     lock_acquire(&net_lock);
-    if (s_pend_active && s_pend_dst == ip) {
-        eth_output(ifp, mac, ETH_IP, s_pend, s_pend_len);
-        s_pend_active = 0;
+    for (int i = 0; i < IP_PEND_MAX; i++) {
+        if (!s_pend[i].active || s_pend[i].dst != ip)
+            continue;
+        s_pend[i].active = 0;
+        eth_output(ifp, mac, ETH_IP, s_pend[i].frame, s_pend[i].len);
     }
     lock_release(&net_lock);
 }

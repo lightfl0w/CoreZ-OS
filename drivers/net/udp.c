@@ -100,7 +100,7 @@ int udp_sendto(NETIF *ifp, struct UDP_PCB *pcb, const void *data, uint32_t len,
 }
 
 static int udp_rx_room(struct UDP_PCB *pcb) {
-    return UDP_RCV_BUF - (int)(pcb->rx_tail - pcb->rx_head);
+    return UDP_RCV_BUF - (int)(uint16_t)(pcb->rx_tail - pcb->rx_head);
 }
 
 int udp_rx_ready(struct UDP_PCB *pcb) {

@@ -65,42 +65,6 @@ void lock_init(struct SCHED_LOCK *plock) {
     sema_init(&plock->semaphore, 1);
 }
 
-struct SCHED_LKLOG { uint32_t ev, task, holder, val; };
-static struct SCHED_LKLOG lkbuf[64];
-static uint32_t lkidx;
-static void lkdump(const char *why) {
-    kprintf("[lkdump] %s idx=%u\n", why, lkidx & 63);
-    for (uint32_t i = 0; i < 64; i++) {
-        struct SCHED_LKLOG *e = &lkbuf[(lkidx + i) & 63];
-        kprintf("[ev] %u t=%x h=%x v=%u\n", e->ev, e->task, e->holder, e->val);
-    }
-}
-
-static void lklog(struct SCHED_LOCK *p, uint32_t ev) {
-
-    uint32_t h = (uint32_t)(uintptr_t)p->holder;
-    uint32_t v = p->semaphore.value;
-    uint32_t bad;
-    if (ev == 1)
-        bad = (h != 0);
-    else if (ev == 2)
-        bad = (v > 1) || (h != 0);
-    else
-        bad = (v > 1) || ((v == 0) != (h != 0));
-    if (bad) {
-        kprintf("[lkviol] ev=%u t=%x h=%x v=%u\n", ev,
-                (uint32_t)(uintptr_t)current, h, v);
-        lkdump("violation");
-        for (;;)
-            cpu_hlt();
-    }
-    struct SCHED_LKLOG *e = &lkbuf[lkidx++ & 63];
-    e->ev = ev;
-    e->task = (uint32_t)(uintptr_t)current;
-    e->holder = h;
-    e->val = v;
-}
-
 void lock_acquire(struct SCHED_LOCK *plock) {
     if (current == 0)
         return;
@@ -108,36 +72,18 @@ void lock_acquire(struct SCHED_LOCK *plock) {
     asm_cli();
     if (plock->holder == current) {
         plock->holder_repeat_nr++;
-        lklog(plock, 5);
         asm_restore_eflags(old);
         return;
     }
     spinlock_acquire(&plock->semaphore.lock);
     while (plock->semaphore.value == 0) {
         list_append(&plock->semaphore.waiters, &current->wait_tag);
-        lklog(plock, 3);
         uint32_t bf = thread_block_prepare(TASK_BLOCKED);
         spinlock_release(&plock->semaphore.lock);
         thread_block_commit(bf);
         spinlock_acquire(&plock->semaphore.lock);
-        lklog(plock, 4);
     }
     plock->semaphore.value--;
-    lklog(plock, 1);
-    if (plock->holder != 0) {
-        for (uint32_t i = 0; i < 64; i++) {
-            struct SCHED_LKLOG *e = &lkbuf[(lkidx + i) & 63];
-            kprintf("[ev] %u t=%x h=%x v=%u\n", e->ev, e->task, e->holder, e->val);
-        }
-        struct TASK *h = plock->holder;
-        kprintf("[lock] corrupt lock=%x holder=%x hp=%d hn=%s hs=%d cur=%x cp=%d cn=%s rpt=%d\n",
-                (uint32_t)(uintptr_t)plock, (uint32_t)(uintptr_t)h,
-                (int)h->pid, h->name, (int)h->status,
-                (uint32_t)(uintptr_t)current,
-                current ? (int)current->pid : -1,
-                current ? current->name : "?",
-                (int)plock->holder_repeat_nr);
-    }
     ASSERT(plock->holder == 0);
     ASSERT(plock->holder_repeat_nr == 0);
     plock->holder = current;
@@ -163,7 +109,6 @@ void lock_release(struct SCHED_LOCK *plock) {
     plock->holder = 0;
     plock->holder_repeat_nr = 0;
     plock->semaphore.value++;
-    lklog(plock, 2);
     if (!list_empty(&plock->semaphore.waiters)) {
         struct LIST_ELEM *e = list_pop_front(&plock->semaphore.waiters);
         struct TASK *w = list_entry(e, struct TASK, wait_tag);

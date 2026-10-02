@@ -112,8 +112,12 @@ static int tcp_emit(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq, uint32_t ack,
     return ip_output(ifp, pcb->remote_ip, IPPROTO_TCP, seg, TCP_HDR_LEN + len);
 }
 
+static uint16_t tcp_rx_len(struct TCP_PCB *pcb) {
+    return (uint16_t)(pcb->rx_tail - pcb->rx_head);
+}
+
 static int tcp_rx_room(struct TCP_PCB *pcb) {
-    return TCP_RCV_BUF - (int)(pcb->rx_tail - pcb->rx_head);
+    return TCP_RCV_BUF - (int)tcp_rx_len(pcb);
 }
 
 static void tcp_rx_put(struct TCP_PCB *pcb, const uint8_t *data, uint32_t len) {
@@ -219,7 +223,7 @@ int tcp_send(struct TCP_PCB *pcb, const void *data, uint32_t len) {
 int tcp_recv(struct TCP_PCB *pcb, void *buf, uint32_t len) {
     extern NETIF g_netif;
     lock_acquire(&net_lock);
-    uint32_t avail = pcb->rx_tail - pcb->rx_head;
+    uint32_t avail = tcp_rx_len(pcb);
     if (avail == 0) {
         lock_release(&net_lock);
         return -1;
@@ -231,7 +235,7 @@ int tcp_recv(struct TCP_PCB *pcb, void *buf, uint32_t len) {
     for (uint32_t i = 0; i < avail; i++)
         dst[i] = pcb->rx[pcb->rx_head++ & RCV_MASK];
 
-    if (room_before == 0 && tcp_rx_room(pcb) > 0 && pcb->active &&
+    if (room_before < TCP_MSS && tcp_rx_room(pcb) >= TCP_MSS && pcb->active &&
         pcb->remote_port)
         tcp_emit(&g_netif, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
 
@@ -395,6 +399,7 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
                     pcb->retry = 0;
                     pcb->tmo = 0;
                 }
+                tcp_fire(ifp, pcb);
             }
         }
     }
@@ -456,6 +461,7 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     uint16_t off_flags = net_be16(pkt + 12);
     uint8_t hlen = (uint8_t)((off_flags >> 12) * 4);
     uint8_t flags = (uint8_t)(off_flags & 0xFF);
+    uint16_t seg_wnd = net_be16(pkt + 14);
     if (hlen < TCP_HDR_LEN || len < hlen)
         return;
     uint32_t dlen = len - hlen;
@@ -479,6 +485,8 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         lock_release(&net_lock);
         return;
     }
+
+    pcb->snd_wnd = seg_wnd ? seg_wnd : TCP_MSS;
 
     if (pcb->state == TCP_SYN_SENT) {
         if ((flags & TCP_FLAG_SYN) && (flags & TCP_FLAG_ACK)) {

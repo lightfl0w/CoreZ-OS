@@ -45,7 +45,9 @@ void icmp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         reply[0] = ICMP_ECHO_REPLY;
         reply[1] = 0;
         net_put16(reply + 2, ip_csum(reply, rlen));
+        lock_acquire(&net_lock);
         ip_output(ifp, src, IPPROTO_ICMP, reply, rlen);
+        lock_release(&net_lock);
     } else if (type == ICMP_ECHO_REPLY && code == 0) {
         lock_acquire(&net_lock);
         if (s_ping_active)
@@ -70,8 +72,9 @@ int nt_icmp_send(uint32_t dst, uint16_t id, uint16_t seq) {
     lock_acquire(&net_lock);
     s_ping_tmo = net_now_ms();
     s_ping_active = 1;
+    int rc = ip_output(&g_netif, dst, IPPROTO_ICMP, req, rlen);
     lock_release(&net_lock);
-    return ip_output(&g_netif, dst, IPPROTO_ICMP, req, rlen);
+    return rc;
 }
 
 int nt_icmp_recv(struct NET_PING_REPLY *out, int max) {

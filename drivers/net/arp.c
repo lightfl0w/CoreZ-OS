@@ -80,8 +80,10 @@ void arp_input(NETIF *ifp, const uint8_t *pkt, uint32_t len) {
         if (tpa != ifp->ip)
             return;
         uint8_t rep[28];
+        lock_acquire(&net_lock);
         arp_build(rep, ifp, ARP_OP_REPLY, pkt + 8, ifp->ip, spa);
         eth_output(ifp, pkt + 8, ETH_ARP, rep, sizeof rep);
+        lock_release(&net_lock);
     } else if (known) {
         ip_arp_resolved(ifp, spa, pkt + 8);
     }
@@ -95,12 +97,11 @@ int arp_resolve(NETIF *ifp, uint32_t ip, uint8_t *out_mac) {
         lock_release(&net_lock);
         return 0;
     }
-    lock_release(&net_lock);
-
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t req[28];
     arp_build(req, ifp, ARP_OP_REQUEST, bcast, ifp->ip, ip);
     eth_output(ifp, bcast, ETH_ARP, req, sizeof req);
+    lock_release(&net_lock);
     return -1;
 }
 
