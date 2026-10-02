@@ -571,7 +571,7 @@ static void test_proc(void) {
     chk("proc/kill_self0", kill(getpid(), 0) == 0);
     errno = 0;
     chk("proc/system_null", system(0) != 0);
-    FILE *pp = popen("toybox echo PYCHK_POPEN_OK", "r");
+    FILE *pp = popen("busybox echo PYCHK_POPEN_OK", "r");
     errno = 0;
     chk("proc/popen", pp != 0);
     if (pp) {

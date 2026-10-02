@@ -11,6 +11,7 @@
 #include "kernel/fs/file.h"
 #include "kernel/userprog/exec.h"
 #define MSR_FS_BASE 0xC0000100ull
+#define MSR_KERNEL_GS_BASE 0xC0000102ull
 
 void start_process(void *arg) {
     char *path = (char *)arg;
@@ -38,6 +39,7 @@ void process_activate(struct TASK *task) {
         } else if (task->tls_selector != 0) {
             tls_desc_set_base(task->tls_base);
         }
+        asm_wrmsr(MSR_KERNEL_GS_BASE, task->gs_base_user);
     } else {
         asm_write_cr3(kernel_pml4);
     }
@@ -181,13 +183,6 @@ static uint32_t space_unref(uint32_t pml4) {
     return left;
 }
 
-/*
- * 释放整个地址空间：遍历 PML4 释放用户页与页表页，最后释放 PML4 页；
- * release_bitmap 为真时同时释放 owner 的 vaddr 位图页。
- * 供两类调用方使用：
- *   task_release_space —— 任务退出/被杀，释放自己持有的空间（含位图）；
- *   free_user_space    —— fork/exec 失败回滚，显式指定要丢弃的 pml4。
- */
 static void space_release_ex(uint32_t pml4_phys, struct TASK *owner,
                              int release_bitmap) {
     if (pml4_phys != 0) {

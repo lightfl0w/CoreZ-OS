@@ -65,13 +65,16 @@ static int wait_reply(uint16_t id, uint16_t seq, uint32_t *rtt) {
 
 int main(int argc, char **argv) {
     if (argc < 2 || argv[1] == NULL) {
-        printf("ping: argument error\neg: ping 10.0.2.2\n");
+        printf("ping: argument error\neg: ping 10.0.2.2 | ping example.com\n");
         exit(-2);
     }
     uint32_t dst = parse_ip(argv[1]);
     if (dst == 0) {
-        printf("ping: invalid IP \"%s\"\n", argv[1]);
-        exit(-2);
+        printf("PING %s resolving...\n", argv[1]);
+        if (!dns_lookup(argv[1], &dst)) {
+            printf("ping: cannot resolve %s\n", argv[1]);
+            exit(-2);
+        }
     }
 
     uint32_t dst_host = dst;

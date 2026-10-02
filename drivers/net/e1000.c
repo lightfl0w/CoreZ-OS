@@ -58,8 +58,8 @@ struct E1000_RX_DESC {
 } __attribute__((packed));
 
 static volatile uint8_t *s_regs;
-static struct E1000_TX_DESC *s_tx;
-static struct E1000_RX_DESC *s_rx;
+static volatile struct E1000_TX_DESC *s_tx;
+static volatile struct E1000_RX_DESC *s_rx;
 static uint8_t *s_tx_buf;
 static uint8_t *s_rx_buf;
 static uint32_t s_tx_cur;
@@ -109,6 +109,12 @@ int e1000_init(NETIF *ifp) {
 
     s_tx = (struct E1000_TX_DESC *)get_kernel_pages(1);
     s_tx_buf = (uint8_t *)get_kernel_pages(TX_DESC_N * RX_BUF_LEN / PAGE_SIZE);
+    s_rx = (struct E1000_RX_DESC *)get_kernel_pages(1);
+    s_rx_buf = (uint8_t *)get_kernel_pages(RX_DESC_N * RX_BUF_LEN / PAGE_SIZE);
+    if (!s_tx || !s_tx_buf || !s_rx || !s_rx_buf) {
+        kprintf("[e1000] ring alloc failed\n");
+        return -1;
+    }
     for (uint32_t i = 0; i < TX_DESC_N; i++) {
         s_tx[i].addr = V2P(s_tx_buf) + (uint64_t)i * RX_BUF_LEN;
         s_tx[i].cmd = 0;
@@ -122,8 +128,6 @@ int e1000_init(NETIF *ifp) {
     e1000_reg_write(REG_TCTL, 0x10000 | 0x400 | 0x8 | 0x2);
     e1000_reg_write(REG_TIPG, 0x18);
 
-    s_rx = (struct E1000_RX_DESC *)get_kernel_pages(1);
-    s_rx_buf = (uint8_t *)get_kernel_pages(RX_DESC_N * RX_BUF_LEN / PAGE_SIZE);
     for (uint32_t i = 0; i < RX_DESC_N; i++) {
         s_rx[i].addr = V2P(s_rx_buf) + (uint64_t)i * RX_BUF_LEN;
         s_rx[i].status = 0;

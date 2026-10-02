@@ -628,6 +628,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("bitmap.o",     KERNEL_DIR / "mm" / "bitmap" / "bitmap.c"),
         ("pool.o",       KERNEL_DIR / "mm" / "pool" / "pool.c"),
         ("access.o",     KERNEL_DIR / "mm" / "access.c"),
+        ("kheap.o",      KERNEL_DIR / "mm" / "kheap.c"),
         ("list.o",       ROOT / "lib" / "list" / "list.c"),
         ("thread.o",     KERNEL_DIR / "sched" / "thread.c"),
         ("sync.o",       KERNEL_DIR / "sched" / "sync.c"),
@@ -645,6 +646,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("ext2.o",       KERNEL_DIR / "fs" / "ext2.c"),
         ("ext4.o",       KERNEL_DIR / "fs" / "ext4.c"),
         ("fsapi.o",      KERNEL_DIR / "fs" / "fsapi.c"),
+        ("pbcache.o",    KERNEL_DIR / "fs" / "pbcache.c"),
         ("fs.o",         KERNEL_DIR / "fs" / "fs.c"),
         ("inode.o",      KERNEL_DIR / "fs" / "inode.c"),
         ("dir.o",        KERNEL_DIR / "fs" / "dir.c"),
@@ -674,19 +676,19 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("clone.o",      KERNEL_DIR / "userprog" / "clone.c"),
         ("mouse.o",      ROOT / "drivers" / "char" / "mouse.c"),
         ("gfx.o",        KERNEL_DIR / "gui" / "gfx.c"),
-        ("gpu.o",        KERNEL_DIR / "gui" / "gpu.c"),
-        ("display.o",    KERNEL_DIR / "gui" / "display.c"),
+        ("gpu.o",        ROOT / "drivers" / "video" / "gpu.c"),
+        ("display.o",    ROOT / "drivers" / "video" / "display.c"),
         ("input.o",      KERNEL_DIR / "gui" / "input.c"),
-        ("udi.o",        KERNEL_DIR / "gui" / "udi.c"),
-        ("udi_virtio.o", KERNEL_DIR / "gui" / "udi_virtio.c"),
-        ("udi_vmware.o", KERNEL_DIR / "gui" / "udi_vmware.c"),
+        ("udi.o",        ROOT / "drivers" / "video" / "udi.c"),
+        ("udi_virtio.o", ROOT / "drivers" / "video" / "udi_virtio.c"),
+        ("udi_vmware.o", ROOT / "drivers" / "video" / "udi_vmware.c"),
         ("font.o",       KERNEL_DIR / "gui" / "font.c"),
         ("theme.o",      KERNEL_DIR / "gui" / "theme.c"),
         ("shm.o",        KERNEL_DIR / "gui" / "shm.c"),
         ("guiserver.o",  KERNEL_DIR / "gui" / "server.c"),
-        ("wm.o", KERNEL_DIR / "gui" / "wm.c"),
-        ("wm_anim.o", KERNEL_DIR / "gui" / "wm_anim.c"),
-        ("wm_bar.o", KERNEL_DIR / "gui" / "wm_bar.c"),
+        ("wm.o", KERNEL_DIR / "gui" / "wm" / "wm.c"),
+        ("wm_anim.o", KERNEL_DIR / "gui" / "wm" / "wm_anim.c"),
+        ("wm_bar.o", KERNEL_DIR / "gui" / "wm" / "wm_bar.c"),
         ("guiclients.o", KERNEL_DIR / "gui" / "clients.c"),
         ("guiclients_term.o", KERNEL_DIR / "gui" / "clients_term.c"),
         ("flanterm.o", KERNEL_DIR / "gui" / "flanterm" / "src" / "flanterm.c"),
@@ -700,6 +702,17 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("x11_render.o", KERNEL_DIR / "gui" / "x11_render.c"),
         ("x11_window.o", KERNEL_DIR / "gui" / "x11_window.c"),
         ("x11_server.o", KERNEL_DIR / "gui" / "x11_server.c"),
+        ("sha256.o",     ROOT / "lib" / "crypto" / "sha256.c"),
+        ("chacha20.o",   ROOT / "lib" / "crypto" / "chacha20.c"),
+        ("aes_gcm.o",    ROOT / "lib" / "crypto" / "aes_gcm.c"),
+        ("x25519.o",     ROOT / "lib" / "crypto" / "x25519.c"),
+        ("p256.o",       ROOT / "lib" / "crypto" / "p256.c"),
+        ("rsa.o",        ROOT / "lib" / "crypto" / "rsa.c"),
+        ("x509.o",       ROOT / "lib" / "tls" / "x509.c"),
+        ("tls.o",        ROOT / "lib" / "tls" / "tls.c"),
+        ("tls_roots.o",  ROOT / "lib" / "tls" / "roots.c"),
+        ("tls_net.o",    ROOT / "drivers" / "net" / "tls.c"),
+        ("dns.o",        ROOT / "drivers" / "net" / "dns.c"),
     ]
 
     tasks.append(Task(
@@ -746,6 +759,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         ("gs_probe", "gs_probe.c", "_start", []),
         ("ping",        "ping.c",        "_start", []),
         ("udp_echo",    "udp_echo.c",    "_start", []),
+        ("tlsclient",   "tlsclient.c",   "_start", []),
+        ("apktls",      "apktls.c",      "_start", []),
         ("cow_stress",  "cow_stress.c",  "_start", []),
         ("canary_test", "canary_test.c", "_start", []),
     ]
@@ -766,6 +781,24 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             outs.append(obj)
         return outs
     lib_objs = compile_user_lib(BUILD_DIR)
+    tls_lib_sources = [
+        (ROOT / "lib" / "crypto", "sha256.c",   "up_sha256.o"),
+        (ROOT / "lib" / "crypto", "chacha20.c", "up_chacha20.o"),
+        (ROOT / "lib" / "crypto", "aes_gcm.c",  "up_aes_gcm.o"),
+        (ROOT / "lib" / "crypto", "x25519.c",   "up_x25519.o"),
+        (ROOT / "lib" / "crypto", "p256.c",     "up_p256.o"),
+        (ROOT / "lib" / "crypto", "rsa.c",      "up_rsa.o"),
+        (ROOT / "lib" / "tls",    "x509.c",     "up_x509.o"),
+        (ROOT / "lib" / "tls",    "tls.c",      "up_tls.o"),
+        (ROOT / "lib" / "tls",    "roots.c",    "up_roots.o"),
+    ]
+    tls_objs = []
+    for _dir, fname, oname in tls_lib_sources:
+        src = _dir / fname
+        obj = BUILD_DIR / oname
+        tasks.append(task_cc(oname, src, obj, tools, UP_CFLAGS_64))
+        tls_objs.append(obj)
+    tls_programs = ("apktls",)
     for prog_name, src_c, entry_flag, opt_flags in user_programs:
         nick_map = {"prog_no_arg": "up_no_arg", "prog_arg": "up_arg",
                     "cat": "up_cat", "fork_demo": "up_fork",
@@ -782,10 +815,11 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         if entry_flag:
             elf_flags[elf_flags.index("-e") + 1] = entry_flag
         elf = BUILD_DIR / f"{prog_name}.elf"
+        extra_objs = list(tls_objs) if prog_name in tls_programs else []
         elf_task = task_link(
             f"{prog_name}.elf", elf, tools,
             [BUILD_DIR / "up_start.o", BUILD_DIR / "lc_clone.o", prog_obj,
-             *lib_objs],
+             *lib_objs, *extra_objs],
             flags=elf_flags,
         )
         tasks.append(elf_task)
@@ -942,10 +976,10 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
     kernel_objs_names = [
         "mb2_entry.o", "entry.o", "kernel.o", "mb2.o", "func.o", "ioc.o", "io.o", "idle.o", "acpi.o",
         "apic.o", "pit.o", "stub.o", "idt.o", "interrupt.o", "early.o", "pic.o",
-        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "list.o",
+        "assert.o", "ssp.o", "str.o", "rand.o", "rbtree.o", "png.o", "ttf.o", "bitmap.o", "pool.o", "access.o", "kheap.o", "list.o",
         "switch.o", "thread.o", "sync.o", "percpu.o", "smp.o",
         "ap_tramp.o", "ioqueue.o", "tty.o", "pty.o", "keyboard.o", "rtc.o",
-        "ide.o", "block.o", "nvme.o", "pci.o", "ext2.o", "ext4.o", "fsapi.o", "fs.o", "inode.o",
+        "ide.o", "block.o", "nvme.o", "pci.o", "pbcache.o", "ext2.o", "ext4.o", "fsapi.o", "fs.o", "inode.o",
         "dir.o", "file.o", "proc.o",
         "gdt.o", "tss.o", "process.o", "exec.o", "pe.o",
         "pipe.o", "ksyscall.o", "mmap.o", "futex.o",
@@ -960,6 +994,8 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         "guiclients_png.o", "guiclients_files.o", "guiclients_edit.o", "gui.o", "x11.o", "x11_render.o", "x11_window.o", "x11_server.o",
         "rtl8139.o", "e1000.o", "arp.o", "ip.o", "eth.o", "icmp.o",
         "tcp.o", "udp.o", "socket.o", "net.o",
+        "sha256.o", "chacha20.o", "aes_gcm.o", "x25519.o", "p256.o", "rsa.o",
+        "x509.o", "tls.o", "tls_roots.o", "tls_net.o", "dns.o",
     ]
     kernel_link_objs = [BUILD_DIR / n for n in kernel_objs_names]
     kernel_elf = BUILD_DIR / "kernel.elf"
@@ -1038,60 +1074,52 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
             description="configure+make+install native musl 1.2.6",
         ))
 
-        TOYBOX_DIR = ROOT / "third_modules" / "toybox"
+        BUSYBOX_DIR = ROOT / "third_modules" / "busybox"
 
         _musl_gcc = MUSL_PREFIX / "bin" / "musl-gcc"
         _musl_clang = MUSL_PREFIX / "bin" / "musl-clang"
         _musl_pick = (
             f"MC={shlex.quote(str(_musl_clang))}; "
             f"[ -x \"$MC\" ] || MC={shlex.quote(str(_musl_gcc))}; ")
-        _toybox_pre = (f"test -x {shlex.quote(str(_musl_gcc))} || "
-                       f"test -x {shlex.quote(str(_musl_clang))} || exit 0; " +
-                       _musl_pick)
+        _busybox_pre = (f"test -x {shlex.quote(str(_musl_gcc))} || "
+                        f"test -x {shlex.quote(str(_musl_clang))} || exit 0; " +
+                        _musl_pick)
+        _linux_inc = BUILD_DIR / "linux-include"
         tasks.append(Task(
-            name="toybox-config",
+            name="busybox-config",
             cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                 f"[ -f .config ] || make defconfig >/dev/null 2>&1; "
-                 f"make oldconfig >/dev/null 2>&1; true"],
-            out=TOYBOX_DIR / ".config",
-            deps=[TOYBOX_DIR / "Makefile"],
-            optional=True, group="toybox",
-            description="toybox defconfig",
+                 _busybox_pre +
+                 f"cd {shlex.quote(str(BUSYBOX_DIR))} && "
+                 f"[ -f .config ] || {{ make defconfig >/dev/null 2>&1; "
+                 f"sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config; "
+                 f"yes '' | make oldconfig >/dev/null 2>&1; }}; true"],
+            out=BUSYBOX_DIR / ".config",
+            deps=[BUSYBOX_DIR / "Makefile"],
+            optional=True, group="busybox",
+            description="busybox defconfig (static)",
         ))
         tasks.append(Task(
-            name="toybox-abitag",
+            name="busybox-build",
             cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"\"$MC\" -c "
-                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.c'))} -o "
-                 f"{shlex.quote(str(TOYBOX_DIR / 'abitag.o'))}"],
-            out=TOYBOX_DIR / "abitag.o",
-            deps=[TOYBOX_DIR / "abitag.c"],
-            optional=True, group="toybox",
-            description="toybox GNU ABI-tag note",
-        ))
-        _toybox_ld = shlex.quote("-static " +
-                                 str(TOYBOX_DIR / "abitag.o") +
-                                 " -Wl,-Ttext-segment=0x8048000")
-        tasks.append(Task(
-            name="toybox-build",
-            cmd=[sh, "-c",
-                 _toybox_pre +
-                 f"cd {shlex.quote(str(TOYBOX_DIR))} && "
-                 f"rm -f toybox generated/unstripped/toybox && "
-                 f"CC=\"$MC\" "
-                 f"CFLAGS={shlex.quote('-static -Os')} "
-                 f"LDFLAGS={_toybox_ld} "
-                 f"make -j4 > toybox.log 2>&1 || "
-                 f"(tail -20 toybox.log; false) && "
-                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'toybox'))} && "
-                 f"cp toybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
-            out=BUILD_DIR / "toybox",
-            deps=[TOYBOX_DIR / ".config", TOYBOX_DIR / "toybox"],
-            optional=True, group="toybox",
-            description="build toybox (static musl)",
+                 _busybox_pre +
+                 f"cd {shlex.quote(str(BUSYBOX_DIR))} && "
+                 f"[ -d {shlex.quote(str(_linux_inc / 'linux'))} ] || "
+                 f"{{ mkdir -p {shlex.quote(str(_linux_inc))} && "
+                 f"cp -rL /usr/include/linux {shlex.quote(str(_linux_inc / 'linux'))} && "
+                 f"cp -rL /usr/include/asm {shlex.quote(str(_linux_inc / 'asm'))} && "
+                 f"cp -rL /usr/include/asm-generic {shlex.quote(str(_linux_inc / 'asm-generic'))} && "
+                 f"cp -rL /usr/include/mtd {shlex.quote(str(_linux_inc / 'mtd'))}; }} && "
+                 f"rm -f busybox && "
+                 f"make -j4 CC=\"$MC\" "
+                 f"CFLAGS={shlex.quote('-static -Os -I' + str(_linux_inc))} "
+                 f"LDFLAGS={shlex.quote('-static -Wl,-Ttext-segment=0x8048000')} > bb.log 2>&1 || "
+                 f"{{ grep -iE 'error:' bb.log | head -10; tail -5 bb.log; false; }} && "
+                 f"cp busybox {shlex.quote(str(BUILD_DIR / 'busybox'))} && "
+                 f"cp busybox {shlex.quote(str(BUILD_DIR / 'suidsh'))}"],
+            out=BUILD_DIR / "busybox",
+            deps=[BUSYBOX_DIR / ".config", BUSYBOX_DIR / "Makefile"],
+            optional=True, group="busybox",
+            description="build busybox (static musl)",
         ))
 
         musl_demo_c = task_cc("musl_demo.o", APPS_DIR / "musl_demo.c",
@@ -1326,6 +1354,47 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         dyn_demo_elf.deps = [BUILD_DIR / "dyn_demo.o",
                              BUILD_DIR / "libdyndemo.so"]
         tasks.append(dyn_demo_elf)
+
+        sysroot_dir = BUILD_DIR / "sysroot"
+        sysroot_setup = (
+            f"mkdir -p {shlex.quote(str(sysroot_dir / 'usr' / 'lib'))} "
+            f"{shlex.quote(str(sysroot_dir / 'lib'))} && "
+            f"cp -r {shlex.quote(str(MUSL_INC))}/. "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'include'))}/ && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'crt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'Scrt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'rcrt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'crti.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'crtn.o'))} "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'lib'))}/ && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'lib' / 'libc.so'))} && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+            f"{shlex.quote(str(sysroot_dir / 'lib' / ARCH['musl_loader']))}"
+        )
+        tasks.append(Task(
+            name="musl-sysroot",
+            cmd=[sh, "-c", sysroot_setup],
+            out=sysroot_dir / "usr" / "lib" / "libc.so",
+            deps=[MUSL_LIB / "libc.so", MUSL_LIB / "Scrt1.o",
+                  MUSL_LIB / "rcrt1.o", MUSL_LIB / "crti.o",
+                  MUSL_LIB / "crtn.o", MUSL_LIB / "crt1.o"],
+            optional=True, group="musl-dyn",
+            description="assemble musl sysroot (headers+crt+libc.so+ldso)"))
+
+        dyn_hello_elf = Task(
+            name="dyn_hello.elf",
+            cmd=[*tools.cc, "--target=x86_64-unknown-linux-musl",
+                 f"--sysroot={sysroot_dir}",
+                 "-O2", "-fstack-protector-strong", "-fPIE", "-pie",
+                 str(APPS_DIR / "dyn_hello.c"),
+                 "-o", str(BUILD_DIR / "dyn_hello.elf")],
+            out=BUILD_DIR / "dyn_hello.elf",
+            deps=[APPS_DIR / "dyn_hello.c",
+                  sysroot_dir / "usr" / "lib" / "libc.so"],
+            optional=True, group="musl-dyn",
+            description="compile dyn_hello.elf (clang driver + sysroot, no manual ld)")
+        tasks.append(dyn_hello_elf)
     tasks.append(task_config())
     return BuildPlan(tasks=tasks, user_elves=user_elves,
                      musl_enabled=plan_musl_enabled)
@@ -1469,10 +1538,10 @@ def execute_plan(plan: BuildPlan, tools: Tools, console: Console,
                 update(i, t.description)
     s += 1
 
-    console.step_header(s, total_steps, "Building toybox")
-    toybox_tasks = [t for t in plan.tasks if t.group == "toybox"]
-    with console.progress(len(toybox_tasks), "toybox", Ansi.BR_BLU) as update:
-        for i, t in enumerate(toybox_tasks, 1):
+    console.step_header(s, total_steps, "Building busybox")
+    busybox_tasks = [t for t in plan.tasks if t.group == "busybox"]
+    with console.progress(len(busybox_tasks), "busybox", Ansi.BR_BLU) as update:
+        for i, t in enumerate(busybox_tasks, 1):
             run_task(t)
             update(i, t.description)
     s += 1

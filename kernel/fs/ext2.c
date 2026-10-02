@@ -8,6 +8,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/dir.h"
+#include "kernel/fs/pbcache.h"
 #include "drivers/char/rtc.h"
 
 /**
@@ -60,11 +61,6 @@ static uint32_t free_inodes = 0;
 
 #define EXT2_BCACHE_SLOTS 1024u
 
-static uint8_t *s_bc_data;
-static uint32_t s_bc_tag[EXT2_BCACHE_SLOTS];
-static uint8_t s_bc_valid[EXT2_BCACHE_SLOTS];
-static uint32_t s_bc_slots;
-
 static int ext2_disk_read(uint32_t blk, void *buf) {
     if (disk == NULL) {
         return -1;
@@ -79,69 +75,23 @@ static int ext2_disk_read(uint32_t blk, void *buf) {
     return 0;
 }
 
-static const uint8_t *ext2_bcache_peek(uint32_t blk) {
-    if (s_bc_data == NULL) {
-        return NULL;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
-        return s_bc_data + slot * bs;
-    }
-    return NULL;
-}
-
-static void ext2_bcache_inval(uint32_t blk) {
-    if (s_bc_data == NULL) {
-        return;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
-        s_bc_valid[slot] = 0;
-    }
-}
-
-static const uint8_t *ext2_bcache_get(uint32_t blk) {
-    const uint8_t *hit = ext2_bcache_peek(blk);
-    if (hit != NULL || s_bc_data == NULL) {
-        return hit;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    uint8_t *dst = s_bc_data + slot * bs;
-    if (ext2_disk_read(blk, dst) != 0) {
-        return NULL;
-    }
-    s_bc_tag[slot] = blk;
-    s_bc_valid[slot] = 1;
-    return dst;
-}
-
-static void ext2_bcache_store(uint32_t blk, const void *src) {
-    if (s_bc_data == NULL) {
-        return;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    memcpy(s_bc_data + slot * bs, src, bs);
-    s_bc_tag[slot] = blk;
-    s_bc_valid[slot] = 1;
-}
-
 static int ext2_read_block(uint32_t blk, void *buf) {
-    const uint8_t *c = ext2_bcache_get(blk);
-    if (c != NULL) {
-        memcpy(buf, c, bs);
-        return 0;
+    if (disk == NULL) {
+        return -1;
     }
-    return ext2_disk_read(blk, buf);
+    if (blk >= total_blocks && total_blocks != 0) {
+        kprintf("[ext2] read out-of-range block %d (total %d)\n", blk,
+                total_blocks);
+        return -1;
+    }
+    return pbc_read(start, blk, buf);
 }
 
 static int ext2_write_block(uint32_t blk, const void *buf) {
     if (disk == NULL) {
         return -1;
     }
-    BLOCK.write_sectors(disk, start + blk * sect_per_block, (void *)buf,
-                        sect_per_block);
-    ext2_bcache_inval(blk);
-    return 0;
+    return pbc_write(start, blk, buf);
 }
 
 static int ext2_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
@@ -159,9 +109,7 @@ static int ext2_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
     if (blk + cnt > total_blocks && total_blocks != 0) {
         cnt = total_blocks - blk;
     }
-    BLOCK.read_sectors(disk, start + blk * sect_per_block, buf,
-                       cnt * sect_per_block);
-    return 0;
+    return pbc_read_run(start, blk, cnt, buf);
 }
 
 struct DISK_PARTITION *ext2_partition(void) {
@@ -186,6 +134,7 @@ int ext2_init(void) {
             start = part->start_lba;
             bs = 1024u << sb->s_log_block_size;
             sect_per_block = bs / 512u;
+            pbc_dev_register(start, disk, start, sect_per_block, bs);
             inodes_per_group = sb->s_inodes_per_group;
             first_block = sb->s_first_data_block;
             total_blocks = sb->s_blocks_count;
@@ -205,20 +154,6 @@ int ext2_init(void) {
             data_start = inode_table_blk + itable_blocks;
             free_kernel_page((uint32_t)gb);
             free_kernel_page((uint32_t)buf);
-            if (s_bc_data == NULL) {
-                s_bc_slots = EXT2_BCACHE_SLOTS;
-                while (s_bc_slots >= 64u) {
-                    uint32_t need = DIV_ROUND_UP(s_bc_slots * bs, PAGE_SIZE);
-                    s_bc_data = (uint8_t *)get_kernel_pages(need);
-                    if (s_bc_data != NULL) {
-                        break;
-                    }
-                    s_bc_slots /= 2u;
-                }
-                if (s_bc_data == NULL) {
-                    kprintf("ext2: block cache disabled (no memory)\n");
-                }
-            }
             kprintf("ext2 mounted on %s, block_size=%d, inodes_per_group=%d, "
                     "data_start=%d\n",
                     p->name, (int)bs, (int)inodes_per_group, (int)data_start);
@@ -419,11 +354,16 @@ static int ext2_write_inode_impl(uint32_t ino, const struct FS_INODE *in) {
 }
 
 static uint32_t ext2_walk_cached(uint32_t root, uint32_t fblk, uint32_t span) {
-    const uint8_t *p = ext2_bcache_get(root);
+    uint8_t *p = (uint8_t *)get_kernel_pages(1);
     if (p == NULL) {
         return 0;
     }
+    if (ext2_read_block(root, p) != 0) {
+        free_kernel_page((uint32_t)p);
+        return 0;
+    }
     uint32_t child = *(const uint32_t *)(p + 4 * (fblk / span));
+    free_kernel_page((uint32_t)p);
     if (child == 0) {
         return 0;
     }
@@ -886,23 +826,8 @@ static int ext2_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
             }
             run++;
         }
-        uint32_t cached = 1;
-        for (uint32_t i = 0; i < run; i++) {
-            if (ext2_bcache_peek(addr + i) == NULL) {
-                cached = 0;
-                break;
-            }
-        }
-        if (cached) {
-            for (uint32_t i = 0; i < run; i++) {
-                memcpy(blk + i * bs, ext2_bcache_peek(addr + i), bs);
-            }
-        } else {
-            ext2_read_blocks(addr, run, blk);
-            for (uint32_t i = 0; i < run; i++) {
-                ext2_bcache_store(addr + i, blk + i * bs);
-            }
-        }
+        uint32_t cached = 0;
+        ext2_read_blocks(addr, run, blk);
         uint32_t avail = run * bs - within;
         uint32_t chunk = count - done;
         if (chunk > avail) {

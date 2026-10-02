@@ -417,6 +417,30 @@ int32_t sock_select(int32_t nfds, uint32_t *rfds, uint32_t *wfds,
                              (uint32_t)timeout_ms);
 }
 
+uint32_t dns_lookup(const char *hostname, uint32_t *out_ip) {
+    return (uint32_t)syscall2(SYS_DNS_RESOLVE, (uint32_t)hostname,
+                              (uint32_t)out_ip);
+}
+
+int32_t tls_sys_connect(uint32_t ip, uint16_t port, const char *hostname) {
+    return (int32_t)syscall3(SYS_TLS_CONNECT, ip, (uint32_t)port,
+                             (uint32_t)hostname);
+}
+
+int32_t tls_sys_send(const void *buf, uint32_t len) {
+    return (int32_t)syscall2(SYS_TLS_SEND, (uint32_t)buf, len);
+}
+
+int32_t tls_sys_recv(void *buf, uint32_t len) {
+    return (int32_t)syscall2(SYS_TLS_RECV, (uint32_t)buf, len);
+}
+
+int32_t tls_sys_close(void) { return (int32_t)syscall0(SYS_TLS_CLOSE); }
+
+int32_t tls_sys_error(char *buf, uint32_t len) {
+    return (int32_t)syscall2(SYS_TLS_ERROR, (uint32_t)buf, len);
+}
+
 __attribute__((naked)) void __restore(void) {
     __asm__ volatile("movl %0, %%eax\n"
                      "int $0x80\n"

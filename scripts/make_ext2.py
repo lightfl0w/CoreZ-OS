@@ -36,7 +36,7 @@ FILES = [
     "canary_test.elf", "clone_stress.elf", "clone_demo.elf", "path_probe.elf", "kaddr_probe.elf", "sock_probe.elf", "init_sh.elf", "gs_probe.elf", "futex_probe.elf", "eintr_probe.elf", "sel_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "busybox", "dyn_demo.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
@@ -44,7 +44,7 @@ FILES = [
     "t.fish", "shell.elf",
     "wallpaper.png", "pic1.png", "pic2.png", "win_main.exe", "win_gui.exe"
 ]
-ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
+ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "busybox"}
 SPECIAL_MODES = {"suidsh": 0x81ED | 0o4000}
 
 
@@ -129,17 +129,17 @@ SYMLINKS = [("catlink", "/cat.elf"),
 # 冒烟启动脚本：由 init_sh 逐行执行。可用 build(autoexec=...) 覆盖，便于单独
 # 调试某个程序（默认这份是回归用的完整序列）
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
-                  b"toybox ls -l /lib\n"
+                  b"busybox ls -l /lib\n"
                   b"at_probe.elf\nfutex_bs_probe.elf\n"
                   b"rust_hello.elf\nrust_probe.elf\n"
                   b"musl_abi_test.elf\n"
                   b"dyn_demo.elf\n"
                   b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
-                  b"dev_demo.elf\npcre2_demo.elf\ntoybox cat /proc/meminfo\n"
-                  b"toybox echo TOYBOX_ECHO_OK\n"
-                  b"toybox id\ntoybox ls -l /etc/passwd\n"
-                  b"toybox su user -c id\ntoybox cat /proc/self/status\n"
-                  b"toybox ls /\n")
+                  b"dev_demo.elf\npcre2_demo.elf\nbusybox cat /proc/meminfo\n"
+                  b"busybox echo BUSYBOX_ECHO_OK\n"
+                  b"busybox id\nbusybox ls -l /etc/passwd\n"
+                  b"busybox su user -c id\nbusybox cat /proc/self/status\n"
+                  b"busybox ls /\n")
 
 
 def put_symlink(table, ino, target, block):
@@ -234,7 +234,7 @@ def build(build_dir, out, smoke=False, autoexec=None):
         pre["shell.conf"] = b"/init_sh.elf\n"
         names.append("shell.conf")
     else:
-        pre["autoexec"] = b"toybox login\n"
+        pre["autoexec"] = b"busybox login\n"
         names.append("autoexec")
 
     ino_map = {}
@@ -338,7 +338,7 @@ def build(build_dir, out, smoke=False, autoexec=None):
         put_inode(itable, dir_inos[dirname], BLOCK,
                   [subdir_dir_blocks[dirname]], True, mode=0o40755)
     for name in BIN_LINKS:
-        tgt = b"/sh.elf" if name == "sh" else b"/toybox"
+        tgt = b"/sh.elf" if name == "sh" else b"/busybox"
         off = (bin_link_inos[name] - 1) * INODE_SIZE
         struct.pack_into("<H", itable, off + 0, 0xA1FF)
         struct.pack_into("<I", itable, off + 4, len(tgt))

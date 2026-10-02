@@ -48,6 +48,10 @@ ISR_NOERR 30
 ISR_NOERR 31
 extern isr_handler
 isr_common_stub:
+    test qword [rsp + 16], 3
+    jz   .isr_keep_kgs
+    swapgs
+.isr_keep_kgs:
     push gs
     push qword 0x40
     pop  gs
@@ -90,8 +94,12 @@ isr_common_stub:
     pop  rcx
     pop  rbx
     pop  rax
-    pop  gs                  
-    add  rsp, 16             
+    test qword [rsp + 16], 3
+    jz   .isr_exit_kgs
+    swapgs
+.isr_exit_kgs:
+    pop  gs
+    add  rsp, 16
     iretq
 %macro IRQ 2
 global irq%1
@@ -123,11 +131,21 @@ ipi_resched:
     push qword 0x82
     jmp irq_common_stub
 
+global ipi_calib
+ipi_calib:
+    push qword 0
+    push qword 0x70
+    jmp irq_common_stub
+
 extern irq_handler
 irq_common_stub:
-    push gs                
+    test qword [rsp + 16], 3
+    jz   .irq_keep_kgs
+    swapgs
+.irq_keep_kgs:
+    push gs
     push qword 0x40
-    pop  gs                   
+    pop  gs
     push rax
     push rbx
     push rcx
@@ -166,7 +184,11 @@ irq_common_stub:
     pop  rcx
     pop  rbx
     pop  rax
-    pop  gs                  
+    test qword [rsp + 16], 3
+    jz   .irq_exit_kgs
+    swapgs
+.irq_exit_kgs:
+    pop  gs
     add  rsp, 16
     iretq
 global intr_exit
@@ -188,6 +210,10 @@ intr_exit:
     pop  rax
     pop  gs
     add  rsp, 16
+    test qword [rsp + 8], 3
+    jz   .intr_exit_kgs
+    swapgs
+.intr_exit_kgs:
     iretq
 global default_handler
 default_handler:
@@ -196,14 +222,15 @@ default_handler:
     jmp  isr_common_stub
 global syscall_0x80
 syscall_0x80:
+    swapgs
     push qword 0
     push qword 0x80
     jmp  syscall_common_stub
 extern syscall_handler
 syscall_common_stub:
-    push gs                  
+    push gs
     push qword 0x40
-    pop  gs                 
+    pop  gs
     push rax
     push rbx
     push rcx
@@ -224,7 +251,7 @@ syscall_common_stub:
     and  rsp, -16
     call syscall_handler
     mov  rsp, rbp
-    mov  [rsp + 14*8], rax   
+    mov  [rsp + 14*8], rax
     pop  r15
     pop  r14
     pop  r13
@@ -240,7 +267,11 @@ syscall_common_stub:
     pop  rcx
     pop  rbx
     pop  rax
-    pop  gs                 
+    test qword [rsp + 16], 3
+    jz   .sc_exit_kgs
+    swapgs
+.sc_exit_kgs:
+    pop  gs
     add  rsp, 16
     iretq
 
@@ -249,6 +280,7 @@ extern syscall_kstack_top_data
 
 syscall_entry:
     cli
+    swapgs
     mov [rel syscall_user_rsp_slot], rsp
     mov rsp, [rel syscall_kstack_top_data]
     push qword 0x23

@@ -8,6 +8,7 @@
 #include "lib/str/str.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/fs/dir.h"
+#include "kernel/fs/pbcache.h"
 #include "drivers/char/rtc.h"
 
 static struct SCHED_RWLOCK ext4_lock;
@@ -66,13 +67,6 @@ static uint8_t g_jsb[1024];
 static uint32_t j_map_log[2];
 static uint32_t j_map_phys[2];
 static uint32_t j_nmap = 0;
-
-#define EXT4_BCACHE_SLOTS 1024u
-
-static uint8_t *s_bc_data;
-static uint32_t s_bc_tag[EXT4_BCACHE_SLOTS];
-static uint8_t s_bc_valid[EXT4_BCACHE_SLOTS];
-static uint32_t s_bc_slots;
 
 static uint32_t crc_table[256];
 static int crc_ready = 0;
@@ -142,59 +136,22 @@ static int ext4_disk_read(uint32_t blk, void *buf) {
     return 0;
 }
 
-static const uint8_t *ext4_bcache_peek(uint32_t blk) {
-    if (s_bc_data == NULL) {
-        return NULL;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
-        return s_bc_data + slot * bs;
-    }
-    return NULL;
-}
-
-static void ext4_bcache_inval(uint32_t blk) {
-    if (s_bc_data == NULL) {
-        return;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    if (s_bc_valid[slot] && s_bc_tag[slot] == blk) {
-        s_bc_valid[slot] = 0;
-    }
-}
-
-static const uint8_t *ext4_bcache_get(uint32_t blk) {
-    const uint8_t *hit = ext4_bcache_peek(blk);
-    if (hit != NULL || s_bc_data == NULL) {
-        return hit;
-    }
-    uint32_t slot = blk % s_bc_slots;
-    uint8_t *dst = s_bc_data + slot * bs;
-    if (ext4_disk_read(blk, dst) != 0) {
-        return NULL;
-    }
-    s_bc_tag[slot] = blk;
-    s_bc_valid[slot] = 1;
-    return dst;
-}
-
 static int ext4_read_block(uint32_t blk, void *buf) {
-    const uint8_t *c = ext4_bcache_get(blk);
-    if (c != NULL) {
-        memcpy(buf, c, bs);
-        return 0;
+    if (disk == NULL) {
+        return -1;
     }
-    return ext4_disk_read(blk, buf);
+    if (blk >= total_blocks && total_blocks != 0) {
+        kprintf("[ext4] read out-of-range block %d\n", blk);
+        return -1;
+    }
+    return pbc_read(start, blk, buf);
 }
 
 static int ext4_raw_write(uint32_t blk, const void *buf) {
     if (disk == NULL) {
         return -1;
     }
-    BLOCK.write_sectors(disk, start + blk * sect_per_block, (void *)buf,
-                        sect_per_block);
-    ext4_bcache_inval(blk);
-    return 0;
+    return pbc_write(start, blk, buf);
 }
 
 static int ext4_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
@@ -210,9 +167,7 @@ static int ext4_read_blocks(uint32_t blk, uint32_t cnt, void *buf) {
     if (blk + cnt > total_blocks && total_blocks != 0) {
         cnt = total_blocks - blk;
     }
-    BLOCK.read_sectors(disk, start + blk * sect_per_block, buf,
-                       cnt * sect_per_block);
-    return 0;
+    return pbc_read_run(start, blk, cnt, buf);
 }
 
 static int jsb_read(uint32_t blk, void *buf) {
@@ -2062,20 +2017,7 @@ static int ext4_read_from_inode_impl(const struct FS_INODE *ino, uint32_t off,
             }
             run++;
         }
-        uint32_t cached = 1;
-        for (uint32_t i = 0; i < run; i++) {
-            if (ext4_bcache_peek(addr + i) == NULL) {
-                cached = 0;
-                break;
-            }
-        }
-        if (cached) {
-            for (uint32_t i = 0; i < run; i++) {
-                memcpy(blk + i * bs, ext4_bcache_peek(addr + i), bs);
-            }
-        } else {
-            ext4_read_blocks(addr, run, blk);
-        }
+        ext4_read_blocks(addr, run, blk);
         uint32_t avail = run * bs - within;
         uint32_t chunk = count - done;
         if (chunk > avail) {
@@ -2544,6 +2486,7 @@ int ext4_init(void) {
         memcpy(g_sb, sb, 1024);
         bs = 1024u << ld32(g_sb + 0x18);
         sect_per_block = bs / 512u;
+        pbc_dev_register(start, disk, start, sect_per_block, bs);
         first_data_block = ld32(g_sb + 0x14);
         blocks_per_group = ld32(g_sb + 0x20);
         inodes_per_group = ld32(g_sb + 0x28);
@@ -2581,20 +2524,6 @@ int ext4_init(void) {
         }
         if (ext4_load_gdt() != 0) {
             return -1;
-        }
-        if (s_bc_data == NULL) {
-            s_bc_slots = EXT4_BCACHE_SLOTS;
-            while (s_bc_slots >= 64u) {
-                uint32_t need = DIV_ROUND_UP(s_bc_slots * bs, PAGE_SIZE);
-                s_bc_data = (uint8_t *)get_kernel_pages(need);
-                if (s_bc_data != NULL) {
-                    break;
-                }
-                s_bc_slots /= 2u;
-            }
-            if (s_bc_data == NULL) {
-                kprintf("ext4: block cache disabled (no memory)\n");
-            }
         }
         has_journal = ((ld32(g_sb + 0x5C) & 0x4u) != 0) &&
                       (ld32(g_sb + 0xE0) != 0);

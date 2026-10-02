@@ -33,7 +33,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | -------- | ------------------------------------------------------------------------------------------------ |
 | 物理内存池    | `kernel/mm/pool`：E820 探测 + 位图管理物理页框；`pool_lock`(物理位图) 与 `map_lock`(页表/虚拟位图) 分离，单页分配走每 CPU 缓存，空闲页数由原子计数 O(1) 读出                 |
 | 内核虚拟地址池  | `KERNEL_VADDR_START` 起的 vaddr 位图，`ioremap` 设备映射（NX/PCD）                                          |
-| 内核堆      | `get_kernel_pages`：高半区（`VIRT_OF = phys + 0xC0000000`）直接映射分配                                       |
+| 内核堆      | `kernel/mm/kheap`：O(1) 分配器 |
 | COW fork | `kernel/userprog/fork`：页表遍历复制，写时复制（`COW_FLAG` + 引用计数 `frame_owner`），缺页时在 `map_lock` 下 `page_cow_resolve` 一次完成决策/拷贝/递减 |
 | 用户地址空间   | 每进程独立 PML4 + 用户 vaddr 位图；`mmap`/`brk` 堆扩展                                                        |
 
@@ -97,8 +97,17 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | `gui_launch`                                | GUI 合成器入口                    |
 | `lc_demo` / `musl_demo` / `libc_tests_main` | 自带 libc / musl ABI / libc 测试套件 |
 
-`third_modules/` 下是第三方代码：musl（`CONFIG_MUSL_LIB=y` 构建完整 libc 并运行
-libc-testsuite）、mr\_micro\_shell、toybox。
+`third_modules/` 下以 git submodule 形式引入第三方代码，构建时从源码编译，
+不重新分发任何二进制产物。各模块及许可证如下，版权归各自上游作者所有：
+
+| 模块 | 用途 | 许可证 |
+| --- | --- | --- |
+| [musl](https://git.musl-libc.org/cgit/musl) | 标准 C 库（`CONFIG_MUSL_LIB=y` 构建完整 libc） | MIT |
+| [libc-testsuite](https://git.musl-libc.org/cgit/libc-testsuite) | musl 配套 libc 行为测试 | MIT |
+| [busybox](https://git.busybox.net/busybox) | 核心用户态工具箱（静态 musl 编译，提供 ls/echo/id/su 等） | GPL-2.0-only |
+| [fish](https://github.com/fish-shell/fish-shell) | 交互式 shell（musl 动态链接运行） | GPL-2.0-only |
+| [pcre2](https://github.com/PCRE2Project/pcre2) | 正则表达式库 | BSD-3-Clause |
+| [flanterm](https://github.com/mintsuki/flanterm) | 帧缓冲终端渲染（GUI 终端） | MIT |
 
 ## 目录结构
 
@@ -115,7 +124,7 @@ libc-testsuite）、mr\_micro\_shell、toybox。
 ├── includes/               # 全部公共头文件，目录树与源码镜像
 ├── kernel/
 │   ├── init/               # main.c、gdt/tss/idt/apic/pic/pit/acpi/smp/mb2
-│   ├── mm/                 # pool/bitmap/access（copy_from_user 等）
+│   ├── mm/                 # pool/bitmap/kheap(TLSF malloc)/access（copy_from_user 等）
 │   ├── sched/              # thread/sync/percpu
 │   ├── userprog/           # process/fork/clone/exec/wait_exit
 │   ├── fs/                 # ext2/file/inode/dir/proc
@@ -183,8 +192,6 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 
 ## 已知问题
 
-- e1000 初始化在大规模内存分配压力下可能缺页（`ioremap` 的映射丢失，原因待查），
-  正常负载下网络工作正常。
 - 并发：物理页池按 `pool_lock`(位图)/`map_lock`(页表) 拆分，单页分配经每 CPU 缓存、
   空闲页数用原子计数；ext2 元数据用读写锁（读并行/写排他）；file 表槽位分配与引用计数
   无锁；网络栈共享状态由 `net_lock` 保护（收包在 net 线程任务上下文，用可阻塞锁而非
@@ -206,5 +213,5 @@ QEMU 参数默认挂载 e1000 网卡 + user 网络后端（`hostfwd tcp::8765-:8
 - [x] GUI 合成器、shell 与用户程序集
 - [x] musl 构建选项
 - [x] 修复 fork 子进程 SIGSEGV（lc compat shim 未保存 callee-saved rbx/rbp）
-- [ ] 内核堆分配器（malloc 形态的细粒度分配）
+- [x] 内核堆分配器（`kernel/mm/kheap`：TLSF 风格 O(1) malloc，启动自检 + 冒烟标记 `KHEAP_SELFTEST_OK`）
 - [ ] 多核调度（AP 目前仅验证可启动，未参与调度）

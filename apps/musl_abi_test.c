@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     DIR *d;
     int nd;
     int pfd[2];
-    int fd = open("/cat.elf", O_RDONLY);
+    int fd = open("/bin/cat.elf", O_RDONLY);
     printf("[abi] openat fd=%d\n", fd);
     char buf[8];
     ssize_t n = read(fd, buf, 4);
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     int r = fstat(fd, &st);
     printf("[abi] fstat r=%d size=%d reg=%d\n", r, (int)st.st_size,
            S_ISREG(st.st_mode));
-    r = stat("/cat.elf", &st);
+    r = stat("/bin/cat.elf", &st);
     printf("[abi] stat r=%d size=%d reg=%d\n", r, (int)st.st_size,
            S_ISREG(st.st_mode));
     write(1, "[abi] S1 close\n", 15);
@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
     printf("[abi] pipe data=%s\n", pb);
     close(pfd[0]);
     close(pfd[1]);
-    int f1 = open("/cat.elf", O_RDONLY);
+    int f1 = open("/bin/cat.elf", O_RDONLY);
     int f2 = dup2(f1, 7);
     printf("[abi] dup2 r=%d\n", f2);
     close(f1);
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     int wr = waitpid(pid, &ws, 0);
     printf("[abi] waitpid r=%d raw=0x%x status=%d\n", wr, (unsigned)ws,
            WEXITSTATUS(ws));
-    int sl = symlink("/cat.elf", "/sltest");
+    int sl = symlink("/bin/cat.elf", "/sltest");
     char lb[128];
     ssize_t lr = readlink("/sltest", lb, sizeof(lb) - 1);
     if (lr >= 0) lb[lr] = 0;
@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
     int mr = lf >= 0 ? (int)read(lf, mb, 4) : -1;
     printf("[abi] link-open r=%d elf=%d\n", mr, mb[0] == 0x7f && mb[1] == 'E');
     if (lf >= 0) close(lf);
-    int sl2 = symlink("/cat.elf" "/sub/dir/padding/xyz/sub/dir/padding/xyz/"
+    int sl2 = symlink("/bin/cat.elf" "/sub/dir/padding/xyz/sub/dir/padding/xyz/"
                       "sub/dir/padding/xyz",
                       "/slslow");
     char lb2[128];

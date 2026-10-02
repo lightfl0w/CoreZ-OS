@@ -4,6 +4,7 @@
 #include "lib/str/str.h"
 #include "drivers/net/arp.h"
 #include "drivers/net/ip.h"
+#include "drivers/net/net.h"
 
 static void eth_parse(const uint8_t *f, uint8_t *dst, uint16_t *type) {
     for (int i = 0; i < 6; i++)
@@ -58,5 +59,8 @@ int eth_output(NETIF *ifp, const uint8_t *dst, uint16_t ethertype,
         frame[6 + i] = ifp->mac[i];
     net_put16(frame + 12, ethertype);
     memcpy(frame + ETH_HDR_LEN, payload, len);
-    return ifp->tx(ifp, frame, fidx);
+    lock_acquire(&net_lock);
+    int rc = ifp->tx(ifp, frame, fidx);
+    lock_release(&net_lock);
+    return rc;
 }

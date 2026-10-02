@@ -44,10 +44,10 @@ static void load_embedded_font(void) {
 
 static void load_disk_font(void) {
     struct FS_STAT st;
-    if (sys_stat("/font_subset.ttf", &st) != 0 || st.st_size == 0 ||
+    if (sys_stat("/share/font_subset.ttf", &st) != 0 || st.st_size == 0 ||
         st.st_size > FONT_DISK_MAX)
         return;
-    int fd = open_file("/font_subset.ttf", O_RDONLY);
+    int fd = open_file("/share/font_subset.ttf", O_RDONLY);
     if (fd < 0)
         return;
     uint32_t pages = (st.st_size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -81,10 +81,10 @@ static int apply_wallpaper_image(const void *data, uint32_t len,
 
 static int load_disk_wallpaper(void) {
     struct FS_STAT st;
-    if (sys_stat("/wallpaper.png", &st) != 0 || st.st_size == 0 ||
+    if (sys_stat("/share/wallpaper.png", &st) != 0 || st.st_size == 0 ||
         st.st_size > WALLPAPER_DISK_MAX)
         return -1;
-    int fd = open_file("/wallpaper.png", O_RDONLY);
+    int fd = open_file("/share/wallpaper.png", O_RDONLY);
     if (fd < 0)
         return -1;
     uint32_t pages = (st.st_size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -97,7 +97,7 @@ static int load_disk_wallpaper(void) {
     close_file(fd);
     int rc = -1;
     if (got >= 64)
-        rc = apply_wallpaper_image(buf, got, "/wallpaper.png");
+        rc = apply_wallpaper_image(buf, got, "/share/wallpaper.png");
     free_kernel_page((uint32_t)(uintptr_t)buf);
     return rc;
 }

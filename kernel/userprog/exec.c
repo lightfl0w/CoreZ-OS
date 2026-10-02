@@ -890,6 +890,13 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     cur->exe_bias = img.base;
     cur->user_brk = 0;
     cur->brk_base = img.brk_base;
+    if (img.brk_base != 0) {
+        uint32_t hp = (USER_LOW_CEILING - img.brk_base) / PAGE_SIZE;
+        if (hp > HEAP_ASLR_PAGES + 1024u) {
+            hp = HEAP_ASLR_PAGES + 1024u;
+        }
+        vaddr_reserve_at(img.brk_base, hp);
+    }
     signal_reset_user(cur);
     for (uint32_t sp = USER_STACK_BOTTOM; sp < USER_STACK_TOP;
          sp += PAGE_SIZE) {
@@ -907,6 +914,7 @@ int32_t sys_execve(const char *path, const char *argv[], const char *envp[],
     cur->tls_base = 0;
     cur->tls_selector = 0;
     cur->tls_msr = 0;
+    cur->gs_base_user = 0;
     cur->errno = 0;
     cur->compat = is_linux;
     cur->stack_bottom = USER_STACK_BOTTOM;

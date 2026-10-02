@@ -19,6 +19,7 @@
 #include "kernel/userprog/process.h"
 #include "lib/str/str.h"
 volatile uint32_t tick = 0;
+volatile uint32_t lapic_calib_count = 0;
 static const char *exc_names[32] = {"Divide Error",
                                     "Debug",
                                     "Non-Maskable Interrupt",
@@ -251,13 +252,35 @@ void irq_handler(struct ARCH_REGS *r) {
             schedule();
         return;
     }
+    if (r->int_no == LAPIC_CALIB_VECTOR) {
+        lapic_calib_count++;
+        lapic_eoi();
+        return;
+    }
     uint32_t irq = r->int_no - 32;
     if (irq == 0) {
+        uint32_t cpu = cpu_id();
+        int percpu_tick = lapic_timer_on();
         irq_eoi(irq);
-        tick++;
-        itimer_tick();
-        scheduler_tick();
-        thread_timer_wake();
+        if (!percpu_tick || cpu == 0) {
+            tick++;
+            itimer_tick();
+            thread_timer_wake();
+            scheduler_tick();
+            if (current != 0) {
+                check_pending_signals(r);
+                if (preempt_disabled() == 0)
+                    schedule();
+            }
+            if (!percpu_tick && apic_active())
+                lapic_send_ipi_all_but_self(IPI_VECTOR_RESCHED);
+        } else {
+            if (current != 0 && current->weight != 0)
+                scheduler_tick();
+            if (current != 0 && preempt_disabled() == 0)
+                schedule();
+        }
+        return;
 #define SCHED_PROBE_ENABLE 0
 #if SCHED_PROBE_ENABLE
         if ((tick % 300) == 0) {
@@ -393,13 +416,6 @@ void irq_handler(struct ARCH_REGS *r) {
         //             (unsigned)cpu_work_switches[2],
         //             (unsigned)cpu_work_switches[3]);
         // }
-        if (apic_active())
-            lapic_send_ipi_all_but_self(IPI_VECTOR_RESCHED);
-        if (current != 0) {
-            check_pending_signals(r);
-            if (preempt_disabled() == 0)
-                schedule();
-        }
         return;
     }
     if (irq == 1) {

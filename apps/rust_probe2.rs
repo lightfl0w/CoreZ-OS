@@ -117,7 +117,7 @@ fn main() {
     });
 
     chk!("cmd", {
-        let spawned = Command::new("toybox").arg("echo").arg("RP2_CMD_OK").spawn();
+        let spawned = Command::new("busybox").arg("echo").arg("RP2_CMD_OK").spawn();
         match spawned {
             Ok(mut c) => {
                 let st = step("wait", c.wait())?;
@@ -128,7 +128,7 @@ fn main() {
     });
 
     chk!("cmd_out", {
-        let out = step("output", Command::new("toybox").arg("echo").arg("RP2_OUT_OK").output())?;
+        let out = step("output", Command::new("busybox").arg("echo").arg("RP2_OUT_OK").output())?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok(format!("status={} out={:?}", out.status.code().unwrap_or(-1), s))
     });

@@ -112,8 +112,12 @@ static int tcp_emit(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq, uint32_t ack,
     return ip_output(ifp, pcb->remote_ip, IPPROTO_TCP, seg, TCP_HDR_LEN + len);
 }
 
+static uint16_t tcp_rx_len(struct TCP_PCB *pcb) {
+    return (uint16_t)(pcb->rx_tail - pcb->rx_head);
+}
+
 static int tcp_rx_room(struct TCP_PCB *pcb) {
-    return TCP_RCV_BUF - (int)(pcb->rx_tail - pcb->rx_head);
+    return TCP_RCV_BUF - (int)tcp_rx_len(pcb);
 }
 
 static void tcp_rx_put(struct TCP_PCB *pcb, const uint8_t *data, uint32_t len) {
@@ -217,17 +221,23 @@ int tcp_send(struct TCP_PCB *pcb, const void *data, uint32_t len) {
 }
 
 int tcp_recv(struct TCP_PCB *pcb, void *buf, uint32_t len) {
+    extern NETIF g_netif;
     lock_acquire(&net_lock);
-    uint32_t avail = pcb->rx_tail - pcb->rx_head;
+    uint32_t avail = tcp_rx_len(pcb);
     if (avail == 0) {
         lock_release(&net_lock);
         return -1;
     }
+    uint32_t room_before = (uint32_t)tcp_rx_room(pcb);
     if (avail > len)
         avail = len;
     uint8_t *dst = (uint8_t *)buf;
     for (uint32_t i = 0; i < avail; i++)
         dst[i] = pcb->rx[pcb->rx_head++ & RCV_MASK];
+
+    if (room_before < TCP_MSS && tcp_rx_room(pcb) >= TCP_MSS && pcb->active &&
+        pcb->remote_port)
+        tcp_emit(&g_netif, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
 
     lock_release(&net_lock);
     return (int)avail;
@@ -389,47 +399,54 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
                     pcb->retry = 0;
                     pcb->tmo = 0;
                 }
+                tcp_fire(ifp, pcb);
             }
         }
     }
-    if (flags & TCP_FLAG_FIN) {
-        pcb->fin_rcvd = 1;
-        if (pcb->state == TCP_ESTABLISHED) {
-            pcb->state = TCP_CLOSE_WAIT;
-        }
-        pcb->rcv_nxt = seq + 1 + dlen;
-        pcb->rx_head = pcb->rx_tail;
-        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
-        return;
-    }
-    if (dlen) {
-        uint32_t wnd_end = pcb->rcv_nxt + (uint32_t)tcp_rx_room(pcb);
-        uint32_t seg_last = seq + dlen - 1u;
-        int starts_in = !seq_lt(seq, pcb->rcv_nxt) && seq_lt(seq, wnd_end);
-        int ends_in =
-            !seq_lt(seg_last, pcb->rcv_nxt) && seq_lt(seg_last, wnd_end);
-        if (!starts_in && !ends_in) {
+    uint32_t seg_dlen = dlen;
+    if (dlen && seq_lt(seq, pcb->rcv_nxt)) {
+        uint32_t past = pcb->rcv_nxt - seq;
+        if (past >= dlen) {
             tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
             return;
         }
-        if (seq_lt(seq, pcb->rcv_nxt)) {
-            uint32_t past = pcb->rcv_nxt - seq;
-            if (past >= dlen) {
-                tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0,
-                         0);
-                return;
-            }
-            seq += past;
-            data += past;
-            dlen -= past;
-        }
+        seq += past;
+        data += past;
+        dlen -= past;
+        seg_dlen -= past;
+    }
+    if (dlen && seq != pcb->rcv_nxt) {
+        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
+        return;
+    }
+
+    uint32_t taken = 0;
+    if (dlen) {
         uint32_t room = (uint32_t)tcp_rx_room(pcb);
         if (dlen > room)
             dlen = room;
         if (dlen) {
             tcp_rx_put(pcb, data, dlen);
             pcb->rcv_nxt += dlen;
+            taken = dlen;
         }
+    }
+
+    if (flags & TCP_FLAG_FIN) {
+        if (taken != seg_dlen) {
+            tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
+            return;
+        }
+        pcb->fin_rcvd = 1;
+        if (pcb->state == TCP_ESTABLISHED) {
+            pcb->state = TCP_CLOSE_WAIT;
+        }
+        pcb->rcv_nxt++;
+        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
+        return;
+    }
+
+    if (seg_dlen) {
         tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
     }
 }
@@ -444,6 +461,7 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     uint16_t off_flags = net_be16(pkt + 12);
     uint8_t hlen = (uint8_t)((off_flags >> 12) * 4);
     uint8_t flags = (uint8_t)(off_flags & 0xFF);
+    uint16_t seg_wnd = net_be16(pkt + 14);
     if (hlen < TCP_HDR_LEN || len < hlen)
         return;
     uint32_t dlen = len - hlen;
@@ -467,6 +485,8 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         lock_release(&net_lock);
         return;
     }
+
+    pcb->snd_wnd = seg_wnd ? seg_wnd : TCP_MSS;
 
     if (pcb->state == TCP_SYN_SENT) {
         if ((flags & TCP_FLAG_SYN) && (flags & TCP_FLAG_ACK)) {
@@ -499,17 +519,15 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
 
     tcp_input_established(ifp, pcb, seq, flags, data, dlen, ack);
 
-    if (pcb->state == TCP_FIN_WAIT1 && (flags & TCP_FLAG_ACK)) {
-        pcb->state = TCP_FIN_WAIT2;
-        pcb->retry = 0;
-    } else if (pcb->state == TCP_FIN_WAIT1 && (flags & TCP_FLAG_FIN)) {
-        pcb->rcv_nxt = ack + 1;
-        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt,
-                 TCP_FLAG_ACK | TCP_FLAG_FIN, 0, 0);
+    if (pcb->state == TCP_FIN_WAIT1 && (flags & TCP_FLAG_FIN)) {
+        tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
         pcb->state = TCP_TIME_WAIT;
         pcb->tmo = net_now_ms() + 2000;
+    } else if (pcb->state == TCP_FIN_WAIT1 && (flags & TCP_FLAG_ACK)) {
+        pcb->state = TCP_FIN_WAIT2;
+        pcb->retry = 0;
+        pcb->tmo = net_now_ms() + TCP_INIT_RTO;
     } else if (pcb->state == TCP_FIN_WAIT2 && (flags & TCP_FLAG_FIN)) {
-        pcb->rcv_nxt = ack + 1;
         tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
         pcb->state = TCP_TIME_WAIT;
         pcb->tmo = net_now_ms() + 2000;
@@ -520,7 +538,8 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
         pcb->snd_nxt++;
         pcb->tmo = net_now_ms() + TCP_INIT_RTO;
         pcb->retry = 0;
-    } else if (pcb->state == TCP_LAST_ACK && (flags & TCP_FLAG_ACK)) {
+    } else if (pcb->state == TCP_LAST_ACK && (flags & TCP_FLAG_ACK) &&
+               ack == pcb->snd_nxt) {
         pcb->active = 0;
     }
     lock_release(&net_lock);

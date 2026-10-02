@@ -1,9 +1,9 @@
 #include "kernel/gui/clients_internal.h"
 
 #define VIEWER_MAX_FILES 3
-static const char *viewer_files[VIEWER_MAX_FILES] = {"/wallpaper.png",
-                                                     "/pic1.png",
-                                                     "/pic2.png"};
+static const char *viewer_files[VIEWER_MAX_FILES] = {"/share/wallpaper.png",
+                                                     "/share/pic1.png",
+                                                     "/share/pic2.png"};
 
 struct PNG_VIEWER {
     struct COMP_DEMO_CLIENT dc;

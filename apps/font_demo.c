@@ -197,15 +197,15 @@ int main(int argc, char **argv) {
     int pitch = scrnx;
 
     struct FS_STAT st;
-    if (stat("/font_subset.ttf", &st) == -1) {
-        printf("font: /font_subset.ttf not found\n");
+    if (stat("/share/font_subset.ttf", &st) == -1) {
+        printf("font: /share/font_subset.ttf not found\n");
         exit(-1);
     }
     if (st.st_size > (int)sizeof(g_font)) {
         printf("font: too large %d\n", (int)st.st_size);
         exit(-1);
     }
-    int fd = open("/font_subset.ttf", 0);
+    int fd = open("/share/font_subset.ttf", 0);
     if (fd == -1) {
         printf("font: open failed\n");
         exit(-1);

@@ -654,14 +654,15 @@ static int page_table_add_raw(uint32_t vaddr, uint32_t phy_addr) {
     return 0;
 }
 
-static void page_table_add_no_cache(uint32_t vaddr, uint32_t phy_addr) {
+static int page_table_add_no_cache(uint32_t vaddr, uint32_t phy_addr) {
     uint64_t *pte = pte_make(kernel_pml4, (uint64_t)vaddr);
     if (pte == 0) {
         kprintf("[ptadd] pte_make FAILED vaddr=%x\n", vaddr);
-        return;
+        return -1;
     }
     *pte = (uint64_t)phy_addr | pte_wx(PTE_P | 0x10, 1, 0);
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+    return 0;
 }
 
 uint64_t *phys_to_virt(uint64_t phys) {
@@ -680,13 +681,34 @@ void *ioremap(uint32_t phy_addr, uint32_t size) {
     uint32_t vaddr = kernel_vaddr.vaddr_start + (uint32_t)bit * PAGE_SIZE;
 
     lock_acquire(&pool_lock);
+    uint32_t mapped = 0;
+    int fail = 0;
     for (uint32_t i = 0; i < cnt; i++) {
         bitmap_set(&kernel_vaddr.vaddr_bitmap, (uint32_t)bit + i, 1);
-        page_table_add_no_cache(vaddr + i * PAGE_SIZE, phy + i * PAGE_SIZE);
+        if (page_table_add_no_cache(vaddr + i * PAGE_SIZE,
+                                    phy + i * PAGE_SIZE) != 0) {
+            fail = 1;
+            break;
+        }
+        mapped = i + 1;
+    }
+    if (fail) {
+        for (uint32_t i = 0; i < mapped; i++) {
+            uint64_t *pte =
+                pte_query(kernel_pml4, (uint64_t)(vaddr + i * PAGE_SIZE));
+            if (pte != 0 && (*pte & 1)) {
+                *pte = 0;
+                __asm__ volatile("invlpg (%0)"
+                                 : : "r"(vaddr + i * PAGE_SIZE) : "memory");
+            }
+        }
+        for (uint32_t i = 0; i < cnt; i++) {
+            bitmap_set(&kernel_vaddr.vaddr_bitmap, (uint32_t)bit + i, 0);
+        }
     }
     lock_release(&pool_lock);
     lock_release(&map_lock);
-    return (void *)(vaddr + (phy_addr & 0xfff));
+    return fail ? 0 : (void *)(vaddr + (phy_addr & 0xfff));
 }
 
 void *get_a_page(uint32_t vaddr) {

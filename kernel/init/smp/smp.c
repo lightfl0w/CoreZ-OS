@@ -91,6 +91,8 @@ static void ap_build_gdt(uint32_t idx, uint32_t percpu_base) {
 }
 
 static void ap_main(uint32_t idx) {
+    asm_wrmsr(0xC0000101ull, PER_CPU_BASE + idx * 0x1000ull);
+    asm_wrmsr(0xC0000102ull, PER_CPU_BASE + idx * 0x1000ull);
     set_cpu_id(idx);
     set_current((struct TASK *)0);
     idt_load_idtr();

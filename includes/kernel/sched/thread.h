@@ -77,6 +77,7 @@ struct TASK {
     uint32_t tls_base;
     uint32_t tls_selector;
     uint8_t tls_msr;
+    uint64_t gs_base_user;
     int32_t errno;
     uint32_t pgid;
     uint32_t uid;
@@ -103,6 +104,7 @@ struct TASK {
     uint64_t fd_cloexec;
     int32_t fd_owner_pid;
     uint8_t slot_used;
+    uint8_t rq_cpu;
     uint8_t cpu_aff;
     uint32_t on_cpu;
     uint8_t fpu_storage[FPU_SAVE_SIZE] __attribute__((aligned(64)));

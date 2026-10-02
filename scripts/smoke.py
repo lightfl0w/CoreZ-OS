@@ -11,9 +11,12 @@ ESP = BUILD / "esp.img"
 VARS = BUILD / "OVMF_VARS.fd"
 LOG = Path("/tmp/nit_smoke.log")
 MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS",
-         "TOYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root root",
+         "KHEAP_SELFTEST_OK",
+         "BUSYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root     root",
          "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0", "at_probe: PASS",
-         "futex_bs_probe: PASS", "RUST_HELLO_OK", "rust_probe: PASS"]
+         "futex_bs_probe: PASS", "RUST_HELLO_OK", "rust_probe: PASS",
+         "TLSCLIENT_PASS", "APKTLS_PASS",
+         "DYN_HELLO_TAG=libc.so", "DYN_HELLO_MSG=hi-42"]
 TIMEOUT = 300
 
 OVMF_CODE_NAMES = ("OVMF_CODE.4m.fd", "OVMF_CODE.fd")

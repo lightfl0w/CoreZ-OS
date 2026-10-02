@@ -38,15 +38,19 @@ FILES = [
     "futex_probe.elf", "eintr_probe.elf", "sel_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "busybox", "dyn_demo.elf", "dyn_hello.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
     "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
-    "t.fish", "shell.elf",
-    "wallpaper.png", "pic1.png", "pic2.png", "win_main.exe", "win_gui.exe",
+    "tlsclient.elf", "apktls.elf",
+    "shell.elf",
 ]
-ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "toybox"}
+SHARE_FILES = [
+    "font_subset.ttf", "wallpaper.png", "pic1.png", "pic2.png",
+    "t.fish", "win_main.exe", "win_gui.exe",
+]
+ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "busybox"}
 SPECIAL_MODES = {"suidsh": 0o104755}
 FILE_MODE = 0o100755
 
@@ -60,7 +64,7 @@ CHAR_DEV_MODE = 0o20666
 
 DIRS = [("etc", 0o40755), ("home", 0o40755), ("bin", 0o40755),
         ("tmp", 0o41777), ("lib", 0o40755), ("root", 0o40755),
-        ("dev", 0o40755)]
+        ("dev", 0o40755), ("share", 0o40755)]
 
 BIN_LINKS = ["sh", "su", "login", "id", "ls", "cat", "echo", "ps", "passwd",
              "adduser", "groups", "chmod", "chown", "mkdir", "rm", "cp",
@@ -74,6 +78,7 @@ ETC_FILES = [
     ("group", b"root:x:0:\nuser:x:1000:\n", 0o100644),
     ("shadow", b"root::0:0:99999:7:::\nuser::0:0:99999:7:::\n", 0o100600),
     ("hosts", b"127.0.0.1 localhost localhost.localdomain\n", 0o100644),
+    ("resolv.conf", b"nameserver 10.0.2.3\n", 0o100644),
     ("services",
      b"ftp 21/tcp\nssh 22/tcp\ndomain 53/udp\ndomain 53/tcp\n"
      b"http 80/tcp\nhttps 443/tcp\n", 0o100644),
@@ -81,21 +86,22 @@ ETC_FILES = [
 
 LIB_FILES = ["ld-musl-x86_64.so.1", "libc.so", "libdyndemo.so"]
 
-SYMLINKS = [("catlink", "/cat.elf"),
-            ("longlink", "/cat.elf" + "/sub/dir/padding/xyz" * 3)]
+SYMLINKS = [("catlink", "/bin/cat.elf"),
+            ("longlink", "/bin/cat.elf" + "/sub/dir/padding/xyz" * 3)]
 
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
-                  b"toybox ls -l /lib\n"
-                  b"at_probe.elf\nfutex_bs_probe.elf\n"
-                  b"rust_hello.elf\nrust_probe.elf\n"
-                  b"musl_abi_test.elf\n"
-                  b"dyn_demo.elf\n"
-                  b"fork_demo.elf\ncow_stress.elf\nfork_demo.elf\n"
-                  b"dev_demo.elf\npcre2_demo.elf\ntoybox cat /proc/meminfo\n"
-                  b"toybox echo TOYBOX_ECHO_OK\n"
-                  b"toybox id\ntoybox ls -l /etc/passwd\n"
-                  b"toybox su user -c id\ntoybox cat /proc/self/status\n"
-                  b"toybox ls /\n")
+                  b"/bin/busybox ls -l /lib\n"
+                  b"/bin/at_probe.elf\n/bin/futex_bs_probe.elf\n"
+                  b"/bin/rust_hello.elf\n/bin/rust_probe.elf\n"
+                  b"/bin/musl_abi_test.elf\n"
+                  b"/bin/dyn_demo.elf\n/bin/dyn_hello.elf\n"
+                  b"/bin/fork_demo.elf\n/bin/cow_stress.elf\n/bin/fork_demo.elf\n"
+                  b"/bin/dev_demo.elf\n/bin/pcre2_demo.elf\n/bin/busybox cat /proc/meminfo\n"
+                  b"/bin/busybox echo BUSYBOX_ECHO_OK\n"
+                  b"/bin/busybox id\n/bin/busybox ls -l /etc/passwd\n"
+                  b"/bin/busybox su user -c id\n/bin/busybox cat /proc/self/status\n"
+                  b"/bin/tlsclient.elf\n/bin/apktls.elf\n/bin/ping.elf example.com\n"
+                  b"/bin/busybox ls /\n/bin/busybox ls /bin\n")
 
 
 def part_entry(bootable, fs_type, start_lba, sec_cnt):
@@ -147,7 +153,13 @@ def debugfs_cmds(bd, tmp, pre, names, smoke):
 
     for name in names:
         mode = SPECIAL_MODES.get(name, FILE_MODE)
-        emit_file(cmds, pre[name], f"/{name}", mode)
+        dest = f"/{name}" if name in ("autoexec", "shell.conf") else f"/bin/{name}"
+        emit_file(cmds, pre[name], dest, mode)
+
+    for name in SHARE_FILES:
+        src = bd / name
+        if src.exists():
+            emit_file(cmds, src, f"/share/{name}", 0o100644)
 
     for name, payload, mode in ETC_FILES:
         src = tmp / f"etc_{name}"
@@ -160,7 +172,7 @@ def debugfs_cmds(bd, tmp, pre, names, smoke):
             emit_file(cmds, src, f"/lib/{name}", 0o100755)
 
     for name in BIN_LINKS:
-        tgt = "/sh.elf" if name == "sh" else "/toybox"
+        tgt = "/bin/sh.elf" if name == "sh" else "/bin/busybox"
         cmds.append(f"symlink /bin/{name} {tgt}")
 
     for name, tgt in SYMLINKS:
@@ -189,10 +201,10 @@ def populate(bd, tmp, p2_img, smoke, autoexec):
         pre["autoexec"].write_bytes(
             SMOKE_AUTOEXEC if autoexec is None else autoexec)
         pre["shell.conf"] = tmp / "shell.conf"
-        pre["shell.conf"].write_bytes(b"/init_sh.elf\n")
+        pre["shell.conf"].write_bytes(b"/bin/init_sh.elf\n")
     else:
         pre["autoexec"] = tmp / "autoexec"
-        pre["autoexec"].write_bytes(b"toybox login\n")
+        pre["autoexec"].write_bytes(b"/bin/busybox login\n")
 
     cmds = debugfs_cmds(bd, tmp, pre, list(pre), smoke)
     script = tmp / "debugfs.cmds"
