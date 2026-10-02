@@ -38,7 +38,7 @@ FILES = [
     "futex_probe.elf", "eintr_probe.elf", "sel_probe.elf",
     "font_subset.ttf", "ping.elf",
     "lc_demo.elf", "libc_testsuite.elf", "musl_demo.elf", "udp_echo.elf",
-    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf",
+    "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "toybox", "dyn_demo.elf", "dyn_hello.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
     "futex_bs_probe.elf",
@@ -94,7 +94,7 @@ SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"/bin/at_probe.elf\n/bin/futex_bs_probe.elf\n"
                   b"/bin/rust_hello.elf\n/bin/rust_probe.elf\n"
                   b"/bin/musl_abi_test.elf\n"
-                  b"/bin/dyn_demo.elf\n"
+                  b"/bin/dyn_demo.elf\n/bin/dyn_hello.elf\n"
                   b"/bin/fork_demo.elf\n/bin/cow_stress.elf\n/bin/fork_demo.elf\n"
                   b"/bin/dev_demo.elf\n/bin/pcre2_demo.elf\n/bin/toybox cat /proc/meminfo\n"
                   b"/bin/toybox echo TOYBOX_ECHO_OK\n"

@@ -1362,6 +1362,47 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
         dyn_demo_elf.deps = [BUILD_DIR / "dyn_demo.o",
                              BUILD_DIR / "libdyndemo.so"]
         tasks.append(dyn_demo_elf)
+
+        sysroot_dir = BUILD_DIR / "sysroot"
+        sysroot_setup = (
+            f"mkdir -p {shlex.quote(str(sysroot_dir / 'usr' / 'lib'))} "
+            f"{shlex.quote(str(sysroot_dir / 'lib'))} && "
+            f"cp -r {shlex.quote(str(MUSL_INC))}/. "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'include'))}/ && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'crt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'Scrt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'rcrt1.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'crti.o'))} "
+            f"{shlex.quote(str(MUSL_LIB / 'crtn.o'))} "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'lib'))}/ && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+            f"{shlex.quote(str(sysroot_dir / 'usr' / 'lib' / 'libc.so'))} && "
+            f"cp {shlex.quote(str(MUSL_LIB / 'libc.so'))} "
+            f"{shlex.quote(str(sysroot_dir / 'lib' / ARCH['musl_loader']))}"
+        )
+        tasks.append(Task(
+            name="musl-sysroot",
+            cmd=[sh, "-c", sysroot_setup],
+            out=sysroot_dir / "usr" / "lib" / "libc.so",
+            deps=[MUSL_LIB / "libc.so", MUSL_LIB / "Scrt1.o",
+                  MUSL_LIB / "rcrt1.o", MUSL_LIB / "crti.o",
+                  MUSL_LIB / "crtn.o", MUSL_LIB / "crt1.o"],
+            optional=True, group="musl-dyn",
+            description="assemble musl sysroot (headers+crt+libc.so+ldso)"))
+
+        dyn_hello_elf = Task(
+            name="dyn_hello.elf",
+            cmd=[*tools.cc, "--target=x86_64-unknown-linux-musl",
+                 f"--sysroot={sysroot_dir}",
+                 "-O2", "-fstack-protector-strong", "-fPIE", "-pie",
+                 str(APPS_DIR / "dyn_hello.c"),
+                 "-o", str(BUILD_DIR / "dyn_hello.elf")],
+            out=BUILD_DIR / "dyn_hello.elf",
+            deps=[APPS_DIR / "dyn_hello.c",
+                  sysroot_dir / "usr" / "lib" / "libc.so"],
+            optional=True, group="musl-dyn",
+            description="compile dyn_hello.elf (clang driver + sysroot, no manual ld)")
+        tasks.append(dyn_hello_elf)
     tasks.append(task_config())
     return BuildPlan(tasks=tasks, user_elves=user_elves,
                      musl_enabled=plan_musl_enabled)
