@@ -8,7 +8,7 @@ from pathlib import Path
 import make_fat
 
 SECTOR = 512
-TOTAL_SECTORS = 80 * 1024 * 1024 // SECTOR
+TOTAL_SECTORS = 1024 * 1024 * 1024 // SECTOR
 P2_START = 18432
 P2_SECTORS = TOTAL_SECTORS - P2_START
 BLOCK = 1024
@@ -23,7 +23,7 @@ MKFS_FEATURES = ",".join([
     "dir_nlink", "ext_attr",
     "^dir_index", "^resize_inode", "^orphan_file", "^sparse_super2",
     "^ea_inode", "^large_dir", "^inline_data", "^encrypt", "^bigalloc",
-    "^mmp", "^quota", "^project", "^verity",
+    "^mmp", "^quota", "^project", "^verity", "^meta_bg",
 ])
 
 FILES = [
@@ -261,7 +261,16 @@ def build(build_dir, out, smoke=False, autoexec=None):
         f.seek(make_fat.PART_START * SECTOR)
         f.write(fat_data)
         f.seek(P2_START * SECTOR)
-        f.write(p2_img.read_bytes())
+        zero = bytes(1 << 20)
+        with open(p2_img, "rb") as sf:
+            while True:
+                chunk = sf.read(len(zero))
+                if not chunk:
+                    break
+                if chunk == zero[:len(chunk)]:
+                    f.seek(len(chunk), 1)
+                else:
+                    f.write(chunk)
 
     print(f"OK: {out} ({TOTAL_SECTORS * SECTOR // 1024 // 1024}MB)")
     print(f"  P1 @{make_fat.PART_START} FAT32({make_fat.P1_TOTAL_SECTORS}sec) "

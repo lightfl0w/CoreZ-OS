@@ -109,6 +109,26 @@ const struct VFS_OPS *vfs_root_ops(void) {
     return g_root_ops;
 }
 
+const struct VFS_MOUNT *vfs_mount_at(int idx) {
+    if (idx < 0 || idx >= VFS_MAX_MOUNTS || !g_mounts[idx].active) {
+        return NULL;
+    }
+    return &g_mounts[idx];
+}
+
+const char *vfs_ops_name(const struct VFS_OPS *ops) {
+    if (ops == &ext4_ops) {
+        return "ext4";
+    }
+    if (ops == &ext2_ops) {
+        return "ext2";
+    }
+    if (ops == proc_vfs_ops()) {
+        return "proc";
+    }
+    return "unknown";
+}
+
 int vfs_mount(const char *path, const struct VFS_OPS *ops) {
     if (path == NULL || path[0] != '/' || ops == NULL) {
         return -1;

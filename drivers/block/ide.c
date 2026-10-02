@@ -48,7 +48,7 @@
 #define IDE_DMA_SECTORS 128u
 #define IDE_DMA_PAGES (IDE_DMA_SECTORS * 512u / 4096u)
 
-#define MAX_LBA_DEFAULT ((80 * 1024 * 1024 / 512) - 1)
+#define MAX_LBA_DEFAULT ((1024 * 1024 * 1024 / 512) - 1)
 #define MAX_LBA28 (0x0FFFFFFF)
 
 uint8_t channel_cnt;

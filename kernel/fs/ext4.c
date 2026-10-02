@@ -55,7 +55,7 @@ static int has_journal = 0;
 
 static uint8_t uuid[16];
 
-#define EXT4_GDT_MAX 64u
+#define EXT4_GDT_MAX 128u
 #define EXT4_GDT_STRIDE 64u
 static uint8_t g_gdt[EXT4_GDT_MAX * EXT4_GDT_STRIDE];
 static uint8_t g_sb[1024];

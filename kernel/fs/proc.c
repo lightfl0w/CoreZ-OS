@@ -1,4 +1,5 @@
 #include "kernel/fs/proc.h"
+#include "drivers/block/block.h"
 #include "lib/str/str.h"
 #include "libc/user/stdio.h"
 #include "kernel/mm/pool/pool.h"
@@ -14,6 +15,7 @@ enum {
     PROC_NONE,
     PROC_DIR,
     PROC_MEMINFO,
+    PROC_MOUNTS,
     PROC_STAT,
     PROC_STATUS,
     PROC_EXE,
@@ -44,6 +46,9 @@ static int proc_node_of(const char *path) {
     }
     if (strcmp(path, "/proc/meminfo") == 0) {
         return PROC_MEMINFO;
+    }
+    if (strcmp(path, "/proc/mounts") == 0) {
+        return PROC_MOUNTS;
     }
     if (strcmp(path, "/proc/cmdline") == 0) {
         return PROC_CMDLINE;
@@ -92,6 +97,24 @@ static uint32_t meminfo_build(char *dst, uint32_t cap) {
                    total_kb, free_kb, used_kb);
 }
 
+static uint32_t mounts_build(char *dst, uint32_t cap) {
+    uint32_t n = 0;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        const struct VFS_MOUNT *m = vfs_mount_at(i);
+        if (m == NULL || m->ops == NULL) {
+            continue;
+        }
+        if (n + 64 > cap) {
+            break;
+        }
+        const char *type = vfs_ops_name(m->ops);
+        struct DISK_PARTITION *p = m->ops->partition();
+        n += sprintf(dst + n, "%s %s %s rw 0 0\n", p ? p->name : type, m->path,
+                     type);
+    }
+    return n;
+}
+
 static uint32_t procstat_build(char *dst, uint32_t cap, uint32_t slot) {
     struct TASK *t = &task_table[slot];
     char state = t->status == TASK_RUNNING ? 'R'
@@ -131,6 +154,9 @@ static uint32_t proc_size(int node) {
     char buf[256];
     if (node == PROC_MEMINFO) {
         return meminfo_build(buf, sizeof(buf));
+    }
+    if (node == PROC_MOUNTS) {
+        return mounts_build(buf, sizeof(buf));
     }
     if (node == PROC_CMDLINE) {
         const struct MB2_INFO *bi = mb2_get();
@@ -193,6 +219,8 @@ uint32_t proc_read(struct FILE *file, void *buf, uint32_t count) {
     uint32_t len;
     if (file->proc_id == PROC_MEMINFO) {
         len = meminfo_build(info, sizeof(info));
+    } else if (file->proc_id == PROC_MOUNTS) {
+        len = mounts_build(info, sizeof(info));
     } else if (file->proc_id == PROC_CMDLINE) {
         const struct MB2_INFO *bi = mb2_get();
         const char *cl = bi && bi->cmdline ? bi->cmdline : "";

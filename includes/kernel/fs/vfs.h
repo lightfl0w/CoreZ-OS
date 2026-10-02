@@ -50,5 +50,7 @@ int vfs_unmount(const char *path);
 const struct VFS_OPS *vfs_ops_for(const char *path);
 int vfs_match_fs(const char *path, const struct VFS_OPS *ops);
 const struct VFS_OPS *vfs_root_ops(void);
+const struct VFS_MOUNT *vfs_mount_at(int idx);
+const char *vfs_ops_name(const struct VFS_OPS *ops);
 
 #endif
