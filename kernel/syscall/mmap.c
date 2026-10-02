@@ -1,6 +1,6 @@
 #include "kernel/syscall/mmap.h"
 #include "kernel/assert.h"
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 #include "lib/str/str.h"
 #include "kernel/mm/bitmap/bitmap.h"
 #include "kernel/mm/pool/pool.h"

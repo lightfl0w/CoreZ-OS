@@ -1,4 +1,4 @@
-#include "kernel/syscall/win32.h"
+#include "kernel/abi/win32/win32.h"
 
 #include "drivers/char/keyboard.h"
 #include "drivers/char/console/io.h"

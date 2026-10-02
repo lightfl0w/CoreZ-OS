@@ -64,7 +64,11 @@ syscall 三层前缀，语义固定：
 
 - `sys_xxx`：功能实现本体；
 - `nsys_xxx`：从 `struct X86_REGS` 解包寄存器参数、注册进分发表的薄封装；
-- `compat_xxx`：musl/Linux ABI 兼容路径，文件为 `kernel/syscall/linux_compat.c`。
+- `compat_xxx`：musl/Linux ABI 兼容路径，文件位于 `kernel/abi/linux/`（如 `linux_compat.c`）。
+- ABI 兼容层实现整体放在 `kernel/abi/<abi>/`。核心模块（`kernel/fs|mm|sched|userprog`、`drivers`）不得依赖 `kernel/abi/` 下的*实现*；
+  确需回调时用 weak 钩子（见 `kernel/fs/file.c` 的 `flock_release_ino`）。
+- 两处例外即正常接缝：`kernel/syscall/syscall.c` 作为分发表调用各 ABI handler（`linux_compat_handler`/`win32_handler`）；
+  `kernel/abi/<abi>/linux_abi.h` 是共享 ABI 契约（errno、结构体布局），核心为实现该 ABI 而包含它是允许的。
 
 判定语义的函数用 `is_` / `has_` 前缀，返回 `int` 0/1，如 `fs_is_chardev`、`compat_fd_isdir`。
 

@@ -1,9 +1,9 @@
-#include "kernel/userprog/pe.h"
+#include "kernel/abi/win32/pe.h"
 #include "drivers/char/console/io.h"
 #include "kernel/fs/fs.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
-#include "kernel/syscall/win32.h"
+#include "kernel/abi/win32/win32.h"
 #include "kernel/userprog/process.h"
 #include "lib/str/str.h"
 

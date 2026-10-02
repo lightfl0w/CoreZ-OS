@@ -1,5 +1,5 @@
-#ifndef LC_INTERNAL_H
-#define LC_INTERNAL_H
+#ifndef ABI_LINUX_LC_INTERNAL_H
+#define ABI_LINUX_LC_INTERNAL_H
 
 #include <stdint.h>
 
@@ -7,8 +7,8 @@
 #include "kernel/fs/fs.h"
 #include "kernel/mm/access.h"
 #include "kernel/signal.h"
-#include "kernel/syscall/linux_abi.h"
-#include "kernel/syscall/linux_compat.h"
+#include "kernel/abi/linux/linux_abi.h"
+#include "kernel/abi/linux/linux_compat.h"
 #include "libc/user/syscall.h"
 
 #define LC_ARGS                                                              \

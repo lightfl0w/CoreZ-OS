@@ -9,21 +9,24 @@ BUILD = ROOT / "build"
 IMG = BUILD / "test_hd.img"
 ESP = BUILD / "esp.img"
 VARS = BUILD / "OVMF_VARS.fd"
-LOG = Path("/tmp/nit_smoke.log")
-MARKS = ["[abi] ALL PASS", "child: fork returned", "dev_demo: PASS",
-         "KHEAP_SELFTEST_OK",
-         "BUSYBOX_ECHO_OK", "uid=0(root) gid=0(root)", "1 root     root",
-         "uid=1000(user) gid=1000(user)", "Uid:\t0 0 0", "at_probe: PASS",
-         "futex_bs_probe: PASS", "RUST_HELLO_OK", "rust_probe: PASS",
-         "TLSCLIENT_PASS", "APKTLS_PASS",
-         "DYN_HELLO_TAG=libc.so", "DYN_HELLO_MSG=hi-42",
-         "win_main: argc=2", "argv[1]=smoke-arg"]
+LOG = Path("/tmp/win32_smoke.log")
+
+MARKS = [
+    "win_main: argc=",         
+    "sum: 20 + 26",            
+    "WIN_GUI_LAUNCH_OK",     
+]
 TIMEOUT = 300
 
 OVMF_CODE_NAMES = ("OVMF_CODE.4m.fd", "OVMF_CODE.fd")
 OVMF_VARS_NAMES = ("OVMF_VARS.4m.fd", "OVMF_VARS.fd")
 OVMF_DIRS = ("/usr/share/edk2-ovmf/x64", "/usr/share/OVMF",
              "/usr/share/edk2/x64", "/usr/share/ovmf/x64")
+
+AUTOEXEC = (b"/share/win_main.exe hello world\n"
+            b"/bin/busybox echo WIN_MAIN_RAN\n"
+            b"/share/win_gui.exe\n"
+            b"/bin/busybox echo WIN_GUI_LAUNCH_OK\n")
 
 
 def find_ovmf():
@@ -41,19 +44,20 @@ def qemu_cmd(smp, uefi):
     if uefi:
         ovmf = find_ovmf()
         if ovmf is None:
-            print("SMOKE FAIL: OVMF 固件未找到")
+            print("WIN32 SMOKE FAIL: OVMF 固件未找到")
             return None
         if not ESP.exists():
-            print(f"SMOKE FAIL: {ESP} 不存在 (需 CONFIG_UEFI=y 且构建成功)")
+            print(f"WIN32 SMOKE FAIL: {ESP} 不存在")
             return None
         code, vars_src = ovmf
         shutil.copyfile(vars_src, VARS)
-        return ["qemu-system-x86_64", "-machine", "pc", "-accel", "tcg,tb-size=256",
-                "-m", "1G", "-smp", smp, "-vga", "std",
+        return ["qemu-system-x86_64", "-machine", "pc",
+                "-accel", "tcg,tb-size=256", "-m", "1G", "-smp", smp,
+                "-vga", "std",
                 "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
                 "-drive", f"if=pflash,format=raw,unit=1,file={VARS}",
                 "-hda", str(ESP), "-hdb", str(IMG),
-                "-serial", "file:/tmp/nit_smoke_ser.log",
+                "-serial", "file:/tmp/win32_smoke_ser.log",
                 "-debugcon", f"file:{LOG}", "-display", "none", "-no-reboot"]
     return ["qemu-system-x86_64", "-accel", "tcg,tb-size=256", "-m", "1G",
             "-smp", smp, "-hda", str(IMG), "-debugcon", f"file:{LOG}",
@@ -65,16 +69,26 @@ def main():
     if "--smp" in sys.argv:
         smp = sys.argv[sys.argv.index("--smp") + 1]
     uefi = "--uefi" in sys.argv
+
+    for exe in ("win_main.exe", "win_gui.exe"):
+        if not (BUILD / exe).exists():
+            print(f"WIN32 SMOKE FAIL: build/{exe} 不存在 "
+                  f"(需要 x86_64-w64-mingw32-gcc)")
+            return 1
+
+    ae = Path("/tmp/win32_autoexec")
+    ae.write_bytes(AUTOEXEC)
     subprocess.run(
         ["python3", "scripts/make_ext4.py", "build", "build/test_hd.img",
-         "--smoke"], check=True, cwd=ROOT)
+         "--smoke", "--autoexec", str(ae)], check=True, cwd=ROOT)
+
     cmd = qemu_cmd(smp, uefi)
     if cmd is None:
         return 1
     LOG.unlink(missing_ok=True)
-    proc = subprocess.Popen(
-        cmd, cwd=ROOT,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmd, cwd=ROOT,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + TIMEOUT
         text = ""
@@ -82,14 +96,15 @@ def main():
             if LOG.exists():
                 text = LOG.read_text(errors="replace")
                 if all(m in text for m in MARKS):
-                    print("SMOKE PASS")
+                    print("WIN32 SMOKE PASS")
                     return 0
+
             if proc.poll() is not None:
-                print(f"SMOKE FAIL: qemu exited rc={proc.returncode}")
+                print(f"WIN32 SMOKE FAIL: qemu exited rc={proc.returncode}")
                 return 1
             time.sleep(1)
-        print(f"SMOKE FAIL: timeout, missing "
-              f"{[m for m in MARKS if m not in text]} in {TIMEOUT}s")
+        missing = [m for m in MARKS if m not in text]
+        print(f"WIN32 SMOKE FAIL: timeout, missing {missing} in {TIMEOUT}s")
         return 1
     finally:
         proc.kill()

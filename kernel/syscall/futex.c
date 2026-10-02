@@ -7,7 +7,7 @@
 #include "kernel/init/pit/pit.h"
 #include "kernel/sched/sync.h"
 #include "kernel/sched/thread.h"
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 #include "lib/list/list.h"
 #include "lib/str/str.h"
 

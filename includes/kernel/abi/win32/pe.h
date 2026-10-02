@@ -1,5 +1,5 @@
-#ifndef USERPROG_PE_H
-#define USERPROG_PE_H
+#ifndef ABI_WIN32_PE_H
+#define ABI_WIN32_PE_H
 
 #include "kernel/userprog/exec.h"
 #include <stdint.h>

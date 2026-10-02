@@ -4,7 +4,7 @@
 #include "libc/user/stdio.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/vfs.h"

@@ -50,6 +50,8 @@ SHARE_FILES = [
     "font_subset.ttf", "wallpaper.png", "pic1.png", "pic2.png",
     "t.fish", "win_main.exe", "win_gui.exe",
 ]
+
+SHARE_EXEC = {"t.fish", "win_main.exe", "win_gui.exe"}
 ALIASES = {"forktest.elf": "fork_demo.elf", "suidsh": "busybox"}
 SPECIAL_MODES = {"suidsh": 0o104755}
 FILE_MODE = 0o100755
@@ -101,6 +103,7 @@ SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"/bin/busybox id\n/bin/busybox ls -l /etc/passwd\n"
                   b"/bin/busybox su user -c id\n/bin/busybox cat /proc/self/status\n"
                   b"/bin/tlsclient.elf\n/bin/apktls.elf\n/bin/ping.elf example.com\n"
+                  b"/share/win_main.exe smoke-arg\n"
                   b"/bin/busybox ls /\n/bin/busybox ls /bin\n")
 
 
@@ -159,7 +162,8 @@ def debugfs_cmds(bd, tmp, pre, names, smoke):
     for name in SHARE_FILES:
         src = bd / name
         if src.exists():
-            emit_file(cmds, src, f"/share/{name}", 0o100644)
+            mode = 0o100755 if name in SHARE_EXEC else 0o100644
+            emit_file(cmds, src, f"/share/{name}", mode)
 
     for name, payload, mode in ETC_FILES:
         src = tmp / f"etc_{name}"

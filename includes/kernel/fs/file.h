@@ -34,6 +34,12 @@ int fd_install(int32_t global_fd_idx);
 int fd_install_from(int32_t global_fd_idx, uint32_t min_local);
 int fd_release(uint32_t local_fd);
 uint32_t fd_local2global(uint32_t local_fd);
+/*
+ * 文件锁释放钩子：由 ABI 兼容层提供实现（weak 默认实现位于 file.c）。
+ * 核心层不依赖兼容层，仅通过此钩子通知其释放 inode 上的 flock/fcntl 锁。
+ */
+void flock_release_ino(uint32_t ino);
+
 uint32_t file_read(struct FILE *file, void *buf, uint32_t count);
 uint32_t file_write(struct FILE *file, const void *buf, uint32_t count);
 

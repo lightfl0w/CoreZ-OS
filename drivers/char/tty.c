@@ -9,7 +9,7 @@
 #include "kernel/sched/thread.h"
 #include "kernel/fs/file.h"
 #include "kernel/signal.h"
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 #include "lib/str/str.h"
 
 #define TTY_WINSZ_ROW 25

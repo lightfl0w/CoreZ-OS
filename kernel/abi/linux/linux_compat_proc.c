@@ -1,4 +1,4 @@
-#include "kernel/syscall/linux_compat.h"
+#include "kernel/abi/linux/linux_compat.h"
 #include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
@@ -30,7 +30,7 @@
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 #include "libc/user/syscall.h"
-#include "kernel/syscall/lc_internal.h"
+#include "kernel/abi/linux/lc_internal.h"
 
 
 
@@ -39,7 +39,7 @@
 
 
 
-#include "kernel/syscall/lc_internal.h"
+#include "kernel/abi/linux/lc_internal.h"
 int32_t compat_setpgid(uint32_t pid, uint32_t pgid) {
     int32_t spid = (int32_t)pid;
     int32_t spgid = (int32_t)pgid;

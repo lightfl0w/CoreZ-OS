@@ -12,10 +12,10 @@
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
-#include "kernel/syscall/linux_abi.h"
-#include "kernel/syscall/win32.h"
+#include "kernel/abi/linux/linux_abi.h"
+#include "kernel/abi/win32/win32.h"
 #include "kernel/userprog/elf.h"
-#include "kernel/userprog/pe.h"
+#include "kernel/abi/win32/pe.h"
 #include "kernel/userprog/process.h"
 #include "kernel/fs/file.h"
 static const char **exec_env_defaults(void) {

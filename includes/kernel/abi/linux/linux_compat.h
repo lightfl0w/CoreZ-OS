@@ -6,7 +6,7 @@
 
 #define COMPAT_SYSCALL_BASE 0x50000
 
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 
 int64_t linux_compat_handler(struct ARCH_REGS *r);
 

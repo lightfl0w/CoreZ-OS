@@ -1,5 +1,5 @@
-#ifndef SYSCALL_WIN32_H
-#define SYSCALL_WIN32_H
+#ifndef ABI_WIN32_WIN32_H
+#define ABI_WIN32_WIN32_H
 
 #include "kernel/asm/stub.h"
 #include <stdint.h>

@@ -200,3 +200,15 @@ uint32_t file_write(struct FILE *file, const void *buf, uint32_t count) {
     file->fd_pos += (uint32_t)r;
     return (uint32_t)r;
 }
+
+/*
+ * 文件锁释放钩子。
+ *
+ * 核心层在 fd 关闭路径必须释放该 inode 上由 ABI 兼容层持有的文件锁
+ * (flock/fcntl)，但文件锁表完全属于兼容层 (kernel/abi/linux)。
+ * 因此这里只提供一个 weak 默认实现：未链接兼容层时为空操作，
+ * 链接兼容层时由其强符号覆盖。核心层由此不再反向依赖 abi/。
+ */
+__attribute__((weak)) void flock_release_ino(uint32_t ino) {
+    (void)ino;
+}

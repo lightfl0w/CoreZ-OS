@@ -1,6 +1,6 @@
 #include "kernel/userprog/wait_exit.h"
 #include "kernel/signal.h"
-#include "kernel/syscall/linux_abi.h"
+#include "kernel/abi/linux/linux_abi.h"
 #include "kernel/assert.h"
 #include "kernel/fs/file.h"
 #include "kernel/mm/access.h"

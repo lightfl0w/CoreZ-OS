@@ -1,4 +1,4 @@
-#include "kernel/syscall/win32.h"
+#include "kernel/abi/win32/win32.h"
 #include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/tty.h"
@@ -294,6 +294,8 @@ uint64_t win_heap_alloc(uint32_t need, int zero) {
     uint32_t base;
     uint32_t p;
     uint32_t end;
+    uint32_t first;
+    uint32_t last;
     if (need == 0)
         need = 1;
     base = (cur->user_brk != 0)
@@ -303,9 +305,19 @@ uint64_t win_heap_alloc(uint32_t need, int zero) {
     end = p + need;
     if (end < p || end > USER_HEAP_LIMIT)
         return 0;
-    for (uint32_t pg = p & ~(PAGE_SIZE - 1);
-         pg < ((end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)); pg += PAGE_SIZE) {
-        if (!page_is_mapped(pg) && get_a_page(pg) == 0)
+    /*
+     * brk_base 起的一段地址由 exec/pe 装载时用 vaddr_reserve_at 预留，
+     * 扩展堆前必须先取消该页的预留，否则 get_a_page 会因位图已置位而失败
+     * （PE 程序的 malloc 会恒返回 NULL，CRT 随即 _amsg_exit(8)）。
+     * 语义与 sys_brk 一致：仅对尚未映射的页取消预留后分配。
+     */
+    first = p & ~(PAGE_SIZE - 1);
+    last = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    for (uint32_t pg = first; pg < last; pg += PAGE_SIZE) {
+        if (page_is_mapped(pg))
+            continue;
+        vaddr_unreserve(pg, 1);
+        if (get_a_page(pg) == 0)
             return 0;
     }
     cur->user_brk = end;

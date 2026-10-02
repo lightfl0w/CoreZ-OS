@@ -12,7 +12,6 @@
 #include "drivers/char/pty.h"
 #include "kernel/fs/inode.h"
 #include "kernel/fs/proc.h"
-#include "kernel/syscall/lc_internal.h"
 struct DISK_PARTITION *cur_part;
 void filesys_init(void) {
     file_table_init();

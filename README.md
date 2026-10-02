@@ -52,7 +52,7 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 | 模块       | 说明                                                                                                                          |
 | -------- | --------------------------------------------------------------------------------------------------------------------------- |
 | 同步原语     | `kernel/sched/sync`：信号量、可重入锁（`holder`/`holder_repeat_nr` 由信号量自带 spinlock 保护，多核安全）、自旋锁、写者优先读写锁（`rwlock_*`）                                        |
-| 系统调用     | `kernel/syscall`：`int 0x80`（原生 ABI）+ `syscall` 指令路径 + musl 兼容层（`linux_compat.c`）；ring0 内核线程调用与 ring3 用户调用分别校验（`access_ok` 仅约束用户指针） |
+| 系统调用     | `kernel/syscall`：`int 0x80`（原生 ABI）+ `syscall` 指令路径 + musl 兼容层（`kernel/abi/linux/linux_compat.c`）；ring0 内核线程调用与 ring3 用户调用分别校验（`access_ok` 仅约束用户指针） |
 | 信号       | `kernel/syscall/signal`：SIGSEGV/SIGINT 等常用信号、`sigaction`/`sigprocmask`/`sigreturn`、Ctrl+C 终止前台进程                             |
 | futex    | `kernel/syscall/futex`：FUTEX\_WAIT/WAKE                                                                                      |
 | 文件系统     | `kernel/fs/ext2`：ext2 只读元数据 + 读写的完整实现（inode/块分配释放、目录项增删、间接块、truncate），读写锁保护——只读路径并行、写路径排他                                          |
@@ -128,7 +128,8 @@ shell。代码风格约定见 [CODE_STYLE.MD](CODE_STYLE.MD)。
 │   ├── sched/              # thread/sync/percpu
 │   ├── userprog/           # process/fork/clone/exec/wait_exit
 │   ├── fs/                 # ext2/file/inode/dir/proc
-│   ├── syscall/            # syscall/file_syscall/signal/futex/mmap/linux_compat
+│   ├── syscall/            # 原生: syscall/file_syscall/signal/futex/mmap
+│   ├── abi/                # ABI 兼容层: abi/linux/、abi/win32/(含 PE 加载器)
 │   ├── gui/                # gfx/server/wm/layout/clients/display/font/shm/udi
 │   └── shell/              # shell/pipe/buildin_cmd
 ├── drivers/

@@ -1,4 +1,4 @@
-#include "kernel/syscall/linux_compat.h"
+#include "kernel/abi/linux/linux_compat.h"
 #include "arch/interrupt/interrupt.h"
 #include "drivers/char/console/io.h"
 #include "drivers/char/ioqueue.h"
@@ -30,7 +30,7 @@
 #include "lib/rand/rand.h"
 #include "lib/str/str.h"
 #include "libc/user/syscall.h"
-#include "kernel/syscall/lc_internal.h"
+#include "kernel/abi/linux/lc_internal.h"
 
 #define UNIX_FD_BASE 0x400
 #define MAX_UNIX_SOCK 16
