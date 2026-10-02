@@ -41,17 +41,25 @@ void ip_input(NETIF *ifp, const uint8_t *pkt, uint32_t len) {
         return;
     uint8_t ver = (uint8_t)(pkt[0] >> 4);
     uint8_t ihlen = (uint8_t)((pkt[0] & 0x0F) * 4);
-    if (ver != 4 || ihlen < IP_HDR_LEN || len < ihlen)
+    if (ver != 4 || ihlen < IP_HDR_LEN || len < ihlen) {
+        nt_raw("ipbad", net_be32(pkt + 12), 0);
         return;
-    if (ip_csum(pkt, ihlen) != 0)
+    }
+    if (ip_csum(pkt, ihlen) != 0) {
+        nt_raw("ipcsum", net_be32(pkt + 12), 0);
         return;
+    }
 
     uint32_t total = net_be16(pkt + 2);
     if (total >= ihlen && total <= len)
         len = total;
     uint32_t daddr = net_be32(pkt + 16);
-    if (daddr != ifp->ip && daddr != 0xFFFFFFFFu)
+    if (daddr != ifp->ip && daddr != 0xFFFFFFFFu) {
+        nt_raw("ipdst", net_be32(pkt + 12), daddr);
         return;
+    }
+    if (net_be16(pkt + 6) & 0x3FFF)
+        nt_raw("ipfrag", net_be32(pkt + 12), net_be16(pkt + 6));
     uint8_t proto = pkt[9];
     uint32_t plen = len - ihlen;
     if (proto == IPPROTO_ICMP)

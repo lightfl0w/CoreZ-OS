@@ -49,6 +49,29 @@ static uint16_t tcp_sum(const uint8_t *seg, uint32_t seglen, uint32_t saddr,
     return (uint16_t)~sum;
 }
 
+#if NET_TRACE_ENABLE
+void nt_raw(char *ev, uint32_t a, uint32_t b) {
+    kprintf("[NETT] %s a=%u b=%u\n", ev, a, b);
+}
+
+void nt_log(char *ev, uint16_t sp, uint16_t dp, uint32_t seq, uint32_t ack,
+            uint32_t len, uint32_t flags) {
+    if (sp != 443 && dp != 443)
+        return;
+    kprintf("[NETT] %s sp=%u dp=%u s=%u a=%u l=%u f=%x\n", ev, sp, dp, seq, ack,
+            len, flags);
+}
+
+void nt_pcb(struct TCP_PCB *pcb, char *ev, uint32_t seq, uint32_t ack,
+            uint32_t wnd, uint32_t len, uint32_t flags) {
+    if (pcb->remote_port != 443 && pcb->local_port != 443)
+        return;
+    kprintf("[NETT] %d %s s=%u a=%u w=%u l=%u f=%x u=%u n=%u r=%u\n",
+            (int)(pcb - s_pcb), ev, seq, ack, wnd, len, flags, pcb->snd_una,
+            pcb->snd_nxt, pcb->rcv_nxt);
+}
+#endif
+
 static struct TCP_PCB *pcb_find(uint32_t daddr, uint16_t dport, uint32_t saddr,
                                 uint16_t sport) {
     struct TCP_PCB *any = 0;
@@ -109,6 +132,7 @@ static int tcp_emit(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq, uint32_t ack,
         memcpy(seg + TCP_HDR_LEN, data, len);
     net_put16(seg + 16,
               tcp_sum(seg, TCP_HDR_LEN + len, pcb->local_ip, pcb->remote_ip));
+    nt_pcb(pcb, "tx", seq, ack, wnd, len, flags);
     return ip_output(ifp, pcb->remote_ip, IPPROTO_TCP, seg, TCP_HDR_LEN + len);
 }
 
@@ -384,6 +408,7 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
         return;
     if (flags & TCP_FLAG_ACK) {
         if (seq_lt(pcb->snd_nxt, ack)) {
+            nt_pcb(pcb, "chl", seq, ack, 0, dlen, flags);
             tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
             return;
         }
@@ -407,6 +432,7 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
     if (dlen && seq_lt(seq, pcb->rcv_nxt)) {
         uint32_t past = pcb->rcv_nxt - seq;
         if (past >= dlen) {
+            nt_pcb(pcb, "old", seq, ack, 0, dlen, flags);
             tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
             return;
         }
@@ -416,6 +442,7 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
         seg_dlen -= past;
     }
     if (dlen && seq != pcb->rcv_nxt) {
+        nt_pcb(pcb, "ooo", seq, ack, 0, dlen, flags);
         tcp_emit(ifp, pcb, pcb->snd_nxt, pcb->rcv_nxt, TCP_FLAG_ACK, 0, 0);
         return;
     }
@@ -423,8 +450,10 @@ static void tcp_input_established(NETIF *ifp, struct TCP_PCB *pcb, uint32_t seq,
     uint32_t taken = 0;
     if (dlen) {
         uint32_t room = (uint32_t)tcp_rx_room(pcb);
-        if (dlen > room)
+        if (dlen > room) {
+            nt_pcb(pcb, "room", seq, ack, room, dlen, flags);
             dlen = room;
+        }
         if (dlen) {
             tcp_rx_put(pcb, data, dlen);
             pcb->rcv_nxt += dlen;
@@ -462,21 +491,27 @@ void tcp_input(NETIF *ifp, uint32_t src, const uint8_t *pkt, uint32_t len) {
     uint8_t hlen = (uint8_t)((off_flags >> 12) * 4);
     uint8_t flags = (uint8_t)(off_flags & 0xFF);
     uint16_t seg_wnd = net_be16(pkt + 14);
-    if (hlen < TCP_HDR_LEN || len < hlen)
+    if (hlen < TCP_HDR_LEN || len < hlen) {
+        nt_log("hdrlen", sport, dport, seq, ack, 0, flags);
         return;
+    }
     uint32_t dlen = len - hlen;
     const uint8_t *data = pkt + hlen;
 
     uint16_t sum = tcp_sum(pkt, len, src, ifp->ip);
-    if (sum != 0)
+    if (sum != 0) {
+        nt_log("csumbad", sport, dport, seq, ack, dlen, flags);
         return;
+    }
 
     lock_acquire(&net_lock);
     struct TCP_PCB *pcb = pcb_find(ifp->ip, dport, src, sport);
     if (!pcb) {
+        nt_log("nopcb", sport, dport, seq, ack, dlen, flags);
         lock_release(&net_lock);
         return;
     }
+    nt_pcb(pcb, "rx", seq, ack, seg_wnd, dlen, flags);
 
     if (pcb->state == TCP_LISTEN) {
         if ((flags & TCP_FLAG_SYN) && !(flags & TCP_FLAG_ACK)) {
