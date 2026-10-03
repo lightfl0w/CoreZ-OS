@@ -41,7 +41,7 @@ FILES = [
     "musl_abi_test.elf", "dev_demo.elf", "gui.elf", "busybox", "dyn_demo.elf", "dyn_hello.elf",
     "py_compat_probe.elf", "sh.elf", "cpp_hello.elf", "termios_probe.elf",
     "pty_demo.elf", "jc_demo.elf", "pcre2_demo.elf", "at_probe.elf",
-    "futex_bs_probe.elf",
+    "futex_bs_probe.elf", "compat_stub_probe.elf",
     "rust_hello.elf", "rust_probe.elf", "rust_probe2.elf", "fish.elf",
     "tlsclient.elf", "apktls.elf",
     "shell.elf",
@@ -94,6 +94,7 @@ SYMLINKS = [("catlink", "/bin/cat.elf"),
 SMOKE_AUTOEXEC = (b"mkdir /tmp/dw\nls /tmp\nrmdir /tmp/dw\nls /tmp\n"
                   b"/bin/busybox ls -l /lib\n"
                   b"/bin/at_probe.elf\n/bin/futex_bs_probe.elf\n"
+                  b"/bin/compat_stub_probe.elf\n"
                   b"/bin/rust_hello.elf\n/bin/rust_probe.elf\n"
                   b"/bin/musl_abi_test.elf\n"
                   b"/bin/dyn_demo.elf\n/bin/dyn_hello.elf\n"

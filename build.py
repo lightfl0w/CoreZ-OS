@@ -1199,7 +1199,7 @@ def make_plan(tools: Tools, with_musl_lib: bool = False):
              BUILD_DIR / "test_fnmatch.o"])
         tasks.append(libc_tests_elf)
         for stem in ("termios_probe", "pty_demo", "jc_demo", "at_probe",
-                     "futex_bs_probe"):
+                     "futex_bs_probe", "compat_stub_probe"):
             cobj = BUILD_DIR / (stem + ".o")
             ct = task_cc("musl_" + stem + ".o", APPS_DIR / (stem + ".c"),
                          cobj, tools,
