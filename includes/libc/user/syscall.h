@@ -33,6 +33,7 @@ struct LINUX_DIRENT {
 #define F_GETFL  3
 #define F_SETFL  4
 #define F_DUPFD_CLOEXEC 1030
+#define FD_CLOEXEC 1
 
 #define PROT_NONE    0
 #define PROT_READ    1

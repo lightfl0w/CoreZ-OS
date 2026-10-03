@@ -118,6 +118,16 @@ void lc_seterrno(struct TASK *cur, int32_t val) {
 typedef int64_t (*LcFn)(struct ARCH_REGS *r, uint64_t a, uint64_t b, uint64_t c,
                         uint64_t d, uint64_t e, uint64_t f);
 
+int64_t lc_stub_ok(LC_ARGS) {
+    (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    return 0;
+}
+
+int64_t lc_stub_enotsup(LC_ARGS) {
+    (void)r; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    return -LINUX_EOPNOTSUPP;
+}
+
 
 
 
@@ -230,7 +240,7 @@ __attribute__((noreturn)) int64_t lc_exit_group(struct ARCH_REGS *r,
 
 
 
-#define LC_TABLE_SIZE 327
+#define LC_TABLE_SIZE 337
 
 static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_read] = lc_read,
@@ -380,6 +390,25 @@ static const LcFn LC_TABLE[LC_TABLE_SIZE] = {
     [SYS_LINUX_fsync] = lc_fsync,
     [SYS_LINUX_fdatasync] = lc_fsync,
     [SYS_LINUX_truncate] = lc_truncate,
+    [SYS_LINUX_fallocate] = lc_stub_ok,
+    [SYS_LINUX_sync] = lc_stub_ok,
+    [SYS_LINUX_mount] = lc_stub_ok,
+    [SYS_LINUX_umount2] = lc_stub_ok,
+    [SYS_LINUX_fchdir] = lc_fchdir,
+    [SYS_LINUX_mremap] = lc_stub_enotsup,
+    [SYS_LINUX_msync] = lc_stub_ok,
+    [SYS_LINUX_prctl] = lc_stub_enotsup,
+    [SYS_LINUX_sendfile] = lc_stub_enotsup,
+    [SYS_LINUX_accept4] = lc_accept4,
+    [SYS_LINUX_statx] = lc_statx,
+    [SYS_LINUX_memfd_create] = lc_stub_enotsup,
+    [SYS_LINUX_getxattr] = lc_stub_enotsup,
+    [SYS_LINUX_lgetxattr] = lc_stub_enotsup,
+    [SYS_LINUX_fgetxattr] = lc_stub_enotsup,
+    [SYS_LINUX_setxattr] = lc_stub_enotsup,
+    [SYS_LINUX_lsetxattr] = lc_stub_enotsup,
+    [SYS_LINUX_fsetxattr] = lc_stub_enotsup,
+    [SYS_LINUX_removexattr] = lc_stub_enotsup,
 };
 
 int64_t linux_compat_handler(struct ARCH_REGS *r) {

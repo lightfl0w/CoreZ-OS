@@ -1082,6 +1082,44 @@ int64_t lc_newfstatat(LC_ARGS) {
     return compat_stat_linux(kpath, c,
                              (d & LINUX_AT_SYMLINK_NOFOLLOW) ? 0 : 1);
 }
+int64_t lc_statx(LC_ARGS) {
+    if (!user_ptr_ok(r, e, sizeof(struct LINUX_STATX), 1))
+        return -LINUX_EFAULT;
+    if ((b == 0 || *(const char *)(uintptr_t)b == 0) &&
+        (c & LINUX_AT_EMPTY_PATH))
+        return -LINUX_ENOSYS;
+    char kpath[MAX_PATH_LEN];
+    int rc = lc_at_path(r, (int32_t)a, b, kpath);
+    if (rc != 0)
+        return rc;
+    struct LINUX_STAT ls;
+    memset(&ls, 0, sizeof(ls));
+    rc = compat_stat_linux(kpath, (uint64_t)(uintptr_t)&ls,
+                           (c & LINUX_AT_SYMLINK_NOFOLLOW) ? 0 : 1);
+    if (rc != 0)
+        return rc;
+    struct LINUX_STATX sx;
+    memset(&sx, 0, sizeof(sx));
+    sx.stx_mask = LINUX_STATX_BASIC;
+    sx.stx_blksize = (uint32_t)ls.st_blksize;
+    sx.stx_nlink = (uint32_t)ls.st_nlink;
+    sx.stx_uid = ls.st_uid;
+    sx.stx_gid = ls.st_gid;
+    sx.stx_mode = (uint16_t)ls.st_mode;
+    sx.stx_ino = ls.st_ino;
+    sx.stx_size = (uint64_t)ls.st_size;
+    sx.stx_blocks = (uint64_t)ls.st_blocks;
+    sx.stx_atime.tv_sec = ls.st_atim.tv_sec;
+    sx.stx_atime.tv_nsec = ls.st_atim.tv_nsec;
+    sx.stx_ctime.tv_sec = ls.st_ctim.tv_sec;
+    sx.stx_ctime.tv_nsec = ls.st_ctim.tv_nsec;
+    sx.stx_mtime.tv_sec = ls.st_mtim.tv_sec;
+    sx.stx_mtime.tv_nsec = ls.st_mtim.tv_nsec;
+    sx.stx_rdev_major = (uint32_t)ls.st_rdev;
+    sx.stx_dev_major = (uint32_t)ls.st_dev;
+    memcpy((void *)(uintptr_t)e, &sx, sizeof(sx));
+    return 0;
+}
 int64_t lc_unlinkat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     int rc = lc_at_path(r, (int32_t)a, b, kpath);
@@ -1202,4 +1240,22 @@ int64_t lc_truncate(LC_ARGS) {
     if ((int64_t)b < 0)
         return -LINUX_EINVAL;
     return sys_truncate(kpath, (int32_t)b);
+}
+int64_t lc_fchdir(LC_ARGS) {
+    (void)b; (void)c; (void)d; (void)e; (void)f;
+    char kpath[MAX_PATH_LEN];
+    if (a < 3 || a >= MAX_FILES_OPEN_PER_PROC)
+        return -LINUX_EBADF;
+    uint32_t gfd = fd_local2global((uint32_t)a);
+    struct FILE *pf = file_get(gfd);
+    if (pf == NULL || pf->fd_inode == NULL)
+        return -LINUX_EBADF;
+    if ((pf->fd_inode->i_mode & 0xF000u) != 0x4000u)
+        return -LINUX_ENOTDIR;
+    if (fs_inode_abs_path(pf->fd_inode->i_no, kpath, sizeof(kpath)) != 0)
+        return -LINUX_EIO;
+    if (sys_chdir(kpath) != 0)
+        return current->errno > 0 ? -(int64_t)current->errno
+                                  : -LINUX_EIO;
+    return 0;
 }

@@ -241,6 +241,11 @@ void lc_fdset_set(uint8_t *set, int fd);
 void lc_fill_rlimit(uint64_t res, struct LINUX_RLIMIT *rl);
 void lc_seterrno(struct TASK *cur, int32_t val);
 void ticks_to_timeval(struct LINUX_TIMEVAL *tv, uint32_t ticks);
+int64_t lc_accept4(LC_ARGS);
+int64_t lc_fchdir(LC_ARGS);
+int64_t lc_statx(LC_ARGS);
+int64_t lc_stub_ok(LC_ARGS);
+int64_t lc_stub_enotsup(LC_ARGS);
 void unix_close_slot(int idx);
 
 #endif

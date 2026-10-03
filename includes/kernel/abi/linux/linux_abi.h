@@ -155,6 +155,27 @@
 #define SYS_LINUX_rseq 334
 #define SYS_LINUX_getrandom 318
 #define SYS_LINUX_copy_file_range 326
+#define SYS_LINUX_fallocate 285
+#define SYS_LINUX_sync 162
+#define SYS_LINUX_mount 165
+#define SYS_LINUX_umount2 166
+#define SYS_LINUX_link 86
+#define SYS_LINUX_linkat 265
+#define SYS_LINUX_fchdir 81
+#define SYS_LINUX_mremap 25
+#define SYS_LINUX_msync 26
+#define SYS_LINUX_statx 332
+#define SYS_LINUX_prctl 157
+#define SYS_LINUX_sendfile 40
+#define SYS_LINUX_accept4 288
+#define SYS_LINUX_getxattr 191
+#define SYS_LINUX_lgetxattr 192
+#define SYS_LINUX_fgetxattr 193
+#define SYS_LINUX_setxattr 188
+#define SYS_LINUX_lsetxattr 189
+#define SYS_LINUX_fsetxattr 190
+#define SYS_LINUX_removexattr 197
+#define SYS_LINUX_memfd_create 319
 
 #define LINUX_O_RDONLY 0
 #define LINUX_O_WRONLY 1
@@ -167,6 +188,7 @@
 #define LINUX_O_NONBLOCK 0x800
 #define LINUX_O_DIRECTORY 0x10000
 #define LINUX_O_CLOEXEC 0x80000
+#define LINUX_SOCK_CLOEXEC 0x80000
 
 #define LINUX_AT_FDCWD -100
 #define LINUX_AT_SYMLINK_NOFOLLOW 0x100
@@ -563,6 +585,52 @@ struct LINUX_STAT {
     struct LINUX_TIMESPEC st_ctim;
     int64_t unused[3];
 };
+
+struct LINUX_STATX_TIMESTAMP {
+    int64_t tv_sec;
+    uint32_t tv_nsec;
+    int32_t tv_pad;
+};
+
+struct LINUX_STATX {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint16_t stx_pad1;
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    uint64_t stx_attributes_mask;
+    struct LINUX_STATX_TIMESTAMP stx_atime;
+    struct LINUX_STATX_TIMESTAMP stx_btime;
+    struct LINUX_STATX_TIMESTAMP stx_ctime;
+    struct LINUX_STATX_TIMESTAMP stx_mtime;
+    uint32_t stx_rdev_major;
+    uint32_t stx_rdev_minor;
+    uint32_t stx_dev_major;
+    uint32_t stx_dev_minor;
+    uint64_t stx_spare[14];
+};
+
+#define LINUX_STATX_SIZE 256
+#define LINUX_STATX_INO 0x00000100u
+#define LINUX_STATX_MODE 0x00000200u
+#define LINUX_STATX_NLINK 0x00000400u
+#define LINUX_STATX_UID 0x00000800u
+#define LINUX_STATX_GID 0x00001000u
+#define LINUX_STATX_SIZE_ 0x00002000u
+#define LINUX_STATX_BLOCKS 0x00004000u
+#define LINUX_STATX_ATIME 0x00008000u
+#define LINUX_STATX_MTIME 0x00010000u
+#define LINUX_STATX_CTIME 0x00020000u
+#define LINUX_STATX_RDEV 0x00040000u
+#define LINUX_STATX_BLKSIZE 0x00080000u
+#define LINUX_STATX_DEV 0x00100000u
+#define LINUX_STATX_BASIC 0x0007ffcu
 
 struct LINUX_SYSINFO {
     int64_t uptime;

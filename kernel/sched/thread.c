@@ -251,6 +251,7 @@ static void init_task_struct_basic(struct TASK *t, int32_t parent_pid) {
     t->tls_msr = 0;
     t->gs_base_user = 0;
     t->errno = 0;
+    t->win_last_error = 0;
     t->pgid = 0;
     t->uid = 0;
     t->gid = 0;

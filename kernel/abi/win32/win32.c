@@ -3,6 +3,8 @@
 #include "drivers/char/console/io.h"
 #include "drivers/char/tty.h"
 #include "kernel/init/pit/pit.h"
+#include "kernel/fs/file.h"
+#include "kernel/fs/fs.h"
 #include "kernel/mm/access.h"
 #include "kernel/mm/pool/pool.h"
 #include "kernel/sched/thread.h"
@@ -289,6 +291,98 @@ static uint64_t win_rt_ptr(uint32_t off) {
     return (uint64_t)(current->win_rt + off);
 }
 
+struct WIN_HANDLE {
+    int used;
+    uint32_t tag;
+    struct TASK *owner;
+};
+
+static struct WIN_HANDLE win_handles[WIN_HANDLE_MAX];
+
+void win_set_last_error_val(uint32_t code) {
+    current->win_last_error = code;
+}
+
+uint32_t win_get_last_error_val(void) {
+    return current->win_last_error;
+}
+
+int32_t win_handle_slot(uint32_t tag, uint32_t handle) {
+    if ((handle & 0xFFFF0000u) != tag)
+        return -1;
+    uint32_t i = handle & 0xFFFFu;
+    if (i >= WIN_HANDLE_MAX || !win_handles[i].used)
+        return -1;
+    if (win_handles[i].tag != tag)
+        return -1;
+    return (int32_t)i;
+}
+
+int win_handle_valid(uint32_t tag, uint32_t handle, struct TASK *owner) {
+    int32_t i = win_handle_slot(tag, handle);
+    if (i < 0)
+        return 0;
+    if (owner != 0 && win_handles[i].owner != owner)
+        return 0;
+    return 1;
+}
+
+int32_t win_handle_alloc(uint32_t tag, struct TASK *owner) {
+    for (uint32_t i = 0; i < WIN_HANDLE_MAX; i++) {
+        if (win_handles[i].used)
+            continue;
+        win_handles[i].used = 1;
+        win_handles[i].tag = tag;
+        win_handles[i].owner = owner;
+        return (int32_t)(tag | i);
+    }
+    win_set_last_error_val(WIN_LE_TOO_MANY_OPEN_FILES);
+    return (int32_t)WIN_INVALID_HANDLE;
+}
+
+int32_t win_handle_free(uint32_t tag, uint32_t handle) {
+    int32_t i = win_handle_slot(tag, handle);
+    if (i < 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return (int32_t)WIN_INVALID_HANDLE;
+    }
+    win_handles[i].used = 0;
+    win_handles[i].owner = 0;
+    return (int32_t)WIN_INVALID_HANDLE;
+}
+
+#define WIN_MAX_FILES 48
+
+struct WIN_FILE {
+    int used;
+    uint32_t handle;
+    struct TASK *owner;
+    int32_t kfd;
+};
+
+static struct WIN_FILE win_files[WIN_MAX_FILES];
+
+static struct WIN_FILE *win_file(uint32_t h) {
+    for (uint32_t i = 0; i < WIN_MAX_FILES; i++) {
+        if (win_files[i].used && win_files[i].handle == h &&
+            win_files[i].owner == current)
+            return &win_files[i];
+    }
+    return 0;
+}
+
+static void win_path_from_user(char *dst, uint32_t cap, uint64_t uptr) {
+    if (uptr == 0 || cap == 0) {
+        if (cap != 0)
+            dst[0] = 0;
+        return;
+    }
+    uint32_t n = (uint32_t)user_strnlen((const char *)(uintptr_t)uptr, cap - 1);
+    if (n != 0)
+        copy_from_user(dst, (const void *)(uintptr_t)uptr, n);
+    dst[n] = 0;
+}
+
 uint64_t win_heap_alloc(uint32_t need, int zero) {
     struct TASK *cur = current;
     uint32_t base;
@@ -305,12 +399,7 @@ uint64_t win_heap_alloc(uint32_t need, int zero) {
     end = p + need;
     if (end < p || end > USER_HEAP_LIMIT)
         return 0;
-    /*
-     * brk_base 起的一段地址由 exec/pe 装载时用 vaddr_reserve_at 预留，
-     * 扩展堆前必须先取消该页的预留，否则 get_a_page 会因位图已置位而失败
-     * （PE 程序的 malloc 会恒返回 NULL，CRT 随即 _amsg_exit(8)）。
-     * 语义与 sys_brk 一致：仅对尚未映射的页取消预留后分配。
-     */
+
     first = p & ~(PAGE_SIZE - 1);
     last = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     for (uint32_t pg = first; pg < last; pg += PAGE_SIZE) {
@@ -348,9 +437,16 @@ static int64_t win_null(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
     return 0;
 }
 
+static int64_t win_read_file(struct ARCH_REGS *r, uint64_t h, uint64_t buf,
+                             uint64_t count, uint64_t read_out);
+
+static int64_t win_file_write(struct ARCH_REGS *r, uint64_t h, uint64_t buf,
+                              uint64_t count, uint64_t written_out);
+
 static int64_t win_write_file(struct ARCH_REGS *r, uint64_t handle,
                               uint64_t buf, uint64_t n, uint64_t written) {
-    (void)r;
+    if (win_file((uint32_t)handle) != 0)
+        return win_file_write(r, handle, buf, n, written);
     (void)handle;
     if (n != 0 && !access_ok((const void *)(uintptr_t)buf, (size_t)n, 0))
         return 0;
@@ -386,16 +482,300 @@ static int64_t win_get_last_error(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
     (void)a1;
     (void)a2;
     (void)a3;
-    return 0;
+    return (int64_t)(uint32_t)current->win_last_error;
 }
 
 static int64_t win_set_last_error(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
                                   uint64_t a2, uint64_t a3) {
     (void)r;
-    (void)a0;
     (void)a1;
     (void)a2;
     (void)a3;
+    current->win_last_error = (uint32_t)a0;
+    return 0;
+}
+
+static uint64_t win_stack_arg(struct ARCH_REGS *r, uint32_t idx) {
+    uint32_t ua = (uint32_t)r->user_rsp + WIN_STACK_BASE + idx * 8u;
+    uint64_t v = 0;
+    if (!access_ok((const void *)(uintptr_t)ua, 8, 0))
+        return 0;
+    if (copy_from_user(&v, (const void *)(uintptr_t)ua, 8) != 1)
+        return 0;
+    return v;
+}
+
+static int64_t win_create_file_a6(struct ARCH_REGS *r, uint64_t name,
+                                  uint64_t access, uint64_t share,
+                                  uint64_t disposition, uint64_t flags,
+                                  uint64_t attrs);
+
+static int64_t win_create_file_a(struct ARCH_REGS *r, uint64_t name,
+                                 uint64_t access, uint64_t share,
+                                 uint64_t disposition) {
+    return win_create_file_a6(r, name, access, share, disposition,
+                              win_stack_arg(r, 0), win_stack_arg(r, 1));
+}
+
+static int64_t win_create_file_a6(struct ARCH_REGS *r, uint64_t name,
+                                  uint64_t access, uint64_t share,
+                                  uint64_t disposition, uint64_t flags,
+                                  uint64_t attrs) {
+    (void)share;
+    (void)attrs;
+    char kpath[WIN_STR_MAX];
+    win_path_from_user(kpath, sizeof(kpath), name);
+    if (kpath[0] == 0) {
+        win_set_last_error_val(WIN_LE_PATH_NOT_FOUND);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    uint8_t oflags;
+    switch (access & 3u) {
+    case 1:
+        oflags = 0x01;
+        break;
+    case 2:
+        oflags = 0x02;
+        break;
+    case 3:
+        oflags = 0x03;
+        break;
+    default:
+        oflags = 0x00;
+        break;
+    }
+    switch (disposition) {
+    case 3:
+        oflags |= 0x40;
+        break;
+    case 4:
+        oflags |= 0x80;
+        break;
+    case 2:
+        oflags |= 0x200;
+        break;
+    default:
+        break;
+    }
+    if (flags & 0x100u)
+        oflags |= 0x100u;
+    if (flags & 0x40000u)
+        oflags |= 0x80000u;
+    int32_t kfd = open_file(kpath, oflags);
+    if (kfd < 0) {
+        win_set_last_error_val(WIN_LE_FILE_NOT_FOUND);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    int32_t h = win_handle_alloc(WIN_HANDLE_TAG_HFILE, current);
+    if ((uint32_t)h == WIN_INVALID_HANDLE) {
+        close_file(kfd);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    for (uint32_t i = 0; i < WIN_MAX_FILES; i++) {
+        if (win_files[i].used)
+            continue;
+        win_files[i].used = 1;
+        win_files[i].handle = (uint32_t)h;
+        win_files[i].owner = current;
+        win_files[i].kfd = kfd;
+        return (int64_t)(uint32_t)h;
+    }
+    win_handle_free(WIN_HANDLE_TAG_HFILE, (uint32_t)h);
+    close_file(kfd);
+    win_set_last_error_val(WIN_LE_TOO_MANY_OPEN_FILES);
+    return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+}
+
+static int64_t win_close_handle(struct ARCH_REGS *r, uint64_t h, uint64_t a1,
+                                uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf != 0) {
+        close_file(wf->kfd);
+        wf->used = 0;
+        win_handle_free(WIN_HANDLE_TAG_HFILE, (uint32_t)h);
+        return 1;
+    }
+    if (win_handle_valid(WIN_HANDLE_TAG_HREGKEY, (uint32_t)h, current)) {
+        win_handle_free(WIN_HANDLE_TAG_HREGKEY, (uint32_t)h);
+        return 1;
+    }
+    if (win_handle_valid(WIN_HANDLE_TAG_HMODULE, (uint32_t)h, current)) {
+        win_handle_free(WIN_HANDLE_TAG_HMODULE, (uint32_t)h);
+        return 1;
+    }
+    win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+    return 0;
+}
+
+static int64_t win_read_file(struct ARCH_REGS *r, uint64_t h, uint64_t buf,
+                             uint64_t count, uint64_t read_out) {
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf == 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return 0;
+    }
+    if (buf == 0 || count == 0) {
+        win_set_last_error_val(WIN_LE_INVALID_PARAMETER);
+        return 0;
+    }
+    if (!access_ok((const void *)(uintptr_t)buf, (uint32_t)count, 1)) {
+        win_set_last_error_val(WIN_LE_ACCESS_DENIED);
+        return 0;
+    }
+    uint32_t n = read_file(wf->kfd, (void *)(uintptr_t)buf, (uint32_t)count);
+    if (n == 0) {
+        win_set_last_error_val(WIN_LE_HANDLE_EOF);
+    } else {
+        win_set_last_error_val(WIN_LE_SUCCESS);
+        if (read_out != 0) {
+            uint32_t got = n;
+            copy_to_user((void *)(uintptr_t)read_out, &got, 4);
+        }
+    }
+    (void)r;
+    return (int64_t)n;
+}
+
+static int64_t win_file_write(struct ARCH_REGS *r, uint64_t h, uint64_t buf,
+                              uint64_t count, uint64_t written_out) {
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf == 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return 0;
+    }
+    if (buf != 0 && count != 0 &&
+        !access_ok((const void *)(uintptr_t)buf, (uint32_t)count, 0)) {
+        win_set_last_error_val(WIN_LE_ACCESS_DENIED);
+        return 0;
+    }
+    uint32_t n = write_file(wf->kfd, (const void *)(uintptr_t)buf,
+                            (uint32_t)count);
+    if (written_out != 0) {
+        uint32_t put = n;
+        copy_to_user((void *)(uintptr_t)written_out, &put, 4);
+    }
+    win_set_last_error_val(WIN_LE_SUCCESS);
+    (void)r;
+    return (int64_t)n;
+}
+
+static int64_t win_set_file_pointer(struct ARCH_REGS *r, uint64_t h,
+                                    uint64_t dist, uint64_t method,
+                                    uint64_t a4) {
+    (void)r;
+    (void)a4;
+    uint64_t newptr = win_stack_arg(r, 1);
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf == 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    uint8_t whence;
+    switch (method) {
+    case 1:
+        whence = SEEK_CUR;
+        break;
+    case 2:
+        whence = SEEK_END;
+        break;
+    default:
+        whence = SEEK_SET;
+        break;
+    }
+    int32_t np = sys_lseek(wf->kfd, (int32_t)(int64_t)dist, whence);
+    if (np < 0) {
+        win_set_last_error_val(WIN_LE_INVALID_PARAMETER);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    if (newptr != 0) {
+        uint64_t v = (uint64_t)(uint32_t)np;
+        copy_to_user((void *)(uintptr_t)newptr, &v, 8);
+    }
+    win_set_last_error_val(WIN_LE_SUCCESS);
+    return (int64_t)(uint32_t)np;
+}
+
+static int64_t win_set_file_pointer_ex(struct ARCH_REGS *r, uint64_t h,
+                                       uint64_t dist, uint64_t method,
+                                       uint64_t a4) {
+    return win_set_file_pointer(r, h, dist, method, a4);
+}
+
+static int64_t win_get_file_size(struct ARCH_REGS *r, uint64_t h, uint64_t a1,
+                                 uint64_t a2, uint64_t a3);
+
+static int64_t win_get_file_size_ex(struct ARCH_REGS *r, uint64_t h,
+                                    uint64_t a1, uint64_t a2, uint64_t a3) {
+    return win_get_file_size(r, h, a1, a2, a3);
+}
+
+static int64_t win_get_file_size(struct ARCH_REGS *r, uint64_t h, uint64_t a1,
+                                 uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    uint64_t size_high = win_stack_arg(r, 0);
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf == 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    uint32_t save = 0;
+    if (wf->kfd >= 0 && wf->kfd < MAX_FILE_OPEN)
+        save = file_table[wf->kfd].fd_pos;
+    int32_t end = sys_lseek(wf->kfd, 0, SEEK_END);
+    sys_lseek(wf->kfd, (int32_t)save, SEEK_SET);
+    if (end < 0) {
+        win_set_last_error_val(WIN_LE_INVALID_HANDLE);
+        return (int64_t)(uint32_t)WIN_INVALID_HANDLE;
+    }
+    if (size_high != 0) {
+        uint32_t hi = 0;
+        copy_to_user((void *)(uintptr_t)size_high, &hi, 4);
+    }
+    win_set_last_error_val(WIN_LE_SUCCESS);
+    return (int64_t)(uint32_t)end;
+}
+
+static int64_t win_delete_file_a(struct ARCH_REGS *r, uint64_t name,
+                                 uint64_t a1, uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    char kpath[WIN_STR_MAX];
+    win_path_from_user(kpath, sizeof(kpath), name);
+    if (kpath[0] == 0) {
+        win_set_last_error_val(WIN_LE_PATH_NOT_FOUND);
+        return 0;
+    }
+    if (sys_unlink(kpath) != 0) {
+        win_set_last_error_val(WIN_LE_FILE_NOT_FOUND);
+        return 0;
+    }
+    win_set_last_error_val(WIN_LE_SUCCESS);
+    return 1;
+}
+
+static int64_t win_get_file_type(struct ARCH_REGS *r, uint64_t h, uint64_t a1,
+                                 uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    struct WIN_FILE *wf = win_file((uint32_t)h);
+    if (wf != 0)
+        return 1;
+    if (h == 0)
+        return 0;
+    if ((uint32_t)h == 0xfffffff6u || (uint32_t)h == 0xfffffff5u ||
+        (uint32_t)h == 0xfffffff4u)
+        return 2;
     return 0;
 }
 
@@ -740,6 +1120,17 @@ static int64_t win_seh_handler(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
     return 1;
 }
 
+static int64_t win_notimpl(struct ARCH_REGS *r, uint64_t a0, uint64_t a1,
+                           uint64_t a2, uint64_t a3) {
+    (void)r;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    win_set_last_error_val(WIN_LE_NOT_SUPPORTED);
+    return 0;
+}
+
 static const struct WIN_API win_api_table[] = {
     {"kernel32", "WriteFile", win_write_file},
     {"kernel32", "GetStdHandle", win_get_std_handle},
@@ -855,6 +1246,77 @@ static const struct WIN_API win_api_table[] = {
     {"gdi32", "FrameRect", w32_frame_rect},
     {"gdi32", "SetPixel", w32_set_pixel},
     {"gdi32", "GetDeviceCaps", w32_get_device_caps},
+    {"kernel32", "CreateFileA", win_create_file_a},
+    {"kernel32", "CloseHandle", win_close_handle},
+    {"kernel32", "ReadFile", win_read_file},
+    {"kernel32", "WriteFileEx", win_notimpl},
+    {"kernel32", "FlushViewOfFile", win_notimpl},
+    {"kernel32", "CreateFileMappingA", win_notimpl},
+    {"kernel32", "MapViewOfFile", win_notimpl},
+    {"kernel32", "UnmapViewOfFile", win_notimpl},
+    {"kernel32", "SetFilePointer", win_set_file_pointer},
+    {"kernel32", "SetFilePointerEx", win_set_file_pointer_ex},
+    {"kernel32", "GetFileSize", win_get_file_size},
+    {"kernel32", "GetFileSizeEx", win_get_file_size_ex},
+    {"kernel32", "GetFileType", win_get_file_type},
+    {"kernel32", "DeleteFileA", win_delete_file_a},
+    {"kernel32", "CreateDirectoryA", win_notimpl},
+    {"kernel32", "RemoveDirectoryA", win_notimpl},
+    {"kernel32", "GetFileAttributesA", win_notimpl},
+    {"kernel32", "FindFirstFileA", win_notimpl},
+    {"kernel32", "FindClose", win_notimpl},
+    {"kernel32", "GetFullPathNameA", win_notimpl},
+    {"kernel32", "SetEndOfFile", win_notimpl},
+    {"kernel32", "FlushFileBuffers", win_notimpl},
+    {"kernel32", "VirtualAlloc", win_notimpl},
+    {"kernel32", "VirtualFree", win_notimpl},
+    {"kernel32", "HeapCreate", win_notimpl},
+    {"kernel32", "HeapAlloc", win_notimpl},
+    {"kernel32", "HeapFree", win_notimpl},
+    {"kernel32", "HeapDestroy", win_notimpl},
+    {"kernel32", "GetProcessHeap", win_notimpl},
+    {"kernel32", "IsBadReadPtr", win_notimpl},
+    {"kernel32", "IsBadWritePtr", win_notimpl},
+    {"kernel32", "GetCommandLineA", win_notimpl},
+    {"kernel32", "GetStartupInfoA", win_notimpl},
+    {"kernel32", "GetEnvironmentStringsA", win_notimpl},
+    {"kernel32", "FreeEnvironmentStringsA", win_notimpl},
+    {"kernel32", "AddVectoredExceptionHandler", win_notimpl},
+    {"kernel32", "RemoveVectoredExceptionHandler", win_notimpl},
+    {"kernel32", "RaiseException", win_notimpl},
+    {"kernel32", "UnhandledExceptionFilter", win_notimpl},
+    {"kernel32", "TerminateProcess", win_notimpl},
+    {"kernel32", "GetCurrentProcess", win_notimpl},
+    {"kernel32", "GetExitCodeProcess", win_notimpl},
+    {"kernel32", "CreateThread", win_notimpl},
+    {"kernel32", "GetCurrentThreadId", win_notimpl},
+    {"kernel32", "WaitForSingleObject", win_notimpl},
+    {"kernel32", "WaitForMultipleObjects", win_notimpl},
+    {"kernel32", "CreateEventA", win_notimpl},
+    {"kernel32", "SetEvent", win_notimpl},
+    {"kernel32", "ResetEvent", win_notimpl},
+    {"kernel32", "CreateMutexA", win_notimpl},
+    {"kernel32", "ReleaseMutex", win_notimpl},
+    {"kernel32", "InterlockedIncrement", win_notimpl},
+    {"kernel32", "InterlockedDecrement", win_notimpl},
+    {"kernel32", "InterlockedExchange", win_notimpl},
+    {"kernel32", "GetSystemTimeAsFileTime", win_notimpl},
+    {"kernel32", "QueryPerformanceCounter", win_notimpl},
+    {"kernel32", "QueryPerformanceFrequency", win_notimpl},
+    {"kernel32", "GetSystemInfo", win_notimpl},
+    {"kernel32", "LocalAlloc", win_notimpl},
+    {"kernel32", "LocalFree", win_notimpl},
+    {"kernel32", "GlobalAlloc", win_notimpl},
+    {"kernel32", "GlobalFree", win_notimpl},
+    {"kernel32", "lstrlenA", win_strlen},
+    {"kernel32", "lstrcpyA", win_notimpl},
+    {"kernel32", "lstrcmpA", win_strncmp},
+    {"kernel32", "OutputDebugStringA", win_notimpl},
+    {"kernel32", "IsDebuggerPresent", win_notimpl},
+    {"kernel32", "FormatMessageA", win_notimpl},
+    {"kernel32", "GetVersionExA", win_notimpl},
+    {"kernel32", "GetVersion", win_notimpl},
+    {"kernel32", "GetModuleFileNameA", win_notimpl},
     {"", "", win_null},
 };
 

@@ -228,6 +228,14 @@ int64_t lc_accept(LC_ARGS) {
         return -LINUX_EAGAIN;
     return net_accept((int)a);
 }
+int64_t lc_accept4(LC_ARGS) {
+    int64_t nfd = lc_accept(r, a, b, c, d, e, f);
+    if (nfd < 0)
+        return nfd;
+    if (c & LINUX_SOCK_CLOEXEC)
+        sys_fcntl((int32_t)nfd, F_SETFD, FD_CLOEXEC);
+    return nfd;
+}
 int64_t lc_shutdown(LC_ARGS) {
     (void)r; (void)c; (void)d; (void)e; (void)f;
     if (unix_fd_slot(a) >= 0)
