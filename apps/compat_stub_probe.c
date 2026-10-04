@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -33,8 +34,6 @@ static long lsys(long n, long a, long b, long c, long d, long e, long f) {
     return r;
 }
 
-#define SYS_utimensat 280
-#define SYS_fchdir 81
 #define SYS_memfd_create 319
 #define SYS_getxattr 191
 #define SYS_lgetxattr 192
@@ -174,6 +173,129 @@ int main(void) {
     CK(errno == 0);
 
     CK(fstat(fd, &st) == 0 && st.st_size == 5);
+
+    {
+        struct {
+            char path[64];
+            int64_t magic;
+        } cases[] = {
+            {"/", 0xEF53},
+            {"/proc", 0x9FA0},
+            {"/proc/mounts", 0x9FA0},
+            {"/etc", 0xEF53},
+        };
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            struct {
+                int64_t f_type;
+                int64_t f_bsize;
+                int64_t f_blocks;
+                int64_t f_bfree;
+                int64_t f_bavail;
+                int64_t f_files;
+                int64_t f_ffree;
+                int32_t f_fsid[2];
+                int64_t f_namelen;
+                int64_t f_frsize;
+                int64_t f_flags;
+                int64_t f_spare[4];
+            } sfs;
+            memset(&sfs, 0, sizeof(sfs));
+            errno = 0;
+            rc = (int)lsys(SYS_statfs, (long)cases[i].path, (long)&sfs, 0, 0, 0,
+                           0);
+            printf("  statfs(%s)=%d magic=0x%lx\n", cases[i].path, rc,
+                   (unsigned long)sfs.f_type);
+            CK(rc == 0 && sfs.f_type == cases[i].magic);
+            CK(sfs.f_bsize > 0 && sfs.f_namelen == 255);
+        }
+    }
+
+    errno = 0;
+    rc = (int)lsys(SYS_statfs, (long)"/no/such/fs", (long)val, sizeof val, 0, 0,
+                   0);
+    printf("  statfs(bogus)=%d errno=%d\n", rc, errno);
+    CK(fail_rc(rc) && errno == ENOENT);
+
+    errno = 0;
+    rc = (int)lsys(SYS_mount, (long)"proc", (long)"/proc", (long)"proc", 0, 0,
+                   0);
+    printf("  mount(proc,/proc)=%d errno=%d\n", rc, errno);
+    CK(rc == 0);
+
+    errno = 0;
+    rc = (int)lsys(SYS_mount, (long)"proc", (long)"/tmp", (long)"proc", 0, 0,
+                   0);
+    printf("  mount(proc,/tmp)=%d errno=%d\n", rc, errno);
+    CK(fail_rc(rc));
+
+    errno = 0;
+    rc = (int)lsys(SYS_mount, (long)"nosuchfs", (long)"/tmp", (long)"nosuchfs",
+                   0, 0, 0);
+    printf("  mount(nosuchfs)=%d errno=%d\n", rc, errno);
+    CK(fail_rc(rc) && (errno == ENODEV || errno == EINVAL || errno == ENOENT));
+
+    errno = 0;
+    rc = (int)lsys(SYS_umount2, (long)"/proc", 2, 0, 0, 0, 0);
+    printf("  umount2(/proc,DETACH)=%d errno=%d\n", rc, errno);
+    CK(rc == 0);
+
+    errno = 0;
+    rc = (int)lsys(SYS_umount2, (long)"/not/mounted", 0, 0, 0, 0, 0);
+    printf("  umount2(bogus)=%d errno=%d\n", rc, errno);
+    CK(fail_rc(rc) && errno == EINVAL);
+
+    {
+        errno = 0;
+        rc = (int)lsys(SYS_fchmod, fd, 0640, 0, 0, 0, 0);
+        printf("  fchmod=0%o -> %d errno=%d\n", 0640, rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && (st.st_mode & 07777u) == 0640u);
+
+        errno = 0;
+        rc = (int)lsys(SYS_fchown, fd, 1000, 1000, 0, 0, 0);
+        printf("  fchown(1000,1000)=%d errno=%d\n", rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && st.st_uid == 1000 && st.st_gid == 1000);
+
+        errno = 0;
+        rc = (int)lsys(SYS_fchown, fd, (long)-1, (long)-1, 0, 0, 0);
+        printf("  fchown(-1,-1)=%d errno=%d\n", rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && st.st_uid == 1000 && st.st_gid == 1000);
+
+        errno = 0;
+        rc = (int)lsys(SYS_fchmod, fd, 0777, 0, 0, 0, 0);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && (st.st_mode & 07777u) == 0777u);
+
+        errno = 0;
+        rc = (int)lsys(SYS_fchmodat, 0, (long)path, 0600, 0, 0, 0);
+        printf("  fchmodat=0%o -> %d errno=%d\n", 0600, rc, errno);
+        CK(rc == 0);
+        CK(stat(path, &st) == 0 && (st.st_mode & 07777u) == 0600u);
+
+        struct timespec keep[2] = {{1234567890, 0}, {1234567890, 0}};
+        errno = 0;
+        rc = (int)lsys(SYS_utimensat, fd, 0, (long)keep, 0, 0, 0);
+        printf("  utimensat(fd,NULL)=%d errno=%d\n", rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && st.st_mtim.tv_sec == 1234567890);
+
+        struct timespec now[2] = {{0, 1073741824}, {0, 1073741824}};
+        errno = 0;
+        rc = (int)lsys(SYS_utimensat, fd, 0, (long)now, 0, 0, 0);
+        printf("  utimensat(UTIME_NOW)=%d errno=%d\n", rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && st.st_mtim.tv_sec > 1234567890);
+
+        struct timespec omit[2] = {{0, 1073741823}, {0, 1073741823}};
+        errno = 0;
+        rc = (int)lsys(SYS_utimensat, fd, 0, (long)omit, 0, 0, 0);
+        printf("  utimensat(UTIME_OMIT)=%d errno=%d\n", rc, errno);
+        CK(rc == 0);
+        CK(fstat(fd, &st) == 0 && st.st_mtim.tv_sec > 1234567890);
+    }
+
     if (close(fd) == 0)
         unlink(path);
 

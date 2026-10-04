@@ -13,6 +13,7 @@
 #include "kernel/fs/file.h"
 #include "kernel/fs/fs.h"
 #include "kernel/fs/proc.h"
+#include "kernel/fs/vfs.h"
 #include "kernel/init/gdt/gdt.h"
 #include "kernel/init/pit/pit.h"
 #include "kernel/mm/access.h"
@@ -226,12 +227,12 @@ int32_t compat_ioctl(int32_t fd, uint32_t cmd, uint64_t arg) {
     return -LINUX_ENOTTY;
 }
 
-int32_t compat_statfs_fill(uint64_t buf) {
+int32_t compat_statfs_fill_magic(uint64_t buf, uint32_t magic) {
     struct LINUX_STATFS sf;
     uint32_t bsize, blocks, bfree, files, ffree;
     fs_statfs_info(&bsize, &blocks, &bfree, &files, &ffree);
     memset(&sf, 0, sizeof(sf));
-    sf.f_type = (int64_t)LINUX_EXT2_SUPER_MAGIC;
+    sf.f_type = (int64_t)magic;
     sf.f_bsize = bsize;
     sf.f_blocks = blocks;
     sf.f_bfree = bfree;
@@ -244,15 +245,82 @@ int32_t compat_statfs_fill(uint64_t buf) {
     return 0;
 }
 
+int32_t compat_statfs_fill(uint64_t buf) {
+    return compat_statfs_fill_magic(buf, LINUX_EXT2_SUPER_MAGIC);
+}
+
+int32_t compat_statfs_fill_path(const char *path, uint64_t buf) {
+    if (path != 0 && proc_match(path))
+        return compat_statfs_fill_magic(buf, LINUX_PROC_SUPER_MAGIC);
+    return compat_statfs_fill(buf);
+}
+
 int64_t lc_statfs(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
     if (!copy_user_str(r, kpath, a))
         return -LINUX_EFAULT;
-    if (strcmp(kpath, "/") != 0 && fs_lookup(kpath, &(uint32_t){0}, &(int){0}))
+    if (strcmp(kpath, "/") != 0 && !proc_match(kpath) &&
+        fs_lookup(kpath, &(uint32_t){0}, &(int){0}))
         return -LINUX_ENOENT;
     if (!user_ptr_ok(r, b, sizeof(struct LINUX_STATFS), 1))
         return -LINUX_EFAULT;
-    return compat_statfs_fill(b);
+    return compat_statfs_fill_path(kpath, b);
+}
+
+static int lc_target_mounted(const char *path, const char **type_out) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        const struct VFS_MOUNT *m = vfs_mount_at(i);
+        if (m == NULL || m->ops == NULL)
+            continue;
+        if (strcmp(m->path, path) != 0)
+            continue;
+        if (type_out != 0)
+            *type_out = vfs_ops_name(m->ops);
+        return 1;
+    }
+    return 0;
+}
+
+int64_t lc_mount(LC_ARGS) {
+    (void)d;
+    (void)e;
+    (void)f;
+    char ksrc[MAX_PATH_LEN];
+    char kdst[MAX_PATH_LEN];
+    const char *src = 0;
+    if (a != 0 && !copy_user_str(r, ksrc, a))
+        return -LINUX_EFAULT;
+    if (!copy_user_str(r, kdst, b))
+        return -LINUX_EFAULT;
+    if (a != 0)
+        src = ksrc;
+    if ((e & (LINUX_MS_BIND | LINUX_MS_REC)) != 0 && src == 0)
+        return -LINUX_EINVAL;
+    const char *type = 0;
+    if (lc_target_mounted(kdst, &type)) {
+        if (type != 0 && strcmp(type, "proc") == 0)
+            return 0;
+        return -LINUX_EBUSY;
+    }
+    if (src != 0 && strcmp(src, "proc") == 0)
+        return -LINUX_ENODEV;
+    return -LINUX_ENODEV;
+}
+
+int64_t lc_umount2(LC_ARGS) {
+    (void)c;
+    (void)d;
+    (void)e;
+    (void)f;
+    char kdst[MAX_PATH_LEN];
+    if (!copy_user_str(r, kdst, a))
+        return -LINUX_EFAULT;
+    const char *type = 0;
+    if (!lc_target_mounted(kdst, &type))
+        return -LINUX_EINVAL;
+    if (type != 0 && strcmp(type, "proc") == 0)
+        return 0;
+    return -LINUX_EBUSY;
 }
 int64_t lc_fstatfs(LC_ARGS) {
     (void)a;
@@ -272,20 +340,23 @@ int64_t lc_lchown(LC_ARGS) {
 }
 int64_t lc_fchown(LC_ARGS) {
     (void)r;
+    (void)d;
+    (void)e;
+    (void)f;
     if (a < 3 || a >= MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EBADF;
     uint32_t gfd = fd_local2global((uint32_t)a);
     struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
-    struct FS_INODE obj;
-    if (fs_read_inode(pf->fd_inode->i_no, &obj))
-        return -LINUX_EIO;
+    if (current->euid != 0)
+        return -LINUX_EPERM;
     if (b != (uint64_t)-1)
-        obj.i_uid = (uint16_t)b;
+        pf->fd_inode->i_uid = (uint16_t)b;
     if (c != (uint64_t)-1)
-        obj.i_gid = (uint16_t)c;
-    return fs_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
+        pf->fd_inode->i_gid = (uint16_t)c;
+    pf->fd_inode->i_ctime = (uint32_t)rtc_unix_time();
+    return fs_write_inode(pf->fd_inode->i_no, pf->fd_inode) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchownat(LC_ARGS) {
     char kpath[MAX_PATH_LEN];
@@ -296,17 +367,22 @@ int64_t lc_fchownat(LC_ARGS) {
 }
 int64_t lc_fchmod(LC_ARGS) {
     (void)r;
+    (void)c;
+    (void)d;
+    (void)e;
+    (void)f;
     if (a < 3 || a >= MAX_FILES_OPEN_PER_PROC)
         return -LINUX_EBADF;
     uint32_t gfd = fd_local2global((uint32_t)a);
     struct FILE *pf = file_get(gfd);
     if (pf == NULL || pf->fd_inode == NULL)
         return -LINUX_EBADF;
-    struct FS_INODE obj;
-    if (fs_read_inode(pf->fd_inode->i_no, &obj))
-        return -LINUX_EIO;
-    obj.i_mode = (obj.i_mode & 0xF000u) | ((uint32_t)b & 0x0FFFu);
-    return fs_write_inode(pf->fd_inode->i_no, &obj) ? -LINUX_EIO : 0;
+    if (current->euid != 0 && current->euid != pf->fd_inode->i_uid)
+        return -LINUX_EPERM;
+    pf->fd_inode->i_mode =
+        (pf->fd_inode->i_mode & 0xF000u) | ((uint32_t)b & 0x0FFFu);
+    pf->fd_inode->i_ctime = (uint32_t)rtc_unix_time();
+    return fs_write_inode(pf->fd_inode->i_no, pf->fd_inode) ? -LINUX_EIO : 0;
 }
 int64_t lc_fchmodat(LC_ARGS) {
     (void)d;
